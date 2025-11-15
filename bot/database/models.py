@@ -6,6 +6,20 @@ from bot.config import BotConfig
 
 Base = declarative_base()
 
+class User(Base):
+    """Модель пользователя с ролями"""
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), nullable=False)
+    iiko_id = Column(Integer, unique=True)  # Внутренний ID из Iiko
+    telegram_id = Column(Integer, unique=True)  # ID в Telegram
+    telegram_username = Column(String(100), unique=True)
+    role = Column(String(50), nullable=False)  # 'barista', 'senior', 'mentor'
+    is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class DrinkReview(Base):
     __tablename__ = 'drink_reviews'
     

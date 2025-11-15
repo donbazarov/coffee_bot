@@ -1,33 +1,19 @@
 import sqlite3
 import os
 from datetime import datetime
+from bot.database.models import init_db as init_models_db
+from bot.database.migrations import init_database
 
 def init_db():
-    conn = sqlite3.connect('coffee_quality.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS drink_reviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            respondent_name TEXT NOT NULL,
-            barista_name TEXT NOT NULL,
-            point TEXT NOT NULL,
-            category TEXT NOT NULL,
-            drink_type TEXT,
-            balance INTEGER,
-            bouquet INTEGER,
-            body INTEGER,
-            aftertaste INTEGER,
-            foam INTEGER,
-            latte_art INTEGER,
-            photo_file_id TEXT,
-            comment TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
+    """Инициализация БД (создание таблиц и миграция данных)"""
+    # Используем SQLAlchemy для создания таблиц
+    init_models_db()
+    # Мигрируем структуру и данные
+    try:
+        init_database()
+    except Exception as e:
+        print(f"⚠️ Предупреждение при миграции: {e}")
+        # Продолжаем работу даже если миграция не удалась
 
 def save_review(review_data):
     conn = sqlite3.connect('coffee_quality.db')

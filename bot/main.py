@@ -8,7 +8,10 @@ from bot.config import BotConfig
 from bot.database.simple_db import init_db
 from bot.handlers.review import get_review_conversation_handler
 from bot.handlers.stats import stats_command, get_stats_handlers
+from bot.handlers.settings import get_settings_conversation_handler
+from bot.handlers.checklist import checklist_menu
 from bot.keyboards.menus import get_main_menu
+from bot.utils.auth import is_mentor, is_senior_or_mentor, get_user_role
 
 # Настройка логирования с обработкой ошибок
 logging.basicConfig(
@@ -60,10 +63,15 @@ class CoffeeBot:
         self.application.add_handler(CommandHandler("show_db", self.show_db_command))
         self.application.add_handler(CommandHandler("stats_debug", self.stats_debug_command))
         self.application.add_handler(CommandHandler("show_photo", self.show_photo_command))
-        self.application.add_handler(CommandHandler("migrate_db", self.migrate_db_command))
         
         # ConversationHandler для оценки напитков
         self.application.add_handler(get_review_conversation_handler())
+        
+        # ConversationHandler для настроек
+        self.application.add_handler(get_settings_conversation_handler())
+        
+        # Обработчик чек-листа
+        self.application.add_handler(MessageHandler(filters.Regex("^📝 Чек-лист смены$"), checklist_menu))
         
         # Общий обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -74,9 +82,27 @@ class CoffeeBot:
         """Команда /start"""
         user = update.effective_user
         
+        # Очищаем данные пользователя при /start (на случай застопоривания)
+        context.user_data.clear()
+        
+        # Получаем роль пользователя
+        role = get_user_role(update)
+        
+        # Формируем приветствие в зависимости от роли
+        if role:
+            role_names = {
+                'barista': '☕ Бариста',
+                'senior': '⭐ Старший',
+                'mentor': '👨‍🏫 Наставник'
+            }
+            role_text = role_names.get(role, 'Пользователь')
+            greeting = f"Привет, {user.first_name}! 👋\n\nВы вошли как: {role_text}\n\nБот для оценки качества напитков."
+        else:
+            greeting = f"Привет, {user.first_name}! 👋\n\nБот для оценки качества напитков.\n\n⚠️ Ваш аккаунт не найден в системе. Обратитесь к администратору."
+        
         reply_markup = get_main_menu()
         await update.message.reply_text(
-            f"Привет, {user.first_name}! 👋\nБот для оценки качества напитков.",
+            greeting,
             reply_markup=reply_markup
         )
     
@@ -205,26 +231,18 @@ class CoffeeBot:
         except Exception as e:
             await update.message.reply_text(f"❌ Ошибка: {str(e)}")
     
-    async def migrate_db_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда /migrate_db - миграция базы данных"""
-        try:
-            # Создаем резервную копию
-            if os.path.exists('coffee_quality.db'):
-                os.rename('coffee_quality.db', 'coffee_quality.db.backup')
-            
-            # Создаем новую базу
-            init_db()
-            
-            await update.message.reply_text("✅ База данных мигрирована! Старая база сохранена как .backup")
-            
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка миграции: {str(e)}")
-    
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработка общих сообщений"""
         text = update.message.text
     
         if text == "☕ Оценить напиток":
+            # Проверяем доступ - только наставники могут оценивать
+            if not is_mentor(update):
+                await update.message.reply_text(
+                    "❌ У вас нет доступа к этой функции.\n"
+                    "Оценивать напитки могут только наставники."
+                )
+                return
             # ConversationHandler сам обработает это
             pass
         elif text == "📊 Статистика":
@@ -232,9 +250,20 @@ class CoffeeBot:
         elif text == "⬅️ Назад":
             await self.start_command(update, context)
         elif text == "🧹 Контроль чистоты":
+            # Проверяем доступ - только старшие и наставники
+            if not is_senior_or_mentor(update):
+                await update.message.reply_text(
+                    "❌ У вас нет доступа к этой функции.\n"
+                    "Контроль чистоты доступен только старшим и наставникам."
+                )
+                return
             await update.message.reply_text("Модуль контроля чистоты в разработке")
+        elif text == "📝 Чек-лист смены":
+            # ConversationHandler сам обработает это
+            pass
         elif text == "⚙️ Настройки":
-            await update.message.reply_text("Настройки в разработке")
+            # ConversationHandler сам обработает это
+            pass
         else:
             await update.message.reply_text(
                 "Используйте кнопки меню или команды:\n"
@@ -244,7 +273,6 @@ class CoffeeBot:
                 "/show_db - Показать базу\n"
                 "/stats_debug - Статистика (отладка)\n"
                 "/show_photo [id] - Показать фото\n"
-                "/migrate_db - Миграция базы (отладка)\n"
                 "/cancel - Отмена"
         )
     

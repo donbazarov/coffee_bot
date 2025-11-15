@@ -2,22 +2,40 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler
 from bot.config import BotConfig
 from bot.database.simple_db import save_review
+from bot.database.user_operations import get_users_by_role
 from bot.keyboards.menus import get_main_menu
+from bot.utils.auth import is_mentor
 
 # Состояния - расширяем для детальной оценки
 (SELECTING_BARISTA, SELECTING_POINT, SELECTING_CATEGORY,
  ESPRESSO_DRINK_TYPE, ESPRESSO_BALANCE, ESPRESSO_BOUQUET, ESPRESSO_BODY, ESPRESSO_AFTERTASTE, ESPRESSO_COMMENT,
  MILK_DRINK_TYPE, MILK_BALANCE, MILK_BOUQUET, MILK_FOAM, MILK_LATTE_ART, MILK_PHOTO, MILK_COMMENT) = range(16)
 
-# Клавиатуры для оценок 1-5
+# Клавиатуры для оценок 1-5 с кнопкой отмены
 rating_keyboard = [[str(i)] for i in range(1, 6)]
+rating_keyboard.append(["❌ Отмена"])
 rating_markup = ReplyKeyboardMarkup(rating_keyboard, resize_keyboard=True)
 
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало оценки напитка"""
+    # Проверяем доступ - только наставники могут оценивать
+    if not is_mentor(update):
+        await update.message.reply_text(
+            "❌ У вас нет доступа к этой функции.\n"
+            "Оценивать напитки могут только наставники."
+        )
+        return ConversationHandler.END
+    
     context.user_data.clear()
     
-    baristas = [barista['name'] for barista in BotConfig.baristas]
+    # Получаем бариста из БД
+    barista_users = get_users_by_role('barista', active_only=True)
+    baristas = [barista.name for barista in barista_users]
+    
+    # Если в БД нет бариста, используем config.py как fallback
+    if not baristas:
+        baristas = [barista['name'] for barista in BotConfig.baristas]
+    
     keyboard = [[barista] for barista in baristas]
     keyboard.append(["❌ Отмена"])
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -35,7 +53,14 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if barista_name == "❌ Отмена":
         return await cancel_review(update, context)
     
-    barista_names = [barista['name'] for barista in BotConfig.baristas]
+    # Получаем бариста из БД
+    barista_users = get_users_by_role('barista', active_only=True)
+    barista_names = [barista.name for barista in barista_users]
+    
+    # Если в БД нет бариста, используем config.py как fallback
+    if not barista_names:
+        barista_names = [barista['name'] for barista in BotConfig.baristas]
+    
     if barista_name not in barista_names:
         await update.message.reply_text("❌ Пожалуйста, выберите бариста из списка:")
         return SELECTING_BARISTA
@@ -200,9 +225,10 @@ async def select_espresso_aftertaste(update: Update, context: ContextTypes.DEFAU
     
     context.user_data['aftertaste'] = int(aftertaste)
     
+    cancel_keyboard = [["-"], ["❌ Отмена"]]
     await update.message.reply_text(
         "Добавьте комментарий (или напишите '-' если комментарий не нужен):",
-        reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
     )
     return ESPRESSO_COMMENT
 
@@ -324,9 +350,10 @@ async def select_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TY
     
     context.user_data['latte_art'] = int(latte_art)
     
+    cancel_keyboard = [["-"], ["❌ Отмена"]]
     await update.message.reply_text(
         "Добавьте фото напитка (или отправьте '-' чтобы пропустить):",
-        reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
     )
     return MILK_PHOTO
 
@@ -337,9 +364,10 @@ async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.message.text == "-":
         context.user_data['photo_file_id'] = None
+        cancel_keyboard = [["-"], ["❌ Отмена"]]
         await update.message.reply_text(
             "Добавьте комментарий (или напишите '-' если комментарий не нужен):",
-            reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
         )
         return MILK_COMMENT
     elif update.message.photo:
@@ -350,23 +378,26 @@ async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем file_id
             context.user_data['photo_file_id'] = photo_file_id
             
+            cancel_keyboard = [["-"], ["❌ Отмена"]]
             await update.message.reply_text(
                 "✅ Фото получено!\n\nДобавьте комментарий (или напишите '-' если комментарий не нужен):",
-                reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
             )
             return MILK_COMMENT
             
         except Exception as e:
+            cancel_keyboard = [["-"], ["❌ Отмена"]]
             await update.message.reply_text(
                 f"❌ Ошибка при обработке фото: {str(e)}\n\n"
                 "Попробуйте отправить фото еще раз или отправьте '-' чтобы пропустить:",
-                reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+                reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
             )
             return MILK_PHOTO
     else:
+        cancel_keyboard = [["-"], ["❌ Отмена"]]
         await update.message.reply_text(
             "❌ Пожалуйста, отправьте фото или '-' чтобы пропустить:",
-            reply_markup=ReplyKeyboardMarkup([["-"]], resize_keyboard=True)
+            reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
         )
         return MILK_PHOTO
 
@@ -456,9 +487,14 @@ async def save_review_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         
 async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена оценки"""
+    """Отмена оценки - возврат в главное меню"""
+    from bot.keyboards.menus import get_main_menu
+    
     context.user_data.clear()
-    await update.message.reply_text("❌ Оценка отменена.")
+    await update.message.reply_text(
+        "❌ Оценка отменена.\n\nВы вернулись в главное меню.",
+        reply_markup=get_main_menu()
+    )
     return ConversationHandler.END
 
 def get_review_conversation_handler():
@@ -490,6 +526,10 @@ def get_review_conversation_handler():
             MILK_PHOTO: [MessageHandler(filters.TEXT | filters.PHOTO, select_milk_photo)],
             MILK_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_milk_comment)],
         },
-        fallbacks=[CommandHandler("cancel", cancel_review)],
+        fallbacks=[
+            CommandHandler("cancel", cancel_review),
+            CommandHandler("start", cancel_review),  # /start также отменяет диалог
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_review)
+        ],
         allow_reentry=True
     )
