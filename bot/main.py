@@ -10,8 +10,12 @@ from bot.handlers.review import get_review_conversation_handler
 from bot.handlers.stats import stats_command, get_stats_handlers
 from bot.handlers.settings import get_settings_conversation_handler
 from bot.handlers.checklist import checklist_menu
+from bot.handlers.schedule import get_swap_conversation_handler
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_mentor, is_senior_or_mentor, get_user_role
+from bot.database.user_operations import get_user_by_telegram_id
+from bot.database.schedule_operations import get_upcoming_shifts_by_iiko_id
+from datetime import date, timedelta
 
 # Настройка логирования с обработкой ошибок
 logging.basicConfig(
@@ -70,6 +74,9 @@ class CoffeeBot:
         # ConversationHandler для настроек
         self.application.add_handler(get_settings_conversation_handler())
         
+        # ConversationHandler для замен
+        self.application.add_handler(get_swap_conversation_handler())
+        
         # Обработчик чек-листа
         self.application.add_handler(MessageHandler(filters.Regex("^📝 Чек-лист смены$"), checklist_menu))
         
@@ -96,9 +103,35 @@ class CoffeeBot:
                 'mentor': '👨‍🏫 Наставник'
             }
             role_text = role_names.get(role, 'Пользователь')
-            greeting = f"Привет, {user.first_name}! 👋\n\nВы вошли как: {role_text}\n\nБот для оценки качества напитков."
+            greeting = f"Привет, {user.first_name}! 👋\n\nВы вошли как: {role_text}"
+            
+            # Получаем ближайшие смены на неделю
+            db_user = get_user_by_telegram_id(user.id)
+            if not db_user and user.username:
+                from bot.database.user_operations import get_user_by_username
+                db_user = get_user_by_username(user.username)
+            
+            if db_user and db_user.iiko_id:
+                shifts = get_upcoming_shifts_by_iiko_id(str(db_user.iiko_id), days=7)
+                if shifts:
+                    greeting += "\n\n📅 Ваши ближайшие смены на неделю:\n"
+                    for shift in shifts:
+                        if not shift.shift_type_obj:
+                            continue
+                        shift_type_names = {
+                            'morning': '🌅 Утро',
+                            'hybrid': '🌤️ Гибрид',
+                            'evening': '🌆 Вечер'
+                        }
+                        shift_type_text = shift_type_names.get(shift.shift_type_obj.shift_type, shift.shift_type_obj.shift_type)
+                        date_str = shift.shift_date.strftime("%d.%m")
+                        start_str = shift.shift_type_obj.start_time.strftime("%H:%M")
+                        end_str = shift.shift_type_obj.end_time.strftime("%H:%M")
+                        greeting += f"• {date_str} ({shift_type_text}) {shift.shift_type_obj.point}: {start_str} - {end_str}\n"
+                else:
+                    greeting += "\n\n📅 Ближайших смен не найдено"
         else:
-            greeting = f"Привет, {user.first_name}! 👋\n\nБот для оценки качества напитков.\n\n⚠️ Ваш аккаунт не найден в системе. Обратитесь к администратору."
+            greeting = f"Привет, {user.first_name}! 👋\n\n⚠️ Ваш аккаунт не найден в системе. Обратитесь к администратору."
         
         reply_markup = get_main_menu()
         await update.message.reply_text(
@@ -259,9 +292,21 @@ class CoffeeBot:
                 return
             await update.message.reply_text("Модуль контроля чистоты в разработке")
         elif text == "📝 Чек-лист смены":
+            # Доступно всем
+            # ConversationHandler сам обработает это
+            pass
+        elif text == "🔄 Замены":
+            # Доступно всем
             # ConversationHandler сам обработает это
             pass
         elif text == "⚙️ Настройки":
+            # Проверяем доступ - только старшие и наставники
+            if not is_senior_or_mentor(update):
+                await update.message.reply_text(
+                    "❌ У вас нет доступа к этой функции.\n"
+                    "Настройки доступны только старшим и наставникам."
+                )
+                return
             # ConversationHandler сам обработает это
             pass
         else:

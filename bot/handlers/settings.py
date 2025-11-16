@@ -3,23 +3,36 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboard
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler, CallbackQueryHandler
 from bot.utils.auth import require_roles, ROLE_MENTOR, ROLE_SENIOR
 from bot.database.user_operations import (
-    get_all_users, create_user, update_user, delete_user, get_user_by_id
+    get_all_users, create_user, update_user, delete_user, get_user_by_id, get_user_by_iiko_id
 )
+from bot.database.schedule_operations import (
+    get_upcoming_shifts_by_iiko_id, get_shifts_by_iiko_id,
+    create_shift, update_shift, get_shift_by_id, bulk_create_shifts, delete_shifts_by_date_range
+)
+from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet
 from bot.keyboards.menus import get_main_menu
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Состояния для настроек
 (SETTINGS_MENU, ADDING_USER_NAME, ADDING_USER_IIKO_ID, ADDING_USER_USERNAME, ADDING_USER_ROLE,
  EDITING_USER_NAME, EDITING_USER_ROLE, EDITING_USER_IIKO_ID, EDITING_USER_USERNAME,
- DELETING_USER_CONFIRM, CLEARING_REVIEWS) = range(11)
+ DELETING_USER_CONFIRM, CLEARING_REVIEWS,
+ # Состояния для расписания
+ SCHEDULE_MENU, PARSING_MONTH, SELECTING_EMPLOYEE_FOR_SHIFTS, VIEWING_SHIFTS,
+ ADDING_SHIFT_DATE, ADDING_SHIFT_IIKO_ID, ADDING_SHIFT_POINT, ADDING_SHIFT_TYPE,
+ ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD) = range(23)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню настроек"""
     keyboard = [
         [KeyboardButton("👥 Управление пользователями")],
+        [KeyboardButton("📅 Управление расписанием")],
         [KeyboardButton("🗑️ Очистить таблицу оценок")],
         [KeyboardButton("⬅️ Назад")]
     ]
@@ -464,6 +477,362 @@ async def handle_clear_reviews(update: Update, context: ContextTypes.DEFAULT_TYP
     
     return await settings_menu(update, context)
 
+# ========== ОБРАБОТЧИКИ РАСПИСАНИЯ ==========
+
+async def schedule_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления расписанием"""
+    keyboard = [
+        [KeyboardButton("🔄 Парсить текущий месяц")],
+        [KeyboardButton("📅 Парсить следующий месяц")],
+        [KeyboardButton("👥 Смены по сотрудникам")],
+        [KeyboardButton("➕ Назначить смену вручную")],
+        [KeyboardButton("✏️ Изменить смену по ID")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📅 Управление расписанием\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+    return SCHEDULE_MENU
+
+async def parse_current_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Парсинг текущего месяца"""
+    await update.message.reply_text("🔄 Начинаю парсинг текущего месяца...")
+    
+    try:
+        month_name = get_current_month_name()
+        shifts_data = parse_schedule_from_sheet(month_name)
+        
+        if not shifts_data:
+            await update.message.reply_text(f"❌ Не удалось получить данные для {month_name}")
+            return await schedule_management(update, context)
+        
+        # Удаляем старые смены этого месяца
+        first_date = min(s['shift_date'] for s in shifts_data)
+        last_date = max(s['shift_date'] for s in shifts_data)
+        delete_shifts_by_date_range(first_date, last_date)
+        
+        # Создаем новые смены
+        created_count = bulk_create_shifts(shifts_data)
+        
+        await update.message.reply_text(
+            f"✅ Парсинг завершен!\n"
+            f"Месяц: {month_name}\n"
+            f"Создано/обновлено смен: {created_count}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при парсинге текущего месяца: {e}")
+        await update.message.reply_text(f"❌ Ошибка при парсинге: {str(e)}")
+    
+    return await schedule_management(update, context)
+
+async def parse_next_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Парсинг следующего месяца"""
+    await update.message.reply_text("🔄 Начинаю парсинг следующего месяца...")
+    
+    try:
+        month_name = get_next_month_name()
+        shifts_data = parse_schedule_from_sheet(month_name)
+        
+        if not shifts_data:
+            await update.message.reply_text(f"❌ Не удалось получить данные для {month_name}")
+            return await schedule_management(update, context)
+        
+        # Удаляем старые смены этого месяца
+        first_date = min(s['shift_date'] for s in shifts_data)
+        last_date = max(s['shift_date'] for s in shifts_data)
+        delete_shifts_by_date_range(first_date, last_date)
+        
+        # Создаем новые смены
+        created_count = bulk_create_shifts(shifts_data)
+        
+        await update.message.reply_text(
+            f"✅ Парсинг завершен!\n"
+            f"Месяц: {month_name}\n"
+            f"Создано/обновлено смен: {created_count}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при парсинге следующего месяца: {e}")
+        await update.message.reply_text(f"❌ Ошибка при парсинге: {str(e)}")
+    
+    return await schedule_management(update, context)
+
+async def select_employee_for_shifts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор сотрудника для просмотра смен"""
+    users = get_all_users(active_only=True)
+    users_with_iiko = [u for u in users if u.iiko_id]
+    
+    if not users_with_iiko:
+        await update.message.reply_text("❌ Нет сотрудников с указанным iiko_id")
+        return await schedule_management(update, context)
+    
+    keyboard = []
+    text = "👥 Выберите сотрудника:\n\n"
+    
+    for user in users_with_iiko:
+        text += f"• {user.name} (ID: {user.iiko_id})\n"
+        keyboard.append([InlineKeyboardButton(
+            user.name,
+            callback_data=f"view_shifts_{user.iiko_id}"
+        )])
+    
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_schedule")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(text, reply_markup=reply_markup)
+    return SELECTING_EMPLOYEE_FOR_SHIFTS
+
+async def handle_employee_shifts_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора сотрудника для просмотра смен"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "cancel_schedule":
+        await query.edit_message_text("❌ Отменено")
+        return await schedule_management(update, context)
+    
+    if query.data.startswith("view_shifts_"):
+        iiko_id = query.data.split("_")[2]
+        user = get_user_by_iiko_id(int(iiko_id))
+        
+        if not user:
+            await query.edit_message_text("❌ Сотрудник не найден")
+            return await schedule_management(update, context)
+        
+        # Получаем смены на ближайшие 30 дней
+        shifts = get_shifts_by_iiko_id(str(iiko_id), start_date=date.today(), end_date=date.today() + timedelta(days=30))
+        
+        if not shifts:
+            await query.edit_message_text(f"📅 У {user.name} нет смен на ближайшие 30 дней")
+            return await schedule_management(update, context)
+        
+        text = f"📅 Смены сотрудника {user.name}:\n\n"
+        
+        for shift in shifts:
+            if not shift.shift_type_obj:
+                continue
+            shift_type_names = {
+                'morning': '🌅 Утро',
+                'hybrid': '🌤️ Гибрид',
+                'evening': '🌆 Вечер'
+            }
+            shift_type_text = shift_type_names.get(shift.shift_type_obj.shift_type, shift.shift_type_obj.shift_type)
+            date_str = shift.shift_date.strftime("%d.%m.%Y")
+            start_str = shift.shift_type_obj.start_time.strftime("%H:%M")
+            end_str = shift.shift_type_obj.end_time.strftime("%H:%M")
+            
+            text += f"ID: {shift.shift_id}\n"
+            text += f"• {date_str} ({shift_type_text}) {shift.shift_type_obj.point}: {start_str} - {end_str}\n\n"
+        
+        if text == f"📅 Смены сотрудника {user.name}:\n\n":
+            await query.message.reply_text(f"📅 У {user.name} нет смен на ближайшие 30 дней")
+        else:
+            await query.message.reply_text(text)
+        return await schedule_management(update, context)
+
+async def start_adding_shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления смены вручную"""
+    await update.message.reply_text(
+        "➕ Добавление смены\n\n"
+        "Введите дату смены в формате DD.MM.YYYY:"
+    )
+    return ADDING_SHIFT_DATE
+
+async def add_shift_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение даты смены"""
+    try:
+        date_str = update.message.text.strip()
+        shift_date = datetime.strptime(date_str, "%d.%m.%Y").date()
+        context.user_data['new_shift_date'] = shift_date
+        
+        await update.message.reply_text(
+            f"Дата: {date_str}\n\n"
+            "Введите iiko_id сотрудника:"
+        )
+        return ADDING_SHIFT_IIKO_ID
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат даты. Используйте DD.MM.YYYY")
+        return ADDING_SHIFT_DATE
+
+async def add_shift_iiko_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение iiko_id"""
+    try:
+        iiko_id = str(update.message.text.strip())
+        context.user_data['new_shift_iiko_id'] = iiko_id
+        
+        keyboard = [
+            [KeyboardButton("ДЕ"), KeyboardButton("УЯ")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            f"Iiko ID: {iiko_id}\n\n"
+            "Выберите точку:",
+            reply_markup=reply_markup
+        )
+        return ADDING_SHIFT_POINT
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        return ADDING_SHIFT_IIKO_ID
+
+async def add_shift_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение точки"""
+    point = update.message.text.strip()
+    if point not in ['ДЕ', 'УЯ']:
+        await update.message.reply_text("❌ Выберите точку: ДЕ или УЯ")
+        return ADDING_SHIFT_POINT
+    
+    context.user_data['new_shift_point'] = point
+    
+    keyboard = [
+        [KeyboardButton("🌅 Утро"), KeyboardButton("🌤️ Гибрид")],
+        [KeyboardButton("🌆 Вечер")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"Точка: {point}\n\n"
+        "Выберите тип смены:",
+        reply_markup=reply_markup
+    )
+    return ADDING_SHIFT_TYPE
+
+async def add_shift_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение типа смены"""
+    type_map = {
+        "🌅 Утро": "morning",
+        "🌤️ Гибрид": "hybrid",
+        "🌆 Вечер": "evening"
+    }
+    
+    shift_type = type_map.get(update.message.text)
+    if not shift_type:
+        await update.message.reply_text("❌ Выберите тип смены из списка")
+        return ADDING_SHIFT_TYPE
+    
+    context.user_data['new_shift_type'] = shift_type
+    
+    await update.message.reply_text(
+        f"Тип: {update.message.text}\n\n"
+        "Введите время начала смены в формате HH:MM:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return ADDING_SHIFT_START
+
+async def add_shift_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение времени начала"""
+    try:
+        time_str = update.message.text.strip()
+        shift_start = datetime.strptime(time_str, "%H:%M").time()
+        context.user_data['new_shift_start'] = shift_start
+        
+        await update.message.reply_text(
+            f"Начало: {time_str}\n\n"
+            "Введите время окончания смены в формате HH:MM:"
+        )
+        return ADDING_SHIFT_END
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат времени. Используйте HH:MM")
+        return ADDING_SHIFT_START
+
+async def add_shift_end(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение времени окончания и создание смены"""
+    try:
+        from datetime import time
+        from bot.database.schedule_operations import get_shift_type_by_times
+        
+        time_str = update.message.text.strip()
+        shift_end = datetime.strptime(time_str, "%H:%M").time()
+        shift_start = context.user_data['new_shift_start']
+        
+        # Находим shift_type_id по времени
+        shift_type_obj = get_shift_type_by_times(shift_start, shift_end)
+        if not shift_type_obj:
+            await update.message.reply_text(
+                f"❌ Не найден тип смены для времени {shift_start.strftime('%H:%M')} - {shift_end.strftime('%H:%M')}\n"
+                "Проверьте правильность времени."
+            )
+            return ADDING_SHIFT_END
+        
+        # Создаем смену
+        shift = create_shift(
+            shift_date=context.user_data['new_shift_date'],
+            iiko_id=context.user_data['new_shift_iiko_id'],
+            shift_type_id=shift_type_obj.id
+        )
+        
+        await update.message.reply_text(
+            f"✅ Смена успешно создана!\n"
+            f"ID: {shift.shift_id}"
+        )
+        
+        context.user_data.clear()
+        return await schedule_management(update, context)
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат времени. Используйте HH:MM")
+        return ADDING_SHIFT_END
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при создании смены: {str(e)}")
+        context.user_data.clear()
+        return await schedule_management(update, context)
+
+async def start_editing_shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования смены"""
+    await update.message.reply_text(
+        "✏️ Редактирование смены\n\n"
+        "Введите ID смены:"
+    )
+    return EDITING_SHIFT_ID
+
+async def edit_shift_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID смены для редактирования"""
+    try:
+        shift_id = int(update.message.text.strip())
+        shift = get_shift_by_id(shift_id)
+        
+        if not shift:
+            await update.message.reply_text("❌ Смена с таким ID не найдена")
+            return await schedule_management(update, context)
+        
+        context.user_data['editing_shift_id'] = shift_id
+        
+        text = f"Смена ID: {shift_id}\n"
+        text += f"Дата: {shift.shift_date.strftime('%d.%m.%Y')}\n"
+        text += f"Сотрудник: {shift.iiko_id}\n"
+        if shift.shift_type_obj:
+            text += f"Точка: {shift.shift_type_obj.point}\n"
+            text += f"Тип: {shift.shift_type_obj.shift_type}\n"
+            text += f"Время: {shift.shift_type_obj.start_time.strftime('%H:%M')} - {shift.shift_type_obj.end_time.strftime('%H:%M')}\n\n"
+        else:
+            text += "Тип смены не найден\n\n"
+        text += "Введите новое значение или отправьте '-' чтобы пропустить поле:\n"
+        text += "1. Дата (DD.MM.YYYY)\n"
+        text += "2. Iiko ID\n"
+        text += "3. Точка (ДЕ/УЯ)\n"
+        text += "4. Тип (morning/hybrid/evening)\n"
+        text += "5. Время начала (HH:MM)\n"
+        text += "6. Время окончания (HH:MM)\n\n"
+        text += "Введите номер поля для редактирования (1-6):"
+        
+        await update.message.reply_text(text)
+        return EDITING_SHIFT_FIELD
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат ID. Введите число")
+        return EDITING_SHIFT_ID
+
+async def edit_shift_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Редактирование поля смены"""
+    # Это упрощенная версия - в реальности нужно сделать более сложную логику
+    await update.message.reply_text(
+        "⚠️ Функция редактирования смены в разработке.\n"
+        "Используйте удаление и создание новой смены."
+    )
+    context.user_data.clear()
+    return await schedule_management(update, context)
+
 async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Отмена настроек"""
     context.user_data.clear()
@@ -484,9 +853,30 @@ def get_settings_conversation_handler():
                 MessageHandler(filters.Regex("^👥 Управление пользователями$"), users_management),
                 MessageHandler(filters.Regex("^📋 Список пользователей$"), list_users),
                 MessageHandler(filters.Regex("^➕ Добавить пользователя$"), start_adding_user),
+                MessageHandler(filters.Regex("^📅 Управление расписанием$"), schedule_management),
                 MessageHandler(filters.Regex("^🗑️ Очистить таблицу оценок$"), clear_reviews_confirm),
                 MessageHandler(filters.Regex("^⬅️ Назад$"), cancel_settings),
             ],
+            # Расписание
+            SCHEDULE_MENU: [
+                MessageHandler(filters.Regex("^🔄 Парсить текущий месяц$"), parse_current_month),
+                MessageHandler(filters.Regex("^📅 Парсить следующий месяц$"), parse_next_month),
+                MessageHandler(filters.Regex("^👥 Смены по сотрудникам$"), select_employee_for_shifts),
+                MessageHandler(filters.Regex("^➕ Назначить смену вручную$"), start_adding_shift),
+                MessageHandler(filters.Regex("^✏️ Изменить смену по ID$"), start_editing_shift),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), settings_menu),
+            ],
+            SELECTING_EMPLOYEE_FOR_SHIFTS: [
+                CallbackQueryHandler(handle_employee_shifts_callback, pattern="^(view_shifts_|cancel_schedule)"),
+            ],
+            ADDING_SHIFT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_date)],
+            ADDING_SHIFT_IIKO_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_iiko_id)],
+            ADDING_SHIFT_POINT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_point)],
+            ADDING_SHIFT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_type)],
+            ADDING_SHIFT_START: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_start)],
+            ADDING_SHIFT_END: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_end)],
+            EDITING_SHIFT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_id)],
+            EDITING_SHIFT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_field)],
             ADDING_USER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_name)],
             ADDING_USER_IIKO_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_iiko_id)],
             ADDING_USER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_username)],

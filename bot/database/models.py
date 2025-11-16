@@ -1,6 +1,6 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, Time, Index, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 from bot.config import BotConfig
 
@@ -38,6 +38,40 @@ class DrinkReview(Base):
     photo_path = Column(String(255))
     comment = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class ShiftType(Base):
+    """Модель типов смен"""
+    __tablename__ = 'shift_types'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    start_time = Column(Time, nullable=False)  # время прихода
+    end_time = Column(Time, nullable=False)  # время ухода
+    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    name = Column(String(100), nullable=False)  # название смены (например, "утро ДЕ")
+    shift_type = Column(String(20), nullable=False)  # 'morning', 'hybrid', 'evening'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Schedule(Base):
+    """Модель расписания смен"""
+    __tablename__ = 'schedule'
+    
+    shift_id = Column(Integer, primary_key=True, autoincrement=True)
+    shift_date = Column(Date, nullable=False)  # формат: YYYY-MM-DD
+    iiko_id = Column(String(50), nullable=False)  # ID из iiko (может быть строкой)
+    shift_type_id = Column(Integer, ForeignKey('shift_types.id'), nullable=False)  # ID типа смены
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Связь с типом смены
+    shift_type_obj = relationship("ShiftType", lazy="joined")
+    
+    # Индексы для быстрого поиска
+    __table_args__ = (
+        Index('idx_shift_date', 'shift_date'),
+        Index('idx_iiko_id', 'iiko_id'),
+        Index('idx_shift_date_iiko', 'shift_date', 'iiko_id'),
+        Index('idx_shift_type_id', 'shift_type_id'),
+    )
 
 # Инициализация БД - используем SQLite
 engine = create_engine(BotConfig.database_url, connect_args={"check_same_thread": False} if "sqlite" in BotConfig.database_url else {})

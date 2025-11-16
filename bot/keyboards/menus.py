@@ -5,7 +5,7 @@ def get_main_menu():
     keyboard = [
         [KeyboardButton("☕ Оценить напиток"), KeyboardButton("📊 Статистика")],
         [KeyboardButton("🧹 Контроль чистоты"), KeyboardButton("📝 Чек-лист смены")],
-        [KeyboardButton("⚙️ Настройки")]
+        [KeyboardButton("🔄 Замены"), KeyboardButton("⚙️ Настройки")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
