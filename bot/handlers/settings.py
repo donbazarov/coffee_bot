@@ -7,7 +7,8 @@ from bot.database.user_operations import (
 )
 from bot.database.schedule_operations import (
     get_upcoming_shifts_by_iiko_id, get_shifts_by_iiko_id,
-    create_shift, update_shift, get_shift_by_id, bulk_create_shifts, delete_shifts_by_date_range
+    create_shift, update_shift, get_shift_by_id, bulk_create_shifts, delete_shifts_by_date_range,
+    create_shift_type, get_shift_types, update_shift_type, delete_shift_type, get_shift_type_by_id
 )
 from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet
 from bot.keyboards.menus import get_main_menu
@@ -25,7 +26,10 @@ logger = logging.getLogger(__name__)
  # Состояния для расписания
  SCHEDULE_MENU, PARSING_MONTH, SELECTING_EMPLOYEE_FOR_SHIFTS, VIEWING_SHIFTS,
  ADDING_SHIFT_DATE, ADDING_SHIFT_IIKO_ID, ADDING_SHIFT_POINT, ADDING_SHIFT_TYPE,
- ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD) = range(23)
+ ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD,
+ # Cостояния для управления типами смен
+ SHIFT_TYPES_MENU, ADDING_SHIFT_TYPE_DATA, EDITING_SHIFT_TYPE_ID, EDITING_SHIFT_TYPE_FIELD,
+ DELETING_SHIFT_TYPE_CONFIRM, EDITING_SHIFT_TYPE_FIELD) = range(29)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -33,6 +37,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [KeyboardButton("👥 Управление пользователями")],
         [KeyboardButton("📅 Управление расписанием")],
+        [KeyboardButton("🕒 Управление типами смен")],
         [KeyboardButton("🗑️ Очистить таблицу оценок")],
         [KeyboardButton("⬅️ Назад")]
     ]
@@ -479,6 +484,236 @@ async def handle_clear_reviews(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # ========== ОБРАБОТЧИКИ РАСПИСАНИЯ ==========
 
+async def shift_types_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления типами смен"""
+    keyboard = [
+        [KeyboardButton("➕ Добавить тип смены")],
+        [KeyboardButton("📋 Список типов смен")],
+        [KeyboardButton("✏️ Редактировать тип смены")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🕒 Управление типами смен\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+    return SHIFT_TYPES_MENU
+
+async def start_adding_shift_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления типа смены"""
+    await update.message.reply_text(
+        "➕ Добавление типа смены\n\n"
+        "Введите данные типа смены в формате:\n"
+        "Название|Время начала|Время окончания|Точка|Тип смены\n\n"
+        "Пример: Утро ДЕ|09:00|17:00|ДЕ|morning\n\n"
+        "Типы смен: morning, hybrid, evening\n"
+        "Точки: ДЕ, УЯ\n\n"
+        "Для отмены введите /cancel"
+    )
+    return ADDING_SHIFT_TYPE_DATA
+
+async def add_shift_type_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка введенных данных типа смены"""
+    try:
+        data = update.message.text.split('|')
+        if len(data) != 5:
+            await update.message.reply_text("❌ Неверный формат данных. Нужно 5 параметров через |. Попробуйте снова.")
+            return ADDING_SHIFT_TYPE_DATA
+        
+        name, start_time, end_time, point, shift_type = [item.strip() for item in data]
+        
+        # Валидация точек
+        if point not in ['ДЕ', 'УЯ']:
+            await update.message.reply_text("❌ Неверная точка. Допустимые значения: ДЕ, УЯ")
+            return ADDING_SHIFT_TYPE_DATA
+        
+        # Валидация типов смен
+        if shift_type not in ['morning', 'hybrid', 'evening']:
+            await update.message.reply_text("❌ Неверный тип смены. Допустимые значения: morning, hybrid, evening")
+            return ADDING_SHIFT_TYPE_DATA
+        
+        # Создаем тип смены
+        shift_type_id = create_shift_type({
+            'name': name,
+            'start_time': start_time,
+            'end_time': end_time,
+            'point': point,
+            'shift_type': shift_type
+        })
+        
+        await update.message.reply_text(
+            f"✅ Тип смены '{name}' успешно добавлен!\n"
+            f"ID: {shift_type_id}\n"
+            f"Время: {start_time} - {end_time}\n"
+            f"Точка: {point}\n"
+            f"Тип: {shift_type}"
+        )
+        
+        # Возвращаем в меню управления типами смен
+        return await shift_types_management(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Ошибка при добавлении: {str(e)}"
+        )
+        return ADDING_SHIFT_TYPE_DATA
+
+async def list_shift_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать список всех типов смен"""
+    shift_types = get_shift_types()
+    
+    if not shift_types:
+        await update.message.reply_text("❌ Типы смен не найдены")
+        return SHIFT_TYPES_MENU
+    
+    message = "📋 Список типов смен:\n\n"
+    keyboard = []
+    
+    for st in shift_types:
+        message += (
+            f"🆔 ID: {st.id}\n"
+            f"📝 Название: {st.name}\n"
+            f"⏰ Время: {st.start_time} - {st.end_time}\n"
+            f"📍 Точка: {st.point}\n"
+            f"🔧 Тип: {st.shift_type}\n"
+            f"---\n"
+        )
+    
+    keyboard.append([
+            InlineKeyboardButton(f"✏️ {st.id}", callback_data=f"edit_shift_type_{st.id}"),
+            InlineKeyboardButton(f"🗑️ {st.id}", callback_data=f"delete_shift_type_{st.id}")
+        ])
+    
+    keyboard.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_shift_types_management")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(message)
+    return SHIFT_TYPES_MENU
+
+async def start_editing_shift_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало редактирования типа смены"""
+    await update.message.reply_text(
+        "✏️ Редактирование типа смены\n\n"
+        "Введите ID типа смены для редактирования:"
+    )
+    return EDITING_SHIFT_TYPE_ID
+
+async def edit_shift_type_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение ID типа смены для редактирования"""
+    try:
+        shift_type_id = int(update.message.text.strip())
+        shift_type = get_shift_type_by_id(shift_type_id)
+        
+        if not shift_type:
+            await update.message.reply_text("❌ Тип смены с таким ID не найден")
+            return await shift_types_management(update, context)
+        
+        context.user_data['editing_shift_type_id'] = shift_type_id
+        
+        await update.message.reply_text(
+            f"✏️ Редактирование типа смены ID: {shift_type_id}\n"
+            f"Текущие данные:\n"
+            f"Название: {shift_type.name}\n"
+            f"Время: {shift_type.start_time} - {shift_type.end_time}\n"
+            f"Точка: {shift_type.point}\n"
+            f"Тип: {shift_type.shift_type}\n\n"
+            "Введите новые данные в формате:\n"
+            "Название|Время начала|Время окончания|Точка|Тип смены\n\n"
+            "Или введите /cancel для отмены"
+        )
+        return EDITING_SHIFT_TYPE_FIELD
+        
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат ID. Введите число")
+        return EDITING_SHIFT_TYPE_ID
+
+async def edit_shift_type_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка редактирования типа смены"""
+    try:
+        shift_type_id = context.user_data.get('editing_shift_type_id')
+        if not shift_type_id:
+            await update.message.reply_text("❌ Ошибка: ID типа смены не найден")
+            return await shift_types_management(update, context)
+        
+        data = update.message.text.split('|')
+        if len(data) != 5:
+            await update.message.reply_text("❌ Неверный формат данных. Нужно 5 параметров через |. Попробуйте снова.")
+            return EDITING_SHIFT_TYPE_FIELD
+        
+        name, start_time, end_time, point, shift_type = [item.strip() for item in data]
+        
+        # Валидация точек
+        if point not in ['ДЕ', 'УЯ']:
+            await update.message.reply_text("❌ Неверная точка. Допустимые значения: ДЕ, УЯ")
+            return EDITING_SHIFT_TYPE_FIELD
+        
+        # Валидация типов смен
+        if shift_type not in ['morning', 'hybrid', 'evening']:
+            await update.message.reply_text("❌ Неверный тип смены. Допустимые значения: morning, hybrid, evening")
+            return EDITING_SHIFT_TYPE_FIELD
+        
+        # Обновляем тип смены
+        success = update_shift_type(shift_type_id, {
+            'name': name,
+            'start_time': start_time,
+            'end_time': end_time,
+            'point': point,
+            'shift_type': shift_type
+        })
+        
+        if success:
+            await update.message.reply_text(
+                f"✅ Тип смены ID {shift_type_id} успешно обновлен!\n"
+                f"Название: {name}\n"
+                f"Время: {start_time} - {end_time}\n"
+                f"Точка: {point}\n"
+                f"Тип: {shift_type}"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при обновлении типа смены")
+        
+        context.user_data.clear()
+        return await shift_types_management(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при обновлении: {str(e)}")
+        return EDITING_SHIFT_TYPE_FIELD
+
+async def deleting_shift_type_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления типа смены"""
+    shift_type_id = context.user_data.get('deleting_shift_type_id')
+    if not shift_type_id:
+        await update.message.reply_text("❌ Ошибка: ID типа смены не найден")
+        return await shift_types_management(update, context)
+    
+    shift_type = get_shift_type_by_id(shift_type_id)
+    if not shift_type:
+        await update.message.reply_text("❌ Тип смены не найден")
+        context.user_data.clear()
+        return await shift_types_management(update, context)
+    
+    entered_name = update.message.text.strip()
+    
+    if entered_name == shift_type.name:
+        # Подтверждение получено, удаляем
+        success = delete_shift_type(shift_type_id)
+        if success:
+            await update.message.reply_text(
+                f"✅ Тип смены {shift_type.name} успешно удален."
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при удалении типа смены")
+        context.user_data.clear()
+        return await shift_types_management(update, context)
+    else:
+        await update.message.reply_text(
+            "❌ Названия не совпадают. Удаление отменено."
+        )
+        context.user_data.clear()
+        return await shift_types_management(update, context)
+    
 async def schedule_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Меню управления расписанием"""
     keyboard = [
@@ -616,7 +851,7 @@ async def handle_employee_shifts_callback(update: Update, context: ContextTypes.
                 continue
             shift_type_names = {
                 'morning': '🌅 Утро',
-                'hybrid': '🌤️ Гибрид',
+                'hybrid': '🌤️ Пересмен',
                 'evening': '🌆 Вечер'
             }
             shift_type_text = shift_type_names.get(shift.shift_type_obj.shift_type, shift.shift_type_obj.shift_type)
@@ -632,6 +867,71 @@ async def handle_employee_shifts_callback(update: Update, context: ContextTypes.
         else:
             await query.message.reply_text(text)
         return await schedule_management(update, context)
+
+async def handle_shift_type_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка callback для редактирования/удаления типов смен"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    
+    if data.startswith("edit_shift_type_"):
+        shift_type_id = int(data.split("_")[3])
+        context.user_data['editing_shift_type_id'] = shift_type_id
+        shift_type = get_shift_type_by_id(shift_type_id)
+        if shift_type:
+            await query.edit_message_text(
+                f"✏️ Редактирование типа смены ID: {shift_type_id}\n"
+                f"Текущие данные:\n"
+                f"Название: {shift_type.name}\n"
+                f"Время: {shift_type.start_time} - {shift_type.end_time}\n"
+                f"Точка: {shift_type.point}\n"
+                f"Тип: {shift_type.shift_type}\n\n"
+                "Введите новые данные в формате:\n"
+                "Название|Время начала|Время окончания|Точка|Тип смены\n\n"
+                "Или введите /cancel для отмены"
+            )
+            return EDITING_SHIFT_TYPE_FIELD
+        else:
+            await query.edit_message_text("❌ Тип смены не найден")
+            return SHIFT_TYPES_MENU
+    
+    elif data.startswith("delete_shift_type_"):
+        shift_type_id = int(data.split("_")[3])
+        context.user_data['deleting_shift_type_id'] = shift_type_id
+        shift_type = get_shift_type_by_id(shift_type_id)
+        if shift_type:
+            await query.edit_message_text(
+                f"🗑️ Удаление типа смены: {shift_type.name}\n\n"
+                "⚠️ ВНИМАНИЕ! Это действие нельзя отменить.\n\n"
+                f"Для подтверждения введите название типа смены: {shift_type.name}"
+            )
+            return DELETING_SHIFT_TYPE_CONFIRM
+        else:
+            await query.edit_message_text("❌ Тип смены не найден")
+            return SHIFT_TYPES_MENU
+    
+    elif data == "back_to_shift_types_management":
+        # Возвращаемся в меню управления типами смен
+        keyboard = [
+            [KeyboardButton("➕ Добавить тип смены")],
+            [KeyboardButton("📋 Список типов смен")],
+            [KeyboardButton("⬅️ Назад")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        await query.edit_message_text(
+            "🕒 Управление типами смен\n\n"
+            "Выберите действие:",
+            reply_markup=None  # Убираем инлайн клавиатуру
+        )
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="🕒 Управление типами смен\n\nВыберите действие:",
+            reply_markup=reply_markup
+        )
+        return SHIFT_TYPES_MENU
+    
+    return SHIFT_TYPES_MENU
 
 async def start_adding_shift(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало добавления смены вручную"""
@@ -704,7 +1004,7 @@ async def add_shift_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Получение типа смены"""
     type_map = {
         "🌅 Утро": "morning",
-        "🌤️ Гибрид": "hybrid",
+        "🌤️ Пересмен": "hybrid",
         "🌆 Вечер": "evening"
     }
     
@@ -854,6 +1154,7 @@ def get_settings_conversation_handler():
                 MessageHandler(filters.Regex("^📋 Список пользователей$"), list_users),
                 MessageHandler(filters.Regex("^➕ Добавить пользователя$"), start_adding_user),
                 MessageHandler(filters.Regex("^📅 Управление расписанием$"), schedule_management),
+                MessageHandler(filters.Regex("^🕒 Управление типами смен$"), shift_types_management),
                 MessageHandler(filters.Regex("^🗑️ Очистить таблицу оценок$"), clear_reviews_confirm),
                 MessageHandler(filters.Regex("^⬅️ Назад$"), cancel_settings),
             ],
@@ -877,6 +1178,28 @@ def get_settings_conversation_handler():
             ADDING_SHIFT_END: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_end)],
             EDITING_SHIFT_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_id)],
             EDITING_SHIFT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_field)],
+            SHIFT_TYPES_MENU: [
+                MessageHandler(filters.Regex("^➕ Добавить тип смены$"), start_adding_shift_type),
+                MessageHandler(filters.Regex("^📋 Список типов смен$"), list_shift_types),
+                MessageHandler(filters.Regex("^✏️ Редактировать тип смены$"), start_editing_shift_type),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), settings_menu),
+                CallbackQueryHandler(handle_shift_type_callback, pattern="^(edit_shift_type_|delete_shift_type_|back_to_shift_types_management)"),
+            ],
+            DELETING_SHIFT_TYPE_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, deleting_shift_type_confirm),
+            ],
+            EDITING_SHIFT_TYPE_FIELD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_type_field),
+            ],
+            ADDING_SHIFT_TYPE_DATA: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_type_process),
+            ],
+            EDITING_SHIFT_TYPE_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_type_id),
+            ],
+            EDITING_SHIFT_TYPE_FIELD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_shift_type_field),
+            ],
             ADDING_USER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_name)],
             ADDING_USER_IIKO_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_iiko_id)],
             ADDING_USER_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_username)],
@@ -899,6 +1222,7 @@ def get_settings_conversation_handler():
             CommandHandler("start", cancel_settings),
             MessageHandler(filters.Regex("^❌ Отмена$"), cancel_settings),
             CallbackQueryHandler(handle_user_callback, pattern="^(edit_user_|delete_user_|back_to_users_management)"),
+            CallbackQueryHandler(handle_shift_type_callback, pattern="^(edit_shift_type_|delete_shift_type_|back_to_shift_types_management)"),
         ],
         allow_reentry=True
     )

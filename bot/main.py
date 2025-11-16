@@ -120,7 +120,7 @@ class CoffeeBot:
                             continue
                         shift_type_names = {
                             'morning': '🌅 Утро',
-                            'hybrid': '🌤️ Гибрид',
+                            'hybrid': '🌤️ Пересмен',
                             'evening': '🌆 Вечер'
                         }
                         shift_type_text = shift_type_names.get(shift.shift_type_obj.shift_type, shift.shift_type_obj.shift_type)

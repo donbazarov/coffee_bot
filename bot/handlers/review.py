@@ -492,7 +492,7 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.clear()
     await update.message.reply_text(
-        "❌ Оценка отменена.\n\nВы вернулись в главное меню.",
+        "❌ Операция отменена.\n\nВы вернулись в главное меню.",
         reply_markup=get_main_menu()
     )
     return ConversationHandler.END

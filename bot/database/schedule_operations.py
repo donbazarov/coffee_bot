@@ -228,3 +228,74 @@ def delete_shifts_by_date_range(start_date: date, end_date: date) -> int:
 def get_all_shifts_for_user_in_range(iiko_id: str, start_date: date, end_date: date) -> List[Schedule]:
     """Получить все смены пользователя в диапазоне дат"""
     return get_shifts_by_iiko_id(iiko_id, start_date=start_date, end_date=end_date)
+
+def create_shift_type(shift_type_data):
+    """Создать новый тип смены"""
+    db = SessionLocal()
+    try:
+        shift_type = ShiftType(
+            name=shift_type_data['name'],
+            start_time=shift_type_data['start_time'],
+            end_time=shift_type_data['end_time'],
+            point=shift_type_data['point'],
+            shift_type=shift_type_data['shift_type']
+        )
+        db.add(shift_type)
+        db.flush()
+        shift_type_id = shift_type.id
+        db.commit()
+        return shift_type_id
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+def get_shift_types():
+    """Получить все типы смен"""
+    db = SessionLocal()
+    try:
+        return db.query(ShiftType).order_by(ShiftType.point, ShiftType.start_time).all()
+    finally:
+        db.close()
+
+def get_shift_type_by_id(shift_type_id):
+    """Получить тип смены по ID"""
+    db = SessionLocal()
+    try:
+        return db.query(ShiftType).filter(ShiftType.id == shift_type_id).first()
+    finally:
+        db.close()
+
+def update_shift_type(shift_type_id, update_data):
+    """Обновить тип смены"""
+    db = SessionLocal()
+    try:
+        shift_type = db.query(ShiftType).filter(ShiftType.id == shift_type_id).first()
+        if shift_type:
+            for key, value in update_data.items():
+                setattr(shift_type, key, value)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
+
+def delete_shift_type(shift_type_id):
+    """Удалить тип смены"""
+    db = SessionLocal()
+    try:
+        shift_type = db.query(ShiftType).filter(ShiftType.id == shift_type_id).first()
+        if shift_type:
+            db.delete(shift_type)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        raise e
+    finally:
+        db.close()
