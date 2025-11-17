@@ -2,6 +2,7 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler, CallbackQueryHandler
 from bot.utils.auth import require_roles, ROLE_MENTOR, ROLE_SENIOR
+from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 from bot.database.user_operations import get_user_by_telegram_id, get_all_users
 from bot.database.schedule_operations import (
     get_upcoming_shifts_by_iiko_id, update_shift_iiko_id, get_shift_by_id,
@@ -73,7 +74,7 @@ async def swap_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_data=f"swap_shift_{shift.shift_id}"
         )])
     
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_swap")])
+    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_conversation")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(text, reply_markup=reply_markup)
@@ -84,7 +85,7 @@ async def handle_swap_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     query = update.callback_query
     await query.answer()
     
-    if query.data == "cancel_swap":
+    if query.data == "cancel_conversation":
         await query.edit_message_text("❌ Замена отменена")
         return ConversationHandler.END
     
@@ -111,7 +112,7 @@ async def handle_swap_callback(update: Update, context: ContextTypes.DEFAULT_TYP
                 callback_data=f"swap_employee_{user.iiko_id}"
             )])
         
-        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_swap")])
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_conversation")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(text, reply_markup=reply_markup)
@@ -122,7 +123,7 @@ async def handle_employee_selection(update: Update, context: ContextTypes.DEFAUL
     query = update.callback_query
     await query.answer()
     
-    if query.data == "cancel_swap":
+    if query.data == "cancel_conversation":
         await query.edit_message_text("❌ Замена отменена")
         return ConversationHandler.END
     
@@ -256,15 +257,6 @@ async def handle_return_shift_selection(update: Update, context: ContextTypes.DE
         context.user_data.clear()
         return ConversationHandler.END
 
-async def cancel_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена замены"""
-    context.user_data.clear()
-    await update.message.reply_text(
-        "❌ Замена отменена.",
-        reply_markup=get_main_menu()
-    )
-    return ConversationHandler.END
-
 def get_swap_conversation_handler():
     """Возвращает ConversationHandler для замен"""
     return ConversationHandler(
@@ -273,10 +265,10 @@ def get_swap_conversation_handler():
         ],
         states={
             SWAP_MENU: [
-                CallbackQueryHandler(handle_swap_callback, pattern="^(swap_shift_|cancel_swap)"),
+                CallbackQueryHandler(handle_swap_callback, pattern="^(swap_shift_|cancel_conversation)"),
             ],
             SELECTING_EMPLOYEE: [
-                CallbackQueryHandler(handle_employee_selection, pattern="^(swap_employee_|cancel_swap)"),
+                CallbackQueryHandler(handle_employee_selection, pattern="^(swap_employee_|cancel_conversation)"),
             ],
             CONFIRMING_RETURN_SWAP: [
                 CallbackQueryHandler(handle_return_swap, pattern="^(swap_return_yes|swap_return_no)"),
@@ -286,9 +278,9 @@ def get_swap_conversation_handler():
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_swap),
-            CommandHandler("start", cancel_swap),
-            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_swap),
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_cancel_conversation),
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_conversation),
         ],
         allow_reentry=True
     )

@@ -9,11 +9,12 @@ from bot.database.simple_db import init_db
 from bot.handlers.review import get_review_conversation_handler
 from bot.handlers.stats import stats_command, get_stats_handlers
 from bot.handlers.settings import get_settings_conversation_handler
-from bot.handlers.checklist import checklist_menu
+from bot.handlers.checklist import get_checklist_conversation_handler
 from bot.handlers.schedule import get_swap_conversation_handler
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_mentor, is_senior_or_mentor, get_user_role
-from bot.database.user_operations import get_user_by_telegram_id
+from bot.utils.common_handlers import cancel_conversation
+from bot.database.user_operations import get_user_by_username
 from bot.database.schedule_operations import get_upcoming_shifts_by_iiko_id
 from datetime import date, timedelta
 
@@ -77,8 +78,8 @@ class CoffeeBot:
         # ConversationHandler для замен
         self.application.add_handler(get_swap_conversation_handler())
         
-        # Обработчик чек-листа
-        self.application.add_handler(MessageHandler(filters.Regex("^📝 Чек-лист смены$"), checklist_menu))
+        # ConversationHandler для чек-листов
+        self.application.add_handler(get_checklist_conversation_handler())
         
         # Общий обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -92,26 +93,24 @@ class CoffeeBot:
         # Очищаем данные пользователя при /start (на случай застопоривания)
         context.user_data.clear()
         
-        # Получаем роль пользователя
-        role = get_user_role(update)
+        # Получаем пользователя по username
+        db_user = None
+        
+        if user.username:
+            db_user = get_user_by_username(user.username)
         
         # Формируем приветствие в зависимости от роли
-        if role:
+        if db_user:
             role_names = {
                 'barista': '☕ Бариста',
-                'senior': '⭐ Старший',
+                'senior': '⭐ Старший', 
                 'mentor': '👨‍🏫 Наставник'
             }
-            role_text = role_names.get(role, 'Пользователь')
+            role_text = role_names.get(db_user.role, 'Пользователь')
             greeting = f"Привет, {user.first_name}! 👋\n\nВы вошли как: {role_text}"
             
             # Получаем ближайшие смены на неделю
-            db_user = get_user_by_telegram_id(user.id)
-            if not db_user and user.username:
-                from bot.database.user_operations import get_user_by_username
-                db_user = get_user_by_username(user.username)
-            
-            if db_user and db_user.iiko_id:
+            if db_user.iiko_id:
                 shifts = get_upcoming_shifts_by_iiko_id(str(db_user.iiko_id), days=7)
                 if shifts:
                     greeting += "\n\n📅 Ваши ближайшие смены на неделю:\n"
@@ -139,11 +138,10 @@ class CoffeeBot:
             reply_markup=reply_markup
         )
     
-    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /cancel"""
-        from bot.handlers.review import cancel_review
-        return await cancel_review(update, context)
-    
+        return await cancel_conversation(update, context)
+        
     async def show_db_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /show_db - показать содержимое базы данных"""
         try:
@@ -281,7 +279,7 @@ class CoffeeBot:
         elif text == "📊 Статистика":
             await stats_command(update, context)
         elif text == "⬅️ Назад":
-            await self.start_command(update, context)
+            return await cancel_conversation(update, context)
         elif text == "🧹 Контроль чистоты":
             # Проверяем доступ - только старшие и наставники
             if not is_senior_or_mentor(update):
@@ -309,6 +307,16 @@ class CoffeeBot:
                 return
             # ConversationHandler сам обработает это
             pass
+        elif text == "⚙️ Управление чек-листами":
+            # Проверяем доступ - только старшие и наставники
+            if not is_senior_or_mentor(update):
+                await update.message.reply_text(
+                    "❌ У вас нет доступа к этой функции.\n"
+                    "Управление чек-листами доступно только старшим и наставникам."
+                )
+                return
+            # ConversationHandler сам обработает это
+            pass
         else:
             await update.message.reply_text(
                 "Используйте кнопки меню или команды:\n"
@@ -319,7 +327,7 @@ class CoffeeBot:
                 "/stats_debug - Статистика (отладка)\n"
                 "/show_photo [id] - Показать фото\n"
                 "/cancel - Отмена"
-        )
+            )
     
     def run(self):
         """Запуск бота"""

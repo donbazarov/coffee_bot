@@ -2,6 +2,7 @@
 from bot.database.models import init_db, User, Schedule, ShiftType, SessionLocal
 from bot.config import BotConfig
 from bot.database.user_operations import get_user_by_iiko_id, get_user_by_telegram_id, get_user_by_username, create_user
+from .checklist_migrations import init_checklist_database
 import sqlite3
 from datetime import time
 
@@ -302,4 +303,6 @@ def init_database():
     migrate_update_schedule_table()
     # Мигрируем пользователей
     migrate_users_from_config()
+    # Мигрируем чек-листы
+    init_checklist_database()
 

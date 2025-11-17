@@ -11,6 +11,7 @@ from bot.database.schedule_operations import (
     create_shift_type, get_shift_types, update_shift_type, delete_shift_type, get_shift_type_by_id
 )
 from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet
+from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 from bot.keyboards.menus import get_main_menu
 import sqlite3
 import os
@@ -27,9 +28,12 @@ logger = logging.getLogger(__name__)
  SCHEDULE_MENU, PARSING_MONTH, SELECTING_EMPLOYEE_FOR_SHIFTS, VIEWING_SHIFTS,
  ADDING_SHIFT_DATE, ADDING_SHIFT_IIKO_ID, ADDING_SHIFT_POINT, ADDING_SHIFT_TYPE,
  ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD,
- # Cостояния для управления типами смен
+ # Состояния для управления типами смен
  SHIFT_TYPES_MENU, ADDING_SHIFT_TYPE_DATA, EDITING_SHIFT_TYPE_ID, EDITING_SHIFT_TYPE_FIELD,
- DELETING_SHIFT_TYPE_CONFIRM, EDITING_SHIFT_TYPE_FIELD) = range(29)
+ DELETING_SHIFT_TYPE_CONFIRM,
+ # Состояния для управления чеклистами
+ CHECKLIST_MANAGEMENT_MENU, CHECKLIST_SELECT_POINT, CHECKLIST_SELECT_DAY, 
+ CHECKLIST_SELECT_SHIFT, CHECKLIST_ADD_TASK_DESCRIPTION, CHECKLIST_VIEW_TEMPLATES) = range(34)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -38,6 +42,7 @@ async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [KeyboardButton("👥 Управление пользователями")],
         [KeyboardButton("📅 Управление расписанием")],
         [KeyboardButton("🕒 Управление типами смен")],
+        [KeyboardButton("📝 Управление чек-листами")],
         [KeyboardButton("🗑️ Очистить таблицу оценок")],
         [KeyboardButton("⬅️ Назад")]
     ]
@@ -1133,14 +1138,290 @@ async def edit_shift_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return await schedule_management(update, context)
 
-async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена настроек"""
-    context.user_data.clear()
+@require_roles([ROLE_SENIOR, ROLE_MENTOR])
+async def checklist_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления чек-листами"""
+    keyboard = [
+        [KeyboardButton("📋 Управление шаблонами")],
+        [KeyboardButton("🔄 Управление пересменами")],
+        [KeyboardButton("📊 Статистика выполнения")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     await update.message.reply_text(
-        "❌ Настройки отменены.",
-        reply_markup=get_main_menu()
+        "⚙️ Управление чек-листами\n\n"
+        "Выберите раздел:",
+        reply_markup=reply_markup
     )
-    return ConversationHandler.END
+    return CHECKLIST_MANAGEMENT_MENU
+
+# ========== ОБРАБОТЧИКИ УПРАВЛЕНИЯ ЧЕК-ЛИСТАМИ ==========
+
+async def templates_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Меню управления шаблонами задач"""
+    keyboard = [
+        [KeyboardButton("➕ Добавить задачу")],
+        [KeyboardButton("📋 Просмотреть задачи")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📋 Управление шаблонами задач\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_MANAGEMENT_MENU
+
+async def hybrid_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Управление распределением задач для пересменов"""
+    from bot.database.checklist_operations import get_checklist_templates
+    
+    # Получаем все шаблоны для отображения
+    templates = get_checklist_templates()
+    
+    if not templates:
+        await update.message.reply_text(
+            "🔄 Управление пересменами\n\n"
+            "❌ Нет созданных шаблонов задач.\n"
+            "Сначала создайте задачи в разделе '📋 Управление шаблонами'."
+        )
+        return CHECKLIST_MANAGEMENT_MENU
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
+    
+    response = "🔄 Управление пересменами\n\n"
+    response += "📋 Доступные задачи для распределения:\n\n"
+    
+    # Группируем задачи
+    grouped = {}
+    for template in templates:
+        key = (template.point, template.day_of_week, template.shift_type)
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(template)
+    
+    for (point, day, shift), tasks in grouped.items():
+        response += f"📍 {point} | {day_names[day]} | {shift_names.get(shift, shift)}\n"
+        for task in tasks:
+            response += f"  • {task.task_description}\n"
+        response += "\n"
+    
+    response += "⚙️ Функционал распределения задач между сменами в активной разработке.\n"
+    response += "Скоро можно будет назначать задачи утренних и вечерних смен пересменам."
+    
+    await update.message.reply_text(response)
+    return CHECKLIST_MANAGEMENT_MENU
+
+async def checklist_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика выполнения чек-листов"""
+    from bot.database.checklist_operations import get_checklist_templates
+    from datetime import datetime, timedelta
+    
+    templates = get_checklist_templates()
+    
+    if not templates:
+        await update.message.reply_text(
+            "📊 Статистика выполнения чек-листов\n\n"
+            "❌ Нет созданных шаблонов задач для анализа."
+        )
+        return CHECKLIST_MANAGEMENT_MENU
+    
+    # Простая статистика
+    total_tasks = len(templates)
+    
+    # Группируем по точкам
+    points = {}
+    for template in templates:
+        if template.point not in points:
+            points[template.point] = 0
+        points[template.point] += 1
+    
+    # Группируем по дням недели
+    days = {}
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    for template in templates:
+        day_name = day_names[template.day_of_week]
+        if day_name not in days:
+            days[day_name] = 0
+        days[day_name] += 1
+    
+    response = "📊 Статистика выполнения чек-листов\n\n"
+    response += f"📈 Общее количество задач: {total_tasks}\n\n"
+    
+    response += "📍 Распределение по точкам:\n"
+    for point, count in points.items():
+        response += f"  • {point}: {count} задач\n"
+    
+    response += "\n📅 Распределение по дням недели:\n"
+    for day, count in days.items():
+        response += f"  • {day}: {count} задач\n"
+    
+    response += "\n📈 Модуль отслеживания выполнения в активной разработке.\n"
+    response += "Скоро можно будет просматривать статистику выполнения по сотрудникам и сменам."
+    
+    await update.message.reply_text(response)
+    return CHECKLIST_MANAGEMENT_MENU
+
+async def start_adding_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало добавления новой задачи"""
+    keyboard = [
+        [KeyboardButton("ДЕ"), KeyboardButton("УЯ")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "➕ Добавление новой задачи\n\n"
+        "Выберите точку:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_SELECT_POINT
+
+async def select_point_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор точки для новой задачи"""
+    point = update.message.text
+    if point not in ['ДЕ', 'УЯ']:
+        await update.message.reply_text("❌ Выберите точку: ДЕ или УЯ")
+        return CHECKLIST_SELECT_POINT
+    
+    context.user_data['new_task_point'] = point
+    
+    keyboard = [
+        [KeyboardButton("Понедельник"), KeyboardButton("Вторник"), KeyboardButton("Среда")],
+        [KeyboardButton("Четверг"), KeyboardButton("Пятница"), KeyboardButton("Суббота")],
+        [KeyboardButton("Воскресенье")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"Точка: {point}\n\n"
+        "Выберите день недели:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_SELECT_DAY
+
+async def select_day_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор дня недели для новой задачи"""
+    day_map = {
+        "Понедельник": 0,
+        "Вторник": 1,
+        "Среда": 2,
+        "Четверг": 3,
+        "Пятница": 4,
+        "Саббота": 5,
+        "Воскресенье": 6
+    }
+    
+    day_name = update.message.text
+    if day_name not in day_map:
+        await update.message.reply_text("❌ Выберите день недели из списка")
+        return CHECKLIST_SELECT_DAY
+    
+    context.user_data['new_task_day'] = day_map[day_name]
+    
+    keyboard = [
+        [KeyboardButton("🌅 Утро"), KeyboardButton("🌆 Вечер")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"День: {day_name}\n\n"
+        "Выберите тип смены:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_SELECT_SHIFT
+
+async def select_shift_for_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор типа смены для новой задачи"""
+    shift_map = {
+        "🌅 Утро": "morning",
+        "🌆 Вечер": "evening"
+    }
+    
+    shift_name = update.message.text
+    if shift_name not in shift_map:
+        await update.message.reply_text("❌ Выберите тип смены из списка")
+        return CHECKLIST_SELECT_SHIFT
+    
+    context.user_data['new_task_shift'] = shift_map[shift_name]
+    
+    await update.message.reply_text(
+        f"Тип смены: {shift_name}\n\n"
+        "Введите описание задачи:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return CHECKLIST_ADD_TASK_DESCRIPTION
+
+async def add_task_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Добавление описания задачи и сохранение"""
+    task_description = update.message.text
+    
+    try:
+        # Импортируем функцию создания шаблона
+        from bot.database.checklist_operations import create_checklist_template
+        
+        # Создаем задачу
+        task = create_checklist_template(
+            point=context.user_data['new_task_point'],
+            day_of_week=context.user_data['new_task_day'],
+            shift_type=context.user_data['new_task_shift'],
+            task_description=task_description
+        )
+        
+        day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        day_name = day_names[context.user_data['new_task_day']]
+        shift_name = "🌅 Утро" if context.user_data['new_task_shift'] == 'morning' else "🌆 Вечер"
+        
+        await update.message.reply_text(
+            f"✅ Задача успешно добавлена!\n\n"
+            f"📍 Точка: {context.user_data['new_task_point']}\n"
+            f"📅 День: {day_name}\n"
+            f"🕒 Смена: {shift_name}\n"
+            f"📝 Задача: {task_description}"
+        )
+        
+        # Очищаем данные
+        context.user_data.clear()
+        
+        return await templates_management(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка при добавлении задачи: {str(e)}")
+        return await templates_management(update, context)
+
+async def view_templates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр всех шаблонов задач"""
+    from bot.database.checklist_operations import get_checklist_templates
+    
+    templates = get_checklist_templates()
+    
+    if not templates:
+        await update.message.reply_text("📭 Шаблоны задач не найдены")
+        return CHECKLIST_MANAGEMENT_MENU
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
+    
+    response = "📋 Список шаблонов задач:\n\n"
+    
+    # Группируем по точкам, дням и сменам
+    grouped = {}
+    for template in templates:
+        key = (template.point, template.day_of_week, template.shift_type)
+        if key not in grouped:
+            grouped[key] = []
+        grouped[key].append(template)
+    
+    for (point, day, shift), tasks in grouped.items():
+        response += f"📍 {point} | {day_names[day]} | {shift_names.get(shift, shift)}\n"
+        for task in tasks:
+            response += f"  • {task.task_description}\n"
+        response += "\n"
+    
+    await update.message.reply_text(response)
+    return CHECKLIST_MANAGEMENT_MENU
 
 def get_settings_conversation_handler():
     """Возвращает ConversationHandler для настроек"""
@@ -1155,8 +1436,9 @@ def get_settings_conversation_handler():
                 MessageHandler(filters.Regex("^➕ Добавить пользователя$"), start_adding_user),
                 MessageHandler(filters.Regex("^📅 Управление расписанием$"), schedule_management),
                 MessageHandler(filters.Regex("^🕒 Управление типами смен$"), shift_types_management),
+                MessageHandler(filters.Regex("^📝 Управление чек-листами$"), checklist_management),
                 MessageHandler(filters.Regex("^🗑️ Очистить таблицу оценок$"), clear_reviews_confirm),
-                MessageHandler(filters.Regex("^⬅️ Назад$"), cancel_settings),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), cancel_conversation),
             ],
             # Расписание
             SCHEDULE_MENU: [
@@ -1214,13 +1496,36 @@ def get_settings_conversation_handler():
             # Удаление
             DELETING_USER_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, deleting_user_confirm)],
             
+            # Управление чеклистами
+            CHECKLIST_MANAGEMENT_MENU: [
+                MessageHandler(filters.Regex("^📋 Управление шаблонами$"), templates_management),
+                MessageHandler(filters.Regex("^➕ Добавить задачу$"), start_adding_task),  # ДОБАВИТЬ
+                MessageHandler(filters.Regex("^📋 Просмотреть задачи$"), view_templates),  # ДОБАВИТЬ
+                MessageHandler(filters.Regex("^🔄 Управление пересменами$"), hybrid_management),
+                MessageHandler(filters.Regex("^📊 Статистика выполнения$"), checklist_stats),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), settings_menu),
+            ],
+            # Добавляем состояния для управления шаблонами
+            CHECKLIST_SELECT_POINT: [
+                MessageHandler(filters.Regex("^(ДЕ|УЯ)$"), select_point_for_task),
+            ],
+            CHECKLIST_SELECT_DAY: [
+                MessageHandler(filters.Regex("^(Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье)$"), select_day_for_task),
+            ],
+            CHECKLIST_SELECT_SHIFT: [
+                MessageHandler(filters.Regex("^(🌅 Утро|🌆 Вечер)$"), select_shift_for_task),
+            ],
+            CHECKLIST_ADD_TASK_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_description),
+            ],
+            
             # Очистка таблицы
             CLEARING_REVIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_clear_reviews)],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_settings),
-            CommandHandler("start", cancel_settings),
-            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_settings),
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_cancel_conversation),
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_conversation),
             CallbackQueryHandler(handle_user_callback, pattern="^(edit_user_|delete_user_|back_to_users_management)"),
             CallbackQueryHandler(handle_shift_type_callback, pattern="^(edit_shift_type_|delete_shift_type_|back_to_shift_types_management)"),
         ],

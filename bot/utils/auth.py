@@ -1,6 +1,6 @@
 """Утилиты для проверки прав доступа"""
 from telegram import Update
-from bot.database.user_operations import get_user_by_telegram_id, get_user_by_username, has_any_role
+from bot.database.user_operations import get_user_by_username, has_any_role
 from typing import List, Callable
 from functools import wraps
 
@@ -15,12 +15,6 @@ def get_user_role(update: Update) -> str:
     if not user:
         return None
     
-    # Сначала пробуем по telegram_id
-    db_user = get_user_by_telegram_id(user.id)
-    if db_user:
-        return db_user.role
-    
-    # Если не нашли, пробуем по username
     if user.username:
         db_user = get_user_by_username(user.username)
         if db_user:

@@ -73,6 +73,60 @@ class Schedule(Base):
         Index('idx_shift_type_id', 'shift_type_id'),
     )
 
+class ChecklistTemplate(Base):
+    """Шаблоны заданий для чек-листов"""
+    __tablename__ = 'checklist_templates'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
+    shift_type = Column(String(20), nullable=False)  # 'morning', 'evening' (для пересмена не создаем отдельные)
+    task_description = Column(String(500), nullable=False)
+    order_index = Column(Integer, default=0)  # порядок отображения
+    is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class HybridShiftAssignment(Base):
+    """Распределение задач для пересменов"""
+    __tablename__ = 'hybrid_shift_assignments'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
+    morning_task_id = Column(Integer, ForeignKey('checklist_templates.id'))  # задача утра для пересмена
+    evening_task_id = Column(Integer, ForeignKey('checklist_templates.id'))  # задача вечера для пересмена
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связи
+    morning_task = relationship("ChecklistTemplate", foreign_keys=[morning_task_id])
+    evening_task = relationship("ChecklistTemplate", foreign_keys=[evening_task_id])
+
+class ChecklistLog(Base):
+    """Лог выполнения чек-листов"""
+    __tablename__ = 'checklist_logs'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    task_id = Column(Integer, ForeignKey('checklist_templates.id'), nullable=False)
+    shift_date = Column(Date, nullable=False)
+    shift_type = Column(String(20), nullable=False)  # 'morning', 'hybrid', 'evening'
+    point = Column(String(10), nullable=False)
+    completed_at = Column(DateTime, default=datetime.utcnow)
+    completed_by_user_id = Column(Integer, ForeignKey('users.id'))  # кто выполнил (для синхронизации)
+    
+    # Связи
+    user = relationship("User", foreign_keys=[user_id])
+    task = relationship("ChecklistTemplate")
+    completed_by = relationship("User", foreign_keys=[completed_by_user_id])
+    
+    # Индексы
+    __table_args__ = (
+        Index('idx_checklist_log_date_user', 'shift_date', 'user_id'),
+        Index('idx_checklist_log_date_point', 'shift_date', 'point'),
+        Index('idx_checklist_log_task', 'task_id'),
+    )
+
 # Инициализация БД - используем SQLite
 engine = create_engine(BotConfig.database_url, connect_args={"check_same_thread": False} if "sqlite" in BotConfig.database_url else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

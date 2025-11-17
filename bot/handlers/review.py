@@ -5,6 +5,7 @@ from bot.database.simple_db import save_review
 from bot.database.user_operations import get_users_by_role
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_mentor
+from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 
 # Состояния - расширяем для детальной оценки
 (SELECTING_BARISTA, SELECTING_POINT, SELECTING_CATEGORY,
@@ -51,7 +52,7 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     barista_name = update.message.text
     
     if barista_name == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     # Получаем бариста из БД
     barista_users = get_users_by_role('barista', active_only=True)
@@ -82,7 +83,7 @@ async def select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     point = update.message.text
     
     if point == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if point not in BotConfig.points:
         await update.message.reply_text("❌ Пожалуйста, выберите точку из списка:")
@@ -105,7 +106,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = update.message.text
     
     if category == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     valid_categories = ["Эспрессо/Фильтр", "Молочный напиток"]
     if category not in valid_categories:
@@ -136,7 +137,7 @@ async def select_espresso_drink_type(update: Update, context: ContextTypes.DEFAU
     drink_type = update.message.text
     
     if drink_type == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     valid_types = ["Эспрессо", "Фильтр"]
     if drink_type not in valid_types:
@@ -157,7 +158,7 @@ async def select_espresso_balance(update: Update, context: ContextTypes.DEFAULT_
     balance = update.message.text
     
     if balance == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if balance not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -177,7 +178,7 @@ async def select_espresso_bouquet(update: Update, context: ContextTypes.DEFAULT_
     bouquet = update.message.text
     
     if bouquet == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if bouquet not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -197,7 +198,7 @@ async def select_espresso_body(update: Update, context: ContextTypes.DEFAULT_TYP
     body = update.message.text
     
     if body == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if body not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -217,7 +218,7 @@ async def select_espresso_aftertaste(update: Update, context: ContextTypes.DEFAU
     aftertaste = update.message.text
     
     if aftertaste == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if aftertaste not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -237,7 +238,7 @@ async def select_espresso_comment(update: Update, context: ContextTypes.DEFAULT_
     comment = update.message.text
     
     if comment == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     context.user_data['comment'] = comment
     
@@ -261,7 +262,7 @@ async def select_milk_drink_type(update: Update, context: ContextTypes.DEFAULT_T
     drink_type = update.message.text
     
     if drink_type == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     valid_types = ["Капучино", "Флэт Уайт"]
     if drink_type not in valid_types:
@@ -282,7 +283,7 @@ async def select_milk_balance(update: Update, context: ContextTypes.DEFAULT_TYPE
     balance = update.message.text
     
     if balance == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if balance not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -302,7 +303,7 @@ async def select_milk_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE
     bouquet = update.message.text
     
     if bouquet == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if bouquet not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -322,7 +323,7 @@ async def select_milk_foam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     foam = update.message.text
     
     if foam == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if foam not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -342,7 +343,7 @@ async def select_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TY
     latte_art = update.message.text
     
     if latte_art == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if latte_art not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
@@ -360,7 +361,7 @@ async def select_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TY
 async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка фото молочного напитка через Telegram file_id"""
     if update.message.text == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     if update.message.text == "-":
         context.user_data['photo_file_id'] = None
@@ -406,7 +407,7 @@ async def select_milk_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     comment = update.message.text
     
     if comment == "❌ Отмена":
-        return await cancel_review(update, context)
+        return await cancel_conversation(update, context)
     
     context.user_data['comment'] = comment
     
@@ -486,17 +487,6 @@ async def save_review_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_menu()
         )
         
-async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена оценки - возврат в главное меню"""
-    from bot.keyboards.menus import get_main_menu
-    
-    context.user_data.clear()
-    await update.message.reply_text(
-        "❌ Операция отменена.\n\nВы вернулись в главное меню.",
-        reply_markup=get_main_menu()
-    )
-    return ConversationHandler.END
-
 def get_review_conversation_handler():
     """Возвращает настроенный ConversationHandler для полной оценки"""
     return ConversationHandler(
@@ -527,9 +517,9 @@ def get_review_conversation_handler():
             MILK_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, select_milk_comment)],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_review),
-            CommandHandler("start", cancel_review),  # /start также отменяет диалог
-            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_review)
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_cancel_conversation),
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_conversation),
         ],
         allow_reentry=True
     )
