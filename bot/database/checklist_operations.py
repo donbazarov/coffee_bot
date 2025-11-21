@@ -1,7 +1,7 @@
 """Операции для работы с чек-листами"""
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from .models import SessionLocal, ChecklistTemplate, HybridShiftAssignment, ChecklistLog, User, Schedule, ShiftType
+from .models import SessionLocal, ChecklistTemplate, HybridShiftAssignment, ChecklistLog, User, Schedule, ShiftType, HybridAssignmentTask
 from typing import Optional, List, Dict
 from datetime import date, datetime, time, timedelta
 import logging
@@ -163,50 +163,35 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
     db = SessionLocal()
     try:
         day_of_week = shift_date.weekday()
-        has_hybrid = check_hybrid_shift_exists(point, shift_date)
         
         if shift_type == 'hybrid':
             # Для пересмена получаем назначенные ему задачи
-            assignment = db.query(HybridShiftAssignment).filter(
-                and_(
-                    HybridShiftAssignment.point == point,
-                    HybridShiftAssignment.day_of_week == day_of_week
-                )
-            ).first()
+            assignment = get_hybrid_assignment(point, day_of_week)
+            if not assignment:
+                return []
             
-            tasks = []
-            if assignment and assignment.morning_task:
-                tasks.append(assignment.morning_task)
-            if assignment and assignment.evening_task:
-                tasks.append(assignment.evening_task)
-            return tasks
+            morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+            evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+            return morning_tasks + evening_tasks
             
         elif shift_type == 'morning':
             # Для утра - исключаем задачи, переданные пересмену
             morning_tasks = get_checklist_templates(point=point, day_of_week=day_of_week, shift_type='morning')
-            if has_hybrid:
-                assignment = db.query(HybridShiftAssignment).filter(
-                    and_(
-                        HybridShiftAssignment.point == point,
-                        HybridShiftAssignment.day_of_week == day_of_week
-                    )
-                ).first()
-                if assignment and assignment.morning_task:
-                    morning_tasks = [task for task in morning_tasks if task.id != assignment.morning_task.id]
+            assignment = get_hybrid_assignment(point, day_of_week)
+            if assignment:
+                hybrid_morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+                hybrid_task_ids = [t.id for t in hybrid_morning_tasks]
+                morning_tasks = [task for task in morning_tasks if task.id not in hybrid_task_ids]
             return morning_tasks
             
         elif shift_type == 'evening':
             # Для вечера - аналогично утру
             evening_tasks = get_checklist_templates(point=point, day_of_week=day_of_week, shift_type='evening')
-            if has_hybrid:
-                assignment = db.query(HybridShiftAssignment).filter(
-                    and_(
-                        HybridShiftAssignment.point == point,
-                        HybridShiftAssignment.day_of_week == day_of_week
-                    )
-                ).first()
-                if assignment and assignment.evening_task:
-                    evening_tasks = [task for task in evening_tasks if task.id != assignment.evening_task.id]
+            assignment = get_hybrid_assignment(point, day_of_week)
+            if assignment:
+                hybrid_evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+                hybrid_task_ids = [t.id for t in hybrid_evening_tasks]
+                evening_tasks = [task for task in evening_tasks if task.id not in hybrid_task_ids]
             return evening_tasks
         
         return []
@@ -259,5 +244,132 @@ def mark_task_completed(user_id: int, task_id: int, shift_date: date, shift_type
         db.rollback()
         logger.error(f"Ошибка при отметке задачи: {e}")
         return False
+    finally:
+        db.close()
+
+def get_hybrid_assignments(point: Optional[str] = None) -> List[HybridShiftAssignment]:
+    """Получить распределения задач для пересменов с загрузкой связанных задач"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy.orm import joinedload
+        
+        query = db.query(HybridShiftAssignment).options(
+            joinedload(HybridShiftAssignment.assigned_tasks).joinedload(HybridAssignmentTask.task)
+        )
+        
+        if point:
+            query = query.filter(HybridShiftAssignment.point == point)
+        
+        return query.order_by(HybridShiftAssignment.point, HybridShiftAssignment.day_of_week).all()
+    finally:
+        db.close()
+
+def get_hybrid_assignment(point: str, day_of_week: int) -> Optional[HybridShiftAssignment]:
+    """Получить распределение для конкретной точки и дня с загрузкой связанных задач"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy.orm import joinedload
+        
+        return db.query(HybridShiftAssignment).options(
+            joinedload(HybridShiftAssignment.assigned_tasks).joinedload(HybridAssignmentTask.task)
+        ).filter(
+            and_(
+                HybridShiftAssignment.point == point,
+                HybridShiftAssignment.day_of_week == day_of_week
+            )
+        ).first()
+    finally:
+        db.close()
+
+def delete_hybrid_assignment(assignment_id: int) -> bool:
+    """Удалить распределение"""
+    db = SessionLocal()
+    try:
+        assignment = db.query(HybridShiftAssignment).filter(HybridShiftAssignment.id == assignment_id).first()
+        if assignment:
+            db.delete(assignment)
+            db.commit()
+            logger.info(f"Удалено распределение ID {assignment_id}")
+            return True
+        return False
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении распределения: {e}")
+        raise
+    finally:
+        db.close()
+        
+def create_hybrid_assignment_with_tasks(point: str, day_of_week: int, morning_task_ids: List[int], evening_task_ids: List[int]) -> HybridShiftAssignment:
+    """Создать или обновить распределение задач для пересмена с поддержкой нескольких задач"""
+    db = SessionLocal()
+    try:
+        # Проверяем, существует ли уже распределение для этой точки и дня
+        existing = db.query(HybridShiftAssignment).filter(
+            and_(
+                HybridShiftAssignment.point == point,
+                HybridShiftAssignment.day_of_week == day_of_week
+            )
+        ).first()
+        
+        if existing:
+            # Удаляем старые задачи
+            db.query(HybridAssignmentTask).filter(
+                HybridAssignmentTask.assignment_id == existing.id
+            ).delete()
+            assignment = existing
+        else:
+            # Создаем новое распределение
+            assignment = HybridShiftAssignment(
+                point=point,
+                day_of_week=day_of_week
+            )
+            db.add(assignment)
+        
+        db.flush()  # Получаем ID
+        
+        # Добавляем утренние задачи
+        for task_id in morning_task_ids:
+            assignment_task = HybridAssignmentTask(
+                assignment_id=assignment.id,
+                task_id=task_id,
+                shift_type='morning'
+            )
+            db.add(assignment_task)
+        
+        # Добавляем вечерние задачи
+        for task_id in evening_task_ids:
+            assignment_task = HybridAssignmentTask(
+                assignment_id=assignment.id,
+                task_id=task_id,
+                shift_type='evening'
+            )
+            db.add(assignment_task)
+        
+        db.commit()
+        db.refresh(assignment)
+        logger.info(f"Создано/обновлено распределение для {point} день {day_of_week} с {len(morning_task_ids)} утренними и {len(evening_task_ids)} вечерними задачами")
+        return assignment
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при создании распределения: {e}")
+        raise
+    finally:
+        db.close()
+        
+def get_hybrid_assignment_tasks(assignment_id: int, shift_type: str = None) -> List[ChecklistTemplate]:
+    """Получить задачи для распределения"""
+    db = SessionLocal()
+    try:
+        from sqlalchemy.orm import joinedload
+        
+        query = db.query(HybridAssignmentTask).options(
+            joinedload(HybridAssignmentTask.task)
+        ).filter(HybridAssignmentTask.assignment_id == assignment_id)
+        
+        if shift_type:
+            query = query.filter(HybridAssignmentTask.shift_type == shift_type)
+        
+        assignment_tasks = query.all()
+        return [at.task for at in assignment_tasks if at.task]
     finally:
         db.close()

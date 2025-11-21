@@ -87,6 +87,24 @@ class ChecklistTemplate(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+class HybridAssignmentTask(Base):
+    """Связь между распределением и задачами (многие ко многим)"""
+    __tablename__ = 'hybrid_assignment_tasks'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    assignment_id = Column(Integer, ForeignKey('hybrid_shift_assignments.id'), nullable=False)
+    task_id = Column(Integer, ForeignKey('checklist_templates.id'), nullable=False)
+    shift_type = Column(String(20), nullable=False)  # 'morning' или 'evening'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связи
+    assignment = relationship("HybridShiftAssignment", back_populates="assigned_tasks")
+    task = relationship("ChecklistTemplate")
+    
+    __table_args__ = (
+        Index('idx_assignment_task', 'assignment_id', 'task_id'),
+    )
+
 class HybridShiftAssignment(Base):
     """Распределение задач для пересменов"""
     __tablename__ = 'hybrid_shift_assignments'
@@ -94,13 +112,10 @@ class HybridShiftAssignment(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
     day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
-    morning_task_id = Column(Integer, ForeignKey('checklist_templates.id'))  # задача утра для пересмена
-    evening_task_id = Column(Integer, ForeignKey('checklist_templates.id'))  # задача вечера для пересмена
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    # Связи
-    morning_task = relationship("ChecklistTemplate", foreign_keys=[morning_task_id])
-    evening_task = relationship("ChecklistTemplate", foreign_keys=[evening_task_id])
+    # Убираем старые связи и добавляем новую
+    assigned_tasks = relationship("HybridAssignmentTask", back_populates="assignment", cascade="all, delete-orphan")
 
 class ChecklistLog(Base):
     """Лог выполнения чек-листов"""

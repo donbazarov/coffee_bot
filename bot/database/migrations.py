@@ -1,5 +1,5 @@
 """Миграции базы данных"""
-from bot.database.models import init_db, User, Schedule, ShiftType, SessionLocal
+from bot.database.models import init_db, User, Schedule, ShiftType, SessionLocal, engine, Base, HybridAssignmentTask
 from bot.config import BotConfig
 from bot.database.user_operations import get_user_by_iiko_id, get_user_by_telegram_id, get_user_by_username, create_user
 from .checklist_migrations import init_checklist_database
@@ -290,6 +290,18 @@ def migrate_create_schedule_table():
     """Создает таблицу schedule если её нет (legacy функция для обратной совместимости)"""
     pass  # Теперь используется SQLAlchemy для создания таблиц
 
+def migrate_hybrid_assignments():
+    """Миграция для обновления структуры распределений"""
+    db = SessionLocal()
+    try:
+        HybridAssignmentTask.__table__.create(bind=engine, checkfirst=True)
+        print(f"✅ Таблица hybrid_assignment_tasks создана")
+        
+    except Exception as e:
+        print(f"⚠️ Ошибка при миграции: {e}")
+    finally:
+        db.close()
+
 def init_database():
     """Инициализация БД с миграцией"""
     # Создаем таблицы через SQLAlchemy
@@ -298,11 +310,11 @@ def init_database():
     migrate_add_iiko_id_column()
     # Создаем таблицу shift_types и заполняем данными
     migrate_create_shift_types_table()
-    
     # Обновляем таблицу schedule на новую структуру
     migrate_update_schedule_table()
     # Мигрируем пользователей
     migrate_users_from_config()
     # Мигрируем чек-листы
     init_checklist_database()
-
+    # Мигрируем распределения задач для пересменов
+    migrate_hybrid_assignments()

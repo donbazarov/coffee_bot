@@ -10,6 +10,7 @@ from bot.database.schedule_operations import (
     create_shift, update_shift, get_shift_by_id, bulk_create_shifts, delete_shifts_by_date_range,
     create_shift_type, get_shift_types, update_shift_type, delete_shift_type, get_shift_type_by_id
 )
+from bot.database.checklist_operations import get_hybrid_assignment_tasks
 from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 from bot.keyboards.menus import get_main_menu
@@ -33,7 +34,12 @@ logger = logging.getLogger(__name__)
  DELETING_SHIFT_TYPE_CONFIRM,
  # Состояния для управления чеклистами
  CHECKLIST_MANAGEMENT_MENU, CHECKLIST_SELECT_POINT, CHECKLIST_SELECT_DAY, 
- CHECKLIST_SELECT_SHIFT, CHECKLIST_ADD_TASK_DESCRIPTION, CHECKLIST_VIEW_TEMPLATES) = range(34)
+ CHECKLIST_SELECT_SHIFT, CHECKLIST_ADD_TASK_DESCRIPTION, CHECKLIST_VIEW_TEMPLATES,
+ CHECKLIST_VIEW_SELECT_POINT, CHECKLIST_VIEW_SELECT_DAY, CHECKLIST_VIEW_TASKS_LIST,
+ CHECKLIST_EDIT_TASK_SELECT, CHECKLIST_EDIT_TASK_DESCRIPTION, CHECKLIST_DELETE_TASK_SELECT,
+ CHECKLIST_DELETE_TASK_CONFIRM, HYBRID_SELECT_POINT, HYBRID_SELECT_DAY, HYBRID_VIEW_CURRENT,
+ HYBRID_SELECT_MORNING_TASK, HYBRID_SELECT_EVENING_TASK, HYBRID_SAVE_ASSIGNMENT,
+ HYBRID_VIEW_EXISTING, HYBRID_EDIT_EXISTING, HYBRID_DELETE_EXISTING, HYBRID_DELETE_CONFIRM) = range(51)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1175,45 +1181,593 @@ async def templates_management(update: Update, context: ContextTypes.DEFAULT_TYP
     return CHECKLIST_MANAGEMENT_MENU
 
 async def hybrid_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Управление распределением задач для пересменов"""
+    """Главное меню управления пересменами"""
+    keyboard = [
+        [KeyboardButton("🔄 Настроить распределение")],
+        [KeyboardButton("📋 Просмотреть распределения")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🔄 Управление пересменами\n\n"
+        "Выберите действие:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_MANAGEMENT_MENU
+
+async def start_hybrid_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало настройки распределения задач для пересмена"""
+    keyboard = [
+        [KeyboardButton("ДЕ"), KeyboardButton("УЯ")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "🔄 Настройка распределения для пересмена\n\n"
+        "Выберите точку:",
+        reply_markup=reply_markup
+    )
+    return HYBRID_SELECT_POINT
+
+async def hybrid_select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор точки для настройки пересмена"""
+    point = update.message.text
+    if point not in ['ДЕ', 'УЯ']:
+        await update.message.reply_text("❌ Выберите точку: ДЕ или УЯ")
+        return HYBRID_SELECT_POINT
+    
+    context.user_data['hybrid_point'] = point
+    
+    keyboard = [
+        [KeyboardButton("Понедельник"), KeyboardButton("Вторник"), KeyboardButton("Среда")],
+        [KeyboardButton("Четверг"), KeyboardButton("Пятница"), KeyboardButton("Суббота")],
+        [KeyboardButton("Воскресенье"), KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"📍 Точка: {point}\n\n"
+        "Выберите день недели:",
+        reply_markup=reply_markup
+    )
+    return HYBRID_SELECT_DAY
+
+async def hybrid_select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор дня недели и отображение текущих задач"""
+    day_map = {
+        "Понедельник": 0, "Вторник": 1, "Среда": 2,
+        "Четверг": 3, "Пятница": 4, "Суббота": 5, "Воскресенье": 6
+    }
+    
+    day_name = update.message.text
+    if day_name not in day_map:
+        await update.message.reply_text("❌ Выберите день недели из списка")
+        return HYBRID_SELECT_DAY
+    
+    day = day_map[day_name]
+    context.user_data['hybrid_day'] = day
+    context.user_data['hybrid_day_name'] = day_name
+    
+    # Получаем задачи для этой точки и дня
     from bot.database.checklist_operations import get_checklist_templates
     
-    # Получаем все шаблоны для отображения
-    templates = get_checklist_templates()
+    morning_tasks = get_checklist_templates(
+        point=context.user_data['hybrid_point'],
+        day_of_week=day,
+        shift_type='morning'
+    )
     
-    if not templates:
+    evening_tasks = get_checklist_templates(
+        point=context.user_data['hybrid_point'],
+        day_of_week=day,
+        shift_type='evening'
+    )
+    
+    if not morning_tasks and not evening_tasks:
         await update.message.reply_text(
-            "🔄 Управление пересменами\n\n"
-            "❌ Нет созданных шаблонов задач.\n"
+            f"❌ Нет задач для {context.user_data['hybrid_point']} в {day_name}.\n"
             "Сначала создайте задачи в разделе '📋 Управление шаблонами'."
         )
-        return CHECKLIST_MANAGEMENT_MENU
+        return await start_hybrid_setup(update, context)
+    
+    # Формируем сообщение с текущими задачами
+    response = f"🔄 Распределение задач для пересмена\n\n"
+    response += f"📍 {context.user_data['hybrid_point']} | {day_name}\n\n"
+    
+    response += "🌅 Утренние задачи:\n"
+    if morning_tasks:
+        for i, task in enumerate(morning_tasks, 1):
+            response += f"  {i}. {task.task_description}\n"
+    else:
+        response += "  Нет задач\n"
+    
+    response += "\n🌆 Вечерние задачи:\n"
+    if evening_tasks:
+        for i, task in enumerate(evening_tasks, 1):
+            response += f"  {i}. {task.task_description}\n"
+    else:
+        response += "  Нет задач\n"
+    
+    # Сохраняем задачи в контексте
+    context.user_data['morning_tasks'] = morning_tasks
+    context.user_data['evening_tasks'] = evening_tasks
+    
+    keyboard = [
+        [KeyboardButton("✅ Продолжить настройку")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        response + "\nПродолжить настройку распределения?",
+        reply_markup=reply_markup
+    )
+    return HYBRID_VIEW_CURRENT
+
+async def hybrid_view_current(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отображение текущих задач и начало выбора для пересмена"""
+    morning_tasks = context.user_data.get('morning_tasks', [])
+    
+    if not morning_tasks:
+        await update.message.reply_text("❌ Нет утренних задач для выбора")
+        return await start_hybrid_setup(update, context)
+    
+    response = "🌅 Выберите утренние задачи для пересмена (можно несколько через запятую):\n\n"
+    
+    for i, task in enumerate(morning_tasks, 1):
+        response += f"{i}. {task.task_description}\n"
+    
+    await update.message.reply_text(
+        response + "\nВведите номера утренних задач через запятую (например: 1,3,5):",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return HYBRID_SELECT_MORNING_TASK
+
+async def hybrid_select_morning_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор утренних задач для пересмена"""
+    try:
+        task_numbers_str = update.message.text
+        task_numbers = [int(num.strip()) for num in task_numbers_str.split(',')]
+        morning_tasks = context.user_data.get('morning_tasks', [])
+        
+        # Проверяем валидность всех номеров
+        for task_num in task_numbers:
+            if task_num < 1 or task_num > len(morning_tasks):
+                await update.message.reply_text(f"❌ Неверный номер задачи: {task_num}")
+                return HYBRID_SELECT_MORNING_TASK
+        
+        selected_tasks = [morning_tasks[num - 1] for num in task_numbers]
+        context.user_data['selected_morning_tasks'] = selected_tasks
+        context.user_data['selected_morning_task_ids'] = [task.id for task in selected_tasks]
+        
+        # Переходим к выбору вечерних задач
+        evening_tasks = context.user_data.get('evening_tasks', [])
+        
+        if not evening_tasks:
+            await update.message.reply_text("❌ Нет вечерних задач для выбора")
+            return await start_hybrid_setup(update, context)
+        
+        response = "🌆 Выберите вечерние задачи для пересмена (можно несколько через запятую):\n\n"
+        
+        for i, task in enumerate(evening_tasks, 1):
+            response += f"{i}. {task.task_description}\n"
+        
+        await update.message.reply_text(
+            response + "\nВведите номера вечерних задач через запятую (например: 2,4):",
+            reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+        )
+        return HYBRID_SELECT_EVENING_TASK
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите числа через запятую")
+        return HYBRID_SELECT_MORNING_TASK
+
+async def hybrid_select_evening_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор вечерних задач для пересмена"""
+    try:
+        task_numbers_str = update.message.text
+        task_numbers = [int(num.strip()) for num in task_numbers_str.split(',')]
+        evening_tasks = context.user_data.get('evening_tasks', [])
+        
+        # Проверяем валидность всех номеров
+        for task_num in task_numbers:
+            if task_num < 1 or task_num > len(evening_tasks):
+                await update.message.reply_text(f"❌ Неверный номер задачи: {task_num}")
+                return HYBRID_SELECT_EVENING_TASK
+        
+        selected_tasks = [evening_tasks[num - 1] for num in task_numbers]
+        context.user_data['selected_evening_tasks'] = selected_tasks
+        context.user_data['selected_evening_task_ids'] = [task.id for task in selected_tasks]
+        
+        # Показываем итоговое распределение
+        morning_tasks = context.user_data['selected_morning_tasks']
+        evening_tasks = context.user_data['selected_evening_tasks']
+        
+        response = "✅ Итоговое распределение для пересмена:\n\n"
+        response += f"📍 {context.user_data['hybrid_point']} | {context.user_data['hybrid_day_name']}\n\n"
+        
+        response += "🌅 Утренние задачи для пересмена:\n"
+        for task in morning_tasks:
+            response += f"  • {task.task_description}\n"
+        
+        response += "\n🌆 Вечерние задачи для пересмена:\n"
+        for task in evening_tasks:
+            response += f"  • {task.task_description}\n"
+        
+        response += "\nСохранить это распределение?"
+        
+        keyboard = [
+            [KeyboardButton("✅ Сохранить"), KeyboardButton("🔄 Начать заново")],
+            [KeyboardButton("❌ Отмена")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(response, reply_markup=reply_markup)
+        return HYBRID_SAVE_ASSIGNMENT
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите числа через запятую")
+        return HYBRID_SELECT_EVENING_TASK
+
+async def hybrid_save_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение распределения задач для пересмена"""
+    from bot.database.checklist_operations import create_hybrid_assignment_with_tasks
+    
+    if update.message.text == "✅ Сохранить":
+        try:
+            # Создаем или обновляем распределение
+            assignment = create_hybrid_assignment_with_tasks(
+                point=context.user_data['hybrid_point'],
+                day_of_week=context.user_data['hybrid_day'],
+                morning_task_ids=context.user_data['selected_morning_task_ids'],
+                evening_task_ids=context.user_data['selected_evening_task_ids']
+            )
+            
+            morning_tasks = context.user_data['selected_morning_tasks']
+            evening_tasks = context.user_data['selected_evening_tasks']
+            
+            response = "✅ Распределение успешно сохранено!\n\n"
+            response += f"📍 {context.user_data['hybrid_point']} | {context.user_data['hybrid_day_name']}\n\n"
+            
+            response += "🌅 Утренние задачи для пересмена:\n"
+            for task in morning_tasks:
+                response += f"  • {task.task_description}\n"
+            
+            response += "\n🌆 Вечерние задачи для пересмена:\n"
+            for task in evening_tasks:
+                response += f"  • {task.task_description}\n"
+            
+            response += "\nТеперь эти задачи будут отображаться у пересмена, а у утренней и вечерней смен - исключены."
+            
+            await update.message.reply_text(response)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка при сохранении: {str(e)}")
+    
+    elif update.message.text == "🔄 Начать заново":
+        return await start_hybrid_setup(update, context)
+    
+    # Очищаем контекст
+    context.user_data.clear()
+    
+    return await hybrid_management(update, context)
+
+async def hybrid_view_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просмотр существующих распределений"""
+    from bot.database.checklist_operations import get_hybrid_assignments, get_hybrid_assignment_tasks
+    
+    assignments = get_hybrid_assignments()
+    
+    if not assignments:
+        await update.message.reply_text(
+            "📭 Нет сохраненных распределений для пересменов.\n"
+            "Сначала создайте распределения в разделе '🔄 Настроить распределение'."
+        )
+        return await hybrid_management(update, context)
     
     day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
-    shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
     
-    response = "🔄 Управление пересменами\n\n"
-    response += "📋 Доступные задачи для распределения:\n\n"
+    response = "📋 Существующие распределения для пересменов:\n\n"
     
-    # Группируем задачи
-    grouped = {}
-    for template in templates:
-        key = (template.point, template.day_of_week, template.shift_type)
-        if key not in grouped:
-            grouped[key] = []
-        grouped[key].append(template)
+    for assignment in assignments:
+        response += f"📍 {assignment.point} | {day_names[assignment.day_of_week]}\n"
+        
+        # Получаем задачи для этого распределения
+        morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+        evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+        
+        response += "🌅 Утренние задачи:\n"
+        if morning_tasks:
+            for task in morning_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  Нет задач\n"
+            
+        response += "🌆 Вечерние задачи:\n"
+        if evening_tasks:
+            for task in evening_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  Нет задач\n"
+        
+        response += "─" * 30 + "\n\n"
     
-    for (point, day, shift), tasks in grouped.items():
-        response += f"📍 {point} | {day_names[day]} | {shift_names.get(shift, shift)}\n"
-        for task in tasks:
-            response += f"  • {task.task_description}\n"
+    keyboard = [
+        [KeyboardButton("✏️ Редактировать распределение")],
+        [KeyboardButton("🗑️ Удалить распределение")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    context.user_data['existing_assignments'] = assignments
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    return HYBRID_VIEW_EXISTING
+
+async def hybrid_edit_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор распределения для редактирования"""
+    assignments = context.user_data.get('existing_assignments', [])
+    
+    if not assignments:
+        await update.message.reply_text("❌ Нет распределений для редактирования")
+        return await hybrid_management(update, context)
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    
+    response = "✏️ Выберите распределение для редактирования:\n\n"
+    
+    for i, assignment in enumerate(assignments, 1):
+        response += f"{i}. 📍 {assignment.point} | {day_names[assignment.day_of_week]}\n"
+        
+        # Получаем задачи для этого распределения
+        morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+        evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+        
+        response += "   🌅 Утренние задачи:\n"
+        if morning_tasks:
+            for task in morning_tasks:
+                response += f"     • {task.task_description}\n"
+        else:
+            response += "     Нет задач\n"
+            
+        response += "   🌆 Вечерние задачи:\n"
+        if evening_tasks:
+            for task in evening_tasks:
+                response += f"     • {task.task_description}\n"
+        else:
+            response += "     Нет задач\n"
+        
         response += "\n"
     
-    response += "⚙️ Функционал распределения задач между сменами в активной разработке.\n"
-    response += "Скоро можно будет назначать задачи утренних и вечерних смен пересменам."
+    await update.message.reply_text(
+        response + "Введите номер распределения для редактирования:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return HYBRID_EDIT_EXISTING
+
+async def hybrid_edit_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора распределения для редактирования"""
+    try:
+        # Проверяем, не нажата ли кнопка "Назад"
+        if update.message.text == "⬅️ Назад":
+            return await hybrid_management(update, context)
+        
+        assignment_number = int(update.message.text)
+        assignments = context.user_data.get('existing_assignments', [])
+        
+        if assignment_number < 1 or assignment_number > len(assignments):
+            await update.message.reply_text("❌ Неверный номер распределения. Попробуйте снова:")
+            return HYBRID_EDIT_EXISTING
+        
+        assignment = assignments[assignment_number - 1]
+        
+        # Сохраняем выбранное распределение для редактирования
+        context.user_data['editing_assignment'] = assignment
+        context.user_data['editing_assignment_id'] = assignment.id
+        context.user_data['hybrid_point'] = assignment.point
+        context.user_data['hybrid_day'] = assignment.day_of_week
+        context.user_data['hybrid_day_name'] = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"][assignment.day_of_week]
+        
+        # Получаем текущие задачи для этой точки и дня
+        from bot.database.checklist_operations import get_checklist_templates, get_hybrid_assignment_tasks
+        
+        morning_tasks = get_checklist_templates(
+            point=assignment.point,
+            day_of_week=assignment.day_of_week,
+            shift_type='morning'
+        )
+        
+        evening_tasks = get_checklist_templates(
+            point=assignment.point,
+            day_of_week=assignment.day_of_week,
+            shift_type='evening'
+        )
+        
+        # Получаем уже выбранные задачи для этого распределения
+        current_morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+        current_evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+        
+        # Сохраняем задачи в контексте
+        context.user_data['morning_tasks'] = morning_tasks
+        context.user_data['evening_tasks'] = evening_tasks
+        context.user_data['current_morning_task_ids'] = [task.id for task in current_morning_tasks]
+        context.user_data['current_evening_task_ids'] = [task.id for task in current_evening_tasks]
+        
+        # Показываем текущее распределение и начинаем процесс редактирования
+        response = f"✏️ Редактирование распределения:\n\n"
+        response += f"📍 {assignment.point} | {context.user_data['hybrid_day_name']}\n\n"
+        
+        response += "🌅 Текущие утренние задачи для пересмена:\n"
+        if current_morning_tasks:
+            for task in current_morning_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  • Нет задач\n"
+        
+        response += "\n🌆 Текущие вечерние задачи для пересмена:\n"
+        if current_evening_tasks:
+            for task in current_evening_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  • Нет задач\n"
+        
+        response += "\nПродолжить редактирование?"
+        
+        keyboard = [
+            [KeyboardButton("✅ Продолжить редактирование")],
+            [KeyboardButton("❌ Отмена")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(response, reply_markup=reply_markup)
+        return HYBRID_VIEW_CURRENT
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите число или нажмите '⬅️ Назад' для возврата:")
+        return HYBRID_EDIT_EXISTING
+    except Exception as e:
+        logger.error(f"Ошибка в hybrid_edit_select: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка. Возврат в меню управления пересменами."
+        )
+        return await hybrid_management(update, context)
+
+async def hybrid_delete_existing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор распределения для удаления"""
+    assignments = context.user_data.get('existing_assignments', [])
     
-    await update.message.reply_text(response)
-    return CHECKLIST_MANAGEMENT_MENU
+    if not assignments:
+        await update.message.reply_text("❌ Нет распределений для удаления")
+        return await hybrid_management(update, context)
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    
+    response = "🗑️ Выберите распределение для удаления:\n\n"
+    
+    for i, assignment in enumerate(assignments, 1):
+        response += f"{i}. 📍 {assignment.point} | {day_names[assignment.day_of_week]}\n"
+        
+        # Получаем задачи для этого распределения
+        morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+        evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+        
+        response += "   🌅 Утренние задачи:\n"
+        if morning_tasks:
+            for task in morning_tasks:
+                response += f"     • {task.task_description}\n"
+        else:
+            response += "     Нет задач\n"
+            
+        response += "   🌆 Вечерние задачи:\n"
+        if evening_tasks:
+            for task in evening_tasks:
+                response += f"     • {task.task_description}\n"
+        else:
+            response += "     Нет задач\n"
+        
+        response += "\n"
+    
+    await update.message.reply_text(
+        response + "Введите номер распределения для удаления:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return HYBRID_DELETE_EXISTING
+
+async def hybrid_delete_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора распределения для удаления"""
+    try:
+        # Проверяем, не нажата ли кнопка "Назад"
+        if update.message.text == "⬅️ Назад":
+            return await hybrid_management(update, context)
+        
+        assignment_number = int(update.message.text)
+        assignments = context.user_data.get('existing_assignments', [])
+        
+        if assignment_number < 1 or assignment_number > len(assignments):
+            await update.message.reply_text("❌ Неверный номер распределения. Попробуйте снова:")
+            return HYBRID_DELETE_EXISTING
+        
+        assignment = assignments[assignment_number - 1]
+        context.user_data['deleting_assignment'] = assignment
+        context.user_data['deleting_assignment_id'] = assignment.id
+        
+        day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        
+        # Получаем задачи для этого распределения
+        from bot.database.checklist_operations import get_hybrid_assignment_tasks
+        
+        morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+        evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+        
+        response = "🗑️ Подтверждение удаления:\n\n"
+        response += f"📍 {assignment.point} | {day_names[assignment.day_of_week]}\n\n"
+        
+        response += "🌅 Утренние задачи:\n"
+        if morning_tasks:
+            for task in morning_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  Нет задач\n"
+            
+        response += "\n🌆 Вечерние задачи:\n"
+        if evening_tasks:
+            for task in evening_tasks:
+                response += f"  • {task.task_description}\n"
+        else:
+            response += "  Нет задач\n"
+        
+        response += "\n⚠️ Вы уверены, что хотите удалить это распределение?\n"
+        response += "Введите 'ДА' для подтверждения или 'НЕТ' для отмены:"
+        
+        await update.message.reply_text(
+            response,
+            reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+        )
+        return HYBRID_DELETE_CONFIRM
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите число или нажмите '⬅️ Назад' для возврата:")
+        return HYBRID_DELETE_EXISTING
+    except Exception as e:
+        logger.error(f"Ошибка в hybrid_delete_select: {e}")
+        await update.message.reply_text(
+            "❌ Произошла ошибка. Возврат в меню управления пересменами."
+        )
+        return await hybrid_management(update, context)
+
+async def hybrid_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления распределения"""
+    confirmation = update.message.text.upper().strip()
+    assignment_id = context.user_data.get('deleting_assignment_id')
+    
+    if confirmation in ['ДА', 'YES']:
+        try:
+            from bot.database.checklist_operations import delete_hybrid_assignment
+            
+            success = delete_hybrid_assignment(assignment_id)
+            
+            if success:
+                await update.message.reply_text("✅ Распределение успешно удалено!")
+            else:
+                await update.message.reply_text("❌ Ошибка при удалении распределения")
+                
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+    
+    elif confirmation in ['НЕТ', 'NO']:
+        await update.message.reply_text("❌ Удаление отменено")
+    else:
+        await update.message.reply_text("❌ Введите 'ДА' или 'НЕТ'")
+        return HYBRID_DELETE_CONFIRM
+    
+    # Очищаем контекст
+    context.user_data.pop('deleting_assignment', None)
+    context.user_data.pop('deleting_assignment_id', None)
+    context.user_data.pop('existing_assignments', None)
+    
+    return await hybrid_management(update, context)
 
 async def checklist_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика выполнения чек-листов"""
@@ -1392,36 +1946,274 @@ async def add_task_description(update: Update, context: ContextTypes.DEFAULT_TYP
         return await templates_management(update, context)
 
 async def view_templates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просмотр всех шаблонов задач"""
-    from bot.database.checklist_operations import get_checklist_templates
+    """Начало просмотра задач с фильтрацией"""
+    keyboard = [
+        [KeyboardButton("ДЕ"), KeyboardButton("УЯ")],
+        [KeyboardButton("Все точки")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    templates = get_checklist_templates()
+    await update.message.reply_text(
+        "📋 Просмотр задач\n\n"
+        "Выберите точку для фильтрации:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_VIEW_SELECT_POINT
+
+async def view_select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор точки для просмотра задач"""
+    point = update.message.text
+    context.user_data['view_point'] = point if point != "Все точки" else None
+    
+    keyboard = [
+        [KeyboardButton("Понедельник"), KeyboardButton("Вторник"), KeyboardButton("Среда")],
+        [KeyboardButton("Четверг"), KeyboardButton("Пятница"), KeyboardButton("Суббота")],
+        [KeyboardButton("Воскресенье"), KeyboardButton("Все дни")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"📍 Точка: {point}\n\n"
+        "Выберите день недели:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_VIEW_SELECT_DAY
+
+async def view_select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор дня недели и отображение задач"""
+    day_map = {
+        "Понедельник": 0, "Вторник": 1, "Среда": 2,
+        "Четверг": 3, "Пятница": 4, "Суббота": 5, "Воскресенье": 6
+    }
+    
+    day_name = update.message.text
+    day = day_map[day_name] if day_name in day_map else None
+    context.user_data['view_day'] = day
+    
+    # Получаем отфильтрованные задачи
+    from bot.database.checklist_operations import get_checklist_templates
+    point = context.user_data.get('view_point')
+    
+    templates = get_checklist_templates(point=point, day_of_week=day)
     
     if not templates:
-        await update.message.reply_text("📭 Шаблоны задач не найдены")
-        return CHECKLIST_MANAGEMENT_MENU
+        await update.message.reply_text(
+            "📭 Задачи не найдены для выбранных фильтров."
+        )
+        return await view_templates(update, context)
     
+    # Формируем список задач
     day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
     shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
     
-    response = "📋 Список шаблонов задач:\n\n"
+    response = "📋 Список задач:\n\n"
     
-    # Группируем по точкам, дням и сменам
+    # Группируем по точкам и сменам (если не выбрана конкретная точка)
     grouped = {}
     for template in templates:
-        key = (template.point, template.day_of_week, template.shift_type)
+        key = (template.point, template.shift_type) if not point else template.shift_type
         if key not in grouped:
             grouped[key] = []
         grouped[key].append(template)
     
-    for (point, day, shift), tasks in grouped.items():
-        response += f"📍 {point} | {day_names[day]} | {shift_names.get(shift, shift)}\n"
-        for task in tasks:
-            response += f"  • {task.task_description}\n"
+    for key, tasks in grouped.items():
+        if point:
+            # Если выбрана конкретная точка
+            shift_name = shift_names.get(key, key)
+            response += f"🕒 {shift_name}:\n"
+        else:
+            point_name, shift_type = key
+            shift_name = shift_names.get(shift_type, shift_type)
+            response += f"📍 {point_name} | {shift_name}:\n"
+        
+        for i, task in enumerate(tasks, 1):
+            day_name = day_names[task.day_of_week] if day is None else day_name
+            response += f"  {i}. {task.task_description}"
+            if day is None:  # Показываем день только если не выбран конкретный
+                response += f" ({day_names[task.day_of_week]})"
+            response += "\n"
         response += "\n"
     
-    await update.message.reply_text(response)
-    return CHECKLIST_MANAGEMENT_MENU
+    # Создаем клавиатуру с действиями
+    keyboard = [
+        [KeyboardButton("✏️ Редактировать задачу"), KeyboardButton("🗑️ Удалить задачу")],
+        [KeyboardButton("🔍 Новый поиск"), KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    # Сохраняем задачи в контексте для операций редактирования/удаления
+    context.user_data['current_templates'] = templates
+    
+    await update.message.reply_text(
+        response + "\nВыберите действие:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_VIEW_TASKS_LIST
+
+async def edit_task_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор задачи для редактирования"""
+    templates = context.user_data.get('current_templates', [])
+    
+    if not templates:
+        await update.message.reply_text("❌ Нет задач для редактирования")
+        return await view_templates(update, context)
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
+    
+    response = "✏️ Выберите задачу для редактирования:\n\n"
+    
+    for i, task in enumerate(templates, 1):
+        response += f"{i}. {task.task_description}\n"
+        response += f"   📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
+    
+    await update.message.reply_text(
+        response + "Введите номер задачи для редактирования:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return CHECKLIST_EDIT_TASK_SELECT
+
+async def edit_task_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора номера задачи для редактирования"""
+    try:
+        task_number = int(update.message.text)
+        templates = context.user_data.get('current_templates', [])
+        
+        if task_number < 1 or task_number > len(templates):
+            await update.message.reply_text("❌ Неверный номер задачи")
+            return CHECKLIST_EDIT_TASK_SELECT
+        
+        task = templates[task_number - 1]
+        context.user_data['editing_task'] = task
+        context.user_data['editing_task_id'] = task.id
+        
+        await update.message.reply_text(
+            f"✏️ Редактирование задачи:\n"
+            f"Текущее описание: {task.task_description}\n\n"
+            f"Введите новое описание задачи:"
+        )
+        return CHECKLIST_EDIT_TASK_DESCRIPTION
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите число")
+        return CHECKLIST_EDIT_TASK_SELECT
+
+async def edit_task_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Сохранение отредактированного описания задачи"""
+    new_description = update.message.text.strip()
+    task_id = context.user_data.get('editing_task_id')
+    
+    if not task_id:
+        await update.message.reply_text("❌ Ошибка: задача не найдена")
+        return await templates_management(update, context)
+    
+    try:
+        from bot.database.checklist_operations import update_checklist_template
+        
+        success = update_checklist_template(task_id, task_description=new_description)
+        
+        if success:
+            await update.message.reply_text("✅ Задача успешно обновлена!")
+        else:
+            await update.message.reply_text("❌ Ошибка при обновлении задачи")
+        
+        # Очищаем контекст
+        context.user_data.pop('editing_task', None)
+        context.user_data.pop('editing_task_id', None)
+        context.user_data.pop('current_templates', None)
+        
+        return await templates_management(update, context)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+        return await templates_management(update, context)
+    
+async def delete_task_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Выбор задачи для удаления"""
+    templates = context.user_data.get('current_templates', [])
+    
+    if not templates:
+        await update.message.reply_text("❌ Нет задач для удаления")
+        return await view_templates(update, context)
+    
+    day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
+    
+    response = "🗑️ Выберите задачу для удаления:\n\n"
+    
+    for i, task in enumerate(templates, 1):
+        response += f"{i}. {task.task_description}\n"
+        response += f"   📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
+    
+    await update.message.reply_text(
+        response + "Введите номер задачи для удаления:",
+        reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True)
+    )
+    return CHECKLIST_DELETE_TASK_SELECT
+
+async def delete_task_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора номера задачи для удаления"""
+    try:
+        task_number = int(update.message.text)
+        templates = context.user_data.get('current_templates', [])
+        
+        if task_number < 1 or task_number > len(templates):
+            await update.message.reply_text("❌ Неверный номер задачи")
+            return CHECKLIST_DELETE_TASK_SELECT
+        
+        task = templates[task_number - 1]
+        context.user_data['deleting_task'] = task
+        context.user_data['deleting_task_id'] = task.id
+        
+        day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+        shift_names = {"morning": "🌅 Утро", "evening": "🌆 Вечер"}
+        
+        await update.message.reply_text(
+            f"🗑️ Удаление задачи:\n"
+            f"📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n"
+            f"📝 {task.task_description}\n\n"
+            f"⚠️ Вы уверены, что хотите удалить эту задачу?\n"
+            f"Введите 'ДА' для подтверждения или 'НЕТ' для отмены:"
+        )
+        return CHECKLIST_DELETE_TASK_CONFIRM
+        
+    except ValueError:
+        await update.message.reply_text("❌ Введите число")
+        return CHECKLIST_DELETE_TASK_SELECT
+
+async def delete_task_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Подтверждение удаления задачи"""
+    confirmation = update.message.text.upper().strip()
+    task_id = context.user_data.get('deleting_task_id')
+    
+    if confirmation in ['ДА', 'YES']:
+        try:
+            from bot.database.checklist_operations import delete_checklist_template
+            
+            success = delete_checklist_template(task_id)
+            
+            if success:
+                await update.message.reply_text("✅ Задача успешно удалена!")
+            else:
+                await update.message.reply_text("❌ Ошибка при удалении задачи")
+                
+        except Exception as e:
+            await update.message.reply_text(f"❌ Ошибка: {str(e)}")
+    
+    elif confirmation in ['НЕТ', 'NO']:
+        await update.message.reply_text("❌ Удаление отменено")
+    else:
+        await update.message.reply_text("❌ Введите 'ДА' или 'НЕТ'")
+        return CHECKLIST_DELETE_TASK_CONFIRM
+    
+    # Очищаем контекст
+    context.user_data.pop('deleting_task', None)
+    context.user_data.pop('deleting_task_id', None)
+    context.user_data.pop('current_templates', None)
+    
+    return await templates_management(update, context)
 
 def get_settings_conversation_handler():
     """Возвращает ConversationHandler для настроек"""
@@ -1502,10 +2294,12 @@ def get_settings_conversation_handler():
                 MessageHandler(filters.Regex("^➕ Добавить задачу$"), start_adding_task),  # ДОБАВИТЬ
                 MessageHandler(filters.Regex("^📋 Просмотреть задачи$"), view_templates),  # ДОБАВИТЬ
                 MessageHandler(filters.Regex("^🔄 Управление пересменами$"), hybrid_management),
+                MessageHandler(filters.Regex("^🔄 Настроить распределение$"), start_hybrid_setup),
+                MessageHandler(filters.Regex("^📋 Просмотреть распределения$"), hybrid_view_existing),
                 MessageHandler(filters.Regex("^📊 Статистика выполнения$"), checklist_stats),
                 MessageHandler(filters.Regex("^⬅️ Назад$"), settings_menu),
             ],
-            # Добавляем состояния для управления шаблонами
+            # Cостояния для управления шаблонами
             CHECKLIST_SELECT_POINT: [
                 MessageHandler(filters.Regex("^(ДЕ|УЯ)$"), select_point_for_task),
             ],
@@ -1518,7 +2312,66 @@ def get_settings_conversation_handler():
             CHECKLIST_ADD_TASK_DESCRIPTION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_task_description),
             ],
-            
+            CHECKLIST_VIEW_SELECT_POINT: [
+                MessageHandler(filters.Regex("^(ДЕ|УЯ|Все точки|⬅️ Назад)$"), view_select_point),
+            ],
+            CHECKLIST_VIEW_SELECT_DAY: [
+                MessageHandler(filters.Regex("^(Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье|Все дни|⬅️ Назад)$"), view_select_day),
+            ],
+            CHECKLIST_VIEW_TASKS_LIST: [
+                MessageHandler(filters.Regex("^✏️ Редактировать задачу$"), edit_task_select),
+                MessageHandler(filters.Regex("^🗑️ Удалить задачу$"), delete_task_select),
+                MessageHandler(filters.Regex("^🔍 Новый поиск$"), view_templates),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), templates_management),
+            ],
+            CHECKLIST_EDIT_TASK_SELECT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_task_number),
+            ],
+            CHECKLIST_EDIT_TASK_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_task_description),
+            ],
+            CHECKLIST_DELETE_TASK_SELECT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, delete_task_number),
+            ],
+            CHECKLIST_DELETE_TASK_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, delete_task_confirm),
+            ],
+            HYBRID_SELECT_POINT: [
+                MessageHandler(filters.Regex("^(ДЕ|УЯ|⬅️ Назад)$"), hybrid_select_point),
+            ],
+            HYBRID_SELECT_DAY: [
+                MessageHandler(filters.Regex("^(Понедельник|Вторник|Среда|Четверг|Пятница|Суббота|Воскресенье|⬅️ Назад)$"), hybrid_select_day),
+            ],
+            HYBRID_VIEW_CURRENT: [
+                MessageHandler(filters.Regex("^✅ Продолжить настройку$"), hybrid_view_current),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), start_hybrid_setup),
+            ],
+            HYBRID_SELECT_MORNING_TASK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, hybrid_select_morning_task),
+            ],
+            HYBRID_SELECT_EVENING_TASK: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, hybrid_select_evening_task),
+            ],
+            HYBRID_SAVE_ASSIGNMENT: [
+                MessageHandler(filters.Regex("^(✅ Сохранить|🔄 Начать заново|❌ Отмена)$"), hybrid_save_assignment),
+            ],
+            HYBRID_VIEW_EXISTING: [
+                MessageHandler(filters.Regex("^✏️ Редактировать распределение$"), hybrid_edit_existing),
+                MessageHandler(filters.Regex("^🗑️ Удалить распределение$"), hybrid_delete_existing),
+                MessageHandler(filters.Regex("^⬅️ Назад$"), hybrid_management),
+            ],
+            HYBRID_EDIT_EXISTING: [
+                MessageHandler(filters.Regex("^⬅️ Назад$"), hybrid_management),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, hybrid_edit_select),
+                
+            ],
+            HYBRID_DELETE_EXISTING: [
+                MessageHandler(filters.Regex("^⬅️ Назад$"), hybrid_management),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, hybrid_delete_select),
+            ],
+            HYBRID_DELETE_CONFIRM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, hybrid_delete_confirm),
+            ],
             # Очистка таблицы
             CLEARING_REVIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_clear_reviews)],
         },
