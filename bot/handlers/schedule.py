@@ -1,18 +1,14 @@
 """Обработчики для работы с расписанием и заменами"""
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler, CallbackQueryHandler
-from bot.utils.auth import require_roles, ROLE_MENTOR, ROLE_SENIOR
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 from bot.database.user_operations import get_user_by_telegram_id, get_all_users
 from bot.database.schedule_operations import (
     get_upcoming_shifts_by_iiko_id, update_shift_iiko_id, get_shift_by_id,
     get_shifts_by_iiko_id, create_shift, update_shift
 )
-from bot.utils.google_sheets import (
-    parse_schedule_from_sheet, get_current_month_name, get_next_month_name
-)
+from bot.utils.emulation import get_current_iiko_id, get_current_user_name, is_emulation_mode 
 from bot.keyboards.menus import get_main_menu
-from datetime import date, datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,36 +22,34 @@ logger = logging.getLogger(__name__)
  ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD) = range(12)
 
 async def swap_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Меню замен"""
-    user = update.effective_user
-    db_user = get_user_by_telegram_id(user.id)
+    """Меню замен с поддержкой эмуляции"""
+    # Получаем текущего пользователя (эмулированного или реального)
+    current_iiko_id = get_current_iiko_id(update, context)
+    current_user_name = get_current_user_name(update, context)
     
-    # Если не нашли по telegram_id, пробуем по username
-    if not db_user and user.username:
-        from bot.database.user_operations import get_user_by_username
-        db_user = get_user_by_username(user.username)
-    
-    if not db_user or not db_user.iiko_id:
+    if not current_iiko_id:
         await update.message.reply_text(
             "❌ Ваш аккаунт не найден в системе или не указан iiko_id. Обратитесь к администратору."
         )
         return ConversationHandler.END
     
-    # Получаем ближайшие смены пользователя
-    shifts = get_upcoming_shifts_by_iiko_id(str(db_user.iiko_id), days=30)
+    # Получаем ближайшие смены текущего пользователя
+    shifts = get_upcoming_shifts_by_iiko_id(str(current_iiko_id), days=30)
     
     if not shifts:
+        mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
         await update.message.reply_text(
-            "📅 У вас нет ближайших смен для замены.",
+            f"📅 У {current_user_name}{mode_text} нет ближайших смен для замены.",
             reply_markup=get_main_menu()
         )
         return ConversationHandler.END
     
     # Формируем список смен с кнопками
     keyboard = []
-    text = "🔄 Выберите смену для замены:\n\n"
+    mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
+    text = f"🔄 Выберите смену для замены{mode_text}:\n\n"
     
-    for shift in shifts[:20]:  # Ограничиваем 20 сменами
+    for shift in shifts[:20]:
         if not shift.shift_type_obj:
             continue
         shift_type_names = {
@@ -74,7 +68,12 @@ async def swap_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             callback_data=f"swap_shift_{shift.shift_id}"
         )])
     
-    keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_conversation")])
+    # Добавляем кнопку завершения эмуляции, если в режиме эмуляции
+    if is_emulation_mode(context):
+        keyboard.append([InlineKeyboardButton("🔚 Завершить эмуляцию", callback_data="end_emulation")])
+    else:
+        keyboard.append([InlineKeyboardButton("❌ Отмена", callback_data="cancel_conversation")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(text, reply_markup=reply_markup)
@@ -119,10 +118,12 @@ async def handle_return_shift_selection(update: Update, context: ContextTypes.DE
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
+        current_user_name = get_current_user_name(update, context)
+        mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
         await query.edit_message_text(
             f"🔄 Подтверждение обмена сменами\n\n"
-            f"• Вы отдаёте: {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
-            f"• Вы получаете: {return_shift.shift_date.strftime('%d.%m.%Y')}\n"
+            f"• {current_user_name}{mode_text} отдаёт: {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
+            f"• {current_user_name}{mode_text} получает: {return_shift.shift_date.strftime('%d.%m.%Y')}\n"
             f"• С сотрудником: {employee_name}\n"
             f"• Тип: {exchange_type}\n\n"
             f"Подтвердите обмен:",
@@ -136,14 +137,20 @@ async def handle_swap_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     
     if query.data == "cancel_conversation":
-        await query.edit_message_text("❌ Замена отменена")
-        from bot.keyboards.menus import get_main_menu
-        await query.message.reply_text("Выберите действие:", reply_markup=get_main_menu())
-        return ConversationHandler.END
+        return await cancel_swap(update, context)  
+    
+    if query.data == "end_emulation":
+        from bot.utils.emulation import stop_emulation
+        stop_emulation(context)
+        await query.edit_message_text("🔚 Эмуляция завершена")
+        return await cancel_swap(update, context)
     
     if query.data.startswith("swap_shift_"):
         shift_id = int(query.data.split("_")[2])
         context.user_data['swap_shift_id'] = shift_id
+        
+        # Получаем текущего пользователя для исключения из списка
+        current_iiko_id = get_current_iiko_id(update, context)
         
         # Получаем информацию о выбранной смене
         shift = get_shift_by_id(shift_id)
@@ -151,11 +158,7 @@ async def handle_swap_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text("❌ Ошибка: смена не найдена")
             return ConversationHandler.END
         
-        # Получаем список всех активных пользователей (исключая текущего)
-        user = update.effective_user
-        db_user = get_user_by_telegram_id(user.id)
-        current_iiko_id = str(db_user.iiko_id) if db_user and db_user.iiko_id else None
-        
+        # Получаем список всех активных пользователей (исключая текущего)     
         users = get_all_users(active_only=True)
         users_with_iiko = [u for u in users if u.iiko_id and str(u.iiko_id) != current_iiko_id]
         
@@ -275,8 +278,11 @@ async def handle_employee_selection(update: Update, context: ContextTypes.DEFAUL
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
+            current_user_name = get_current_user_name(update, context)
+            mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
+            
             await query.edit_message_text(
-                f"🔄 Обмен с {employee_name}\n\n"
+                f"🔄 Обмен сменами между {current_user_name}{mode_text} и {employee_name}\n\n"
                 f"У сотрудника нет других смен для обмена.\n"
                 f"Вы можете сделать одностороннюю замену:",
                 reply_markup=reply_markup
@@ -287,8 +293,11 @@ async def handle_employee_selection(update: Update, context: ContextTypes.DEFAUL
             logger.info(f"🎯 ДИАГНОСТИКА: Показываем выбор смен для обмена (включая смены в тот же день)")
             
             keyboard = []
+            current_user_name = get_current_user_name(update, context)
+            mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
+            
             text = (
-                f"🔄 Обмен сменами с {employee_name}\n\n"
+                f"🔄 Обмен сменами между {current_user_name}{mode_text} и {employee_name}\n\n"
                 f"📅 Выберите смену для обмена (можно выбрать смену в тот же день для прямого обмена):\n\n"
             )
             
@@ -448,9 +457,11 @@ async def confirm_one_way_swap(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    current_user_name = get_current_user_name(update, context)
+    mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
     await query.edit_message_text(
         f"🔄 Подтверждение односторонней замены\n\n"
-        f"• Ваша смена: {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
+        f"• Смена {current_user_name}{mode_text}: {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
         f"• Передаётся: {employee_name}\n"
         f"• Тип: Односторонняя (вы отдаёте смену без получения взамен)\n\n"
         f"Подтвердите замену:",
@@ -613,9 +624,11 @@ async def execute_one_way_swap(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Сообщаем о результате
     if sync_success:
+        current_user_name = get_current_user_name(update, context)
+        mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
         success_text = (
             f"✅ Замена успешно завершена!\n\n"
-            f"• Ваша смена на {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
+            f"• Cмена {current_user_name}{mode_text} на {original_shift.shift_date.strftime('%d.%m.%Y')}\n"
             f"• Передана: {employee_name}\n"
             f"• Тип: Односторонняя замена"
         )
@@ -749,10 +762,12 @@ async def execute_two_way_swap(update: Update, context: ContextTypes.DEFAULT_TYP
     exchange_type = "прямой обмен в один день" if original_data['date'] == return_data['date'] else "обмен разными днями"
     
     # Сообщаем о результате
+    current_user_name = get_current_user_name(update, context)
+    mode_text = " (эмуляция)" if is_emulation_mode(context) else ""
     success_text = (
         f"✅ Двусторонний обмен успешно завершен!\n\n"
-        f"• Вы отдали: {original_data['date'].strftime('%d.%m.%Y')}\n"  
-        f"• Вы получили: {return_data['date'].strftime('%d.%m.%Y')}\n"
+        f"• {current_user_name}{mode_text} отдал: {original_data['date'].strftime('%d.%m.%Y')}\n"  
+        f"• {current_user_name}{mode_text} получил: {return_data['date'].strftime('%d.%m.%Y')}\n"
         f"• С сотрудником: {return_name}\n"
         f"• Тип: {exchange_type}"
     )

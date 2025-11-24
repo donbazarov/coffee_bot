@@ -96,10 +96,17 @@ def parse_month_name(month_name: str) -> Tuple[int, int]:
     month_names = {
         'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4,
         'май': 5, 'июнь': 6, 'июль': 7, 'август': 8,
-        'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12
+        'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12,
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12
     }
     
-    parts = month_name.lower().strip().split()
+    # Приводим к нижнему региву и убираем лишние пробелы
+    month_name_clean = month_name.lower().strip()
+    
+    # Пробуем разные варианты разделителей
+    parts = re.split(r'[\s_\-]+', month_name_clean)
     if len(parts) < 2:
         raise ValueError(f"Неверный формат названия месяца: {month_name}")
     
@@ -108,7 +115,14 @@ def parse_month_name(month_name: str) -> Tuple[int, int]:
     
     month = month_names.get(month_str)
     if not month:
-        raise ValueError(f"Неизвестный месяц: {month_str}")
+        # Пробуем найти частичное совпадение
+        for name, num in month_names.items():
+            if name.startswith(month_str) or month_str.startswith(name):
+                month = num
+                break
+        
+        if not month:
+            raise ValueError(f"Неизвестный месяц: {month_str}")
     
     # Год может быть в формате '24' или '2024'
     if len(year_str) == 2:
@@ -173,6 +187,8 @@ def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> L
         # Получаем даты из строки 1 (столбцы C и далее)
         dates_row = worksheet.row_values(1)[2:]  # Пропускаем столбцы A и B
         
+        today = date.today()
+        
         # Получаем данные для каждой строки сотрудника
         for row_idx, iiko_id in enumerate(iiko_ids, start=4):
             if not iiko_id or not str(iiko_id).strip():
@@ -195,8 +211,13 @@ def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> L
                 try:
                     day = int(str(date_str).strip())
                     shift_date = datetime(year, month, day).date()
-                except (ValueError, TypeError):
-                    continue
+                    
+                    if shift_date < today:
+                        continue
+                    
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Ошибка парсинга даты '{date_str}': {e}")
+                    continue  # Пропускаем некорректные даты
                 
                 # Получаем время прихода и ухода
                 start_time = row_data[col_idx] if col_idx < len(row_data) else None

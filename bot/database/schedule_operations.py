@@ -12,12 +12,25 @@ def get_shift_type_by_times(start_time: time, end_time: time) -> Optional[ShiftT
     """Получить тип смены по времени начала и окончания"""
     db = SessionLocal()
     try:
-        return db.query(ShiftType).filter(
+        # Конвертируем time в строку для сравнения
+        start_time_str = start_time.strftime("%H:%M")
+        end_time_str = end_time.strftime("%H:%M")
+        
+        logger.info(f"🔍 Поиск типа смены по времени: {start_time_str} - {end_time_str}")
+        
+        shift_type = db.query(ShiftType).filter(
             and_(
-                ShiftType.start_time == start_time,
-                ShiftType.end_time == end_time
+                ShiftType.start_time == start_time_str,
+                ShiftType.end_time == end_time_str
             )
         ).first()
+        
+        if shift_type:
+            logger.info(f"✅ Найден тип смены: {shift_type.name} (ID: {shift_type.id})")
+        else:
+            logger.warning(f"❌ Тип смены не найден для {start_time_str} - {end_time_str}")
+            
+        return shift_type
     finally:
         db.close()
 
@@ -217,14 +230,25 @@ def bulk_create_shifts(shifts: List[Dict]) -> int:
         db.close()
 
 def delete_shifts_by_date_range(start_date: date, end_date: date) -> int:
-    """Удалить все смены в диапазоне дат (для перепарсинга)"""
+    """Удалить все смены в диапазоне дат (для перепарсинга) - только будущие"""
     db = SessionLocal()
     try:
+        # Удаляем только будущие смены
+        today = date.today()
+        actual_start_date = max(start_date, today)
+        
+        if actual_start_date > end_date:
+            logger.info("Нет будущих смен для удаления в указанном диапазоне")
+            return 0
+            
         deleted_count = db.query(Schedule).filter(
-            and_(Schedule.shift_date >= start_date, Schedule.shift_date <= end_date)
+            and_(
+                Schedule.shift_date >= actual_start_date, 
+                Schedule.shift_date <= end_date
+            )
         ).delete()
         db.commit()
-        logger.info(f"Удалено {deleted_count} смен в диапазоне {start_date} - {end_date}")
+        logger.info(f"Удалено {deleted_count} будущих смен в диапазоне {actual_start_date} - {end_date}")
         return deleted_count
     except Exception as e:
         db.rollback()
