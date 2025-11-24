@@ -43,7 +43,11 @@ logger = logging.getLogger(__name__)
  CHECKLIST_EDIT_TASK_SELECT, CHECKLIST_EDIT_TASK_DESCRIPTION, CHECKLIST_DELETE_TASK_SELECT,
  CHECKLIST_DELETE_TASK_CONFIRM, HYBRID_SELECT_POINT, HYBRID_SELECT_DAY, HYBRID_VIEW_CURRENT,
  HYBRID_SELECT_MORNING_TASK, HYBRID_SELECT_EVENING_TASK, HYBRID_SAVE_ASSIGNMENT,
- HYBRID_VIEW_EXISTING, HYBRID_EDIT_EXISTING, HYBRID_DELETE_EXISTING, HYBRID_DELETE_CONFIRM) = range(61)
+ HYBRID_VIEW_EXISTING, HYBRID_EDIT_EXISTING, HYBRID_DELETE_EXISTING, HYBRID_DELETE_CONFIRM,
+ CHECKLIST_STATS_MENU, CHECKLIST_STATS_INDIVIDUAL, CHECKLIST_STATS_POINT, CHECKLIST_STATS_TASK,
+ CHECKLIST_STATS_DETAILED_LOG, CHECKLIST_STATS_DETAILED_LOG_POINT,
+ CHECKLIST_STATS_INDIVIDUAL_PERIOD, CHECKLIST_STATS_POINT_PERIOD,
+ CHECKLIST_STATS_TASK_PERIOD, CHECKLIST_STATS_CUSTOM_PERIOD) = range(71)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2380,54 +2384,589 @@ async def hybrid_delete_confirm(update: Update, context: ContextTypes.DEFAULT_TY
     return await hybrid_management(update, context)
 
 async def checklist_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика выполнения чек-листов"""
-    from bot.database.checklist_operations import get_checklist_templates
-    from datetime import datetime, timedelta
+    """Статистика выполнения чек-листов - обновленная версия"""
+    from bot.database.checklist_stats_operations import (
+        get_individual_stats, get_point_stats, get_task_stats, get_detailed_log,
+        get_weekday_name, format_stats_period
+    )
+    from datetime import date, timedelta
     
-    templates = get_checklist_templates()
+    # Создаем клавиатуру для меню статистики
+    keyboard = [
+        [KeyboardButton("👤 Индивидуальная статистика")],
+        [KeyboardButton("📍 Статистика по точкам")],
+        [KeyboardButton("📝 Статистика по заданиям")],
+        [KeyboardButton("📋 Детальный лог за день")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    if not templates:
+    await update.message.reply_text(
+        "📊 Статистика выполнения чек-листов\n\n"
+        "Выберите тип отчета:",
+        reply_markup=reply_markup
+    )
+    
+    # Сохраняем состояние для меню статистики
+    return CHECKLIST_STATS_MENU
+
+async def checklist_stats_individual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Индивидуальная статистика"""
+    from bot.database.checklist_stats_operations import get_individual_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
+    
+    # Статистика за текущую неделю
+    today = date.today()
+    start_date = today - timedelta(days=today.weekday())
+    end_date = start_date + timedelta(days=6)
+    
+    stats_data = get_individual_stats(start_date, end_date)
+    
+    if not stats_data:
         await update.message.reply_text(
-            "📊 Статистика выполнения чек-листов\n\n"
-            "❌ Нет созданных шаблонов задач для анализа."
+            "👤 Индивидуальная статистика\n\n"
+            "❌ Нет данных для отображения за текущую неделю."
         )
-        return CHECKLIST_MANAGEMENT_MENU
+        return await checklist_stats(update, context)
     
-    # Простая статистика
-    total_tasks = len(templates)
+    period_text = format_stats_period(start_date, end_date)
+    response = f"👤 Индивидуальная статистика\n\nПериод: {period_text}\n\n"
+    
+    # Группируем по пользователям
+    user_stats = {}
+    for stat in stats_data:
+        if stat['user_name'] not in user_stats:
+            user_stats[stat['user_name']] = []
+        user_stats[stat['user_name']].append(stat)
+    
+    for user_name, user_data in user_stats.items():
+        response += f"👤 {user_name}:\n"
+        for stat in user_data:
+            weekday_name = get_weekday_name(stat['weekday'])
+            response += f"   {weekday_name}: {stat['completed_tasks']}/{stat['total_tasks']} ({stat['completion_percent']}%)\n"
+        response += "\n"
+    
+    # Добавляем кнопку для других периодов
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    
+    # Сохраняем тип статистики для использования в обработчиках периода
+    context.user_data['stats_type'] = 'individual'
+    return CHECKLIST_STATS_INDIVIDUAL_PERIOD
+
+
+async def checklist_stats_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика по точкам"""
+    from bot.database.checklist_stats_operations import get_point_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
+    
+    # Статистика за текущую неделю
+    today = date.today()
+    start_date = today - timedelta(days=today.weekday())
+    end_date = start_date + timedelta(days=6)
+    
+    stats_data = get_point_stats(start_date, end_date)
+    
+    if not stats_data:
+        await update.message.reply_text(
+            "📍 Статистика по точкам\n\n"
+            "❌ Нет данных для отображения за текущую неделю."
+        )
+        return await checklist_stats(update, context)
+    
+    period_text = format_stats_period(start_date, end_date)
+    response = f"📍 Статистика по точкам\n\nПериод: {period_text}\n\n"
     
     # Группируем по точкам
-    points = {}
-    for template in templates:
-        if template.point not in points:
-            points[template.point] = 0
-        points[template.point] += 1
+    point_stats = {}
+    for stat in stats_data:
+        if stat['point'] not in point_stats:
+            point_stats[stat['point']] = []
+        point_stats[stat['point']].append(stat)
     
-    # Группируем по дням недели
-    days = {}
-    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    for template in templates:
-        day_name = day_names[template.day_of_week]
-        if day_name not in days:
-            days[day_name] = 0
-        days[day_name] += 1
+    for point_name, point_data in point_stats.items():
+        response += f"📍 {point_name}:\n"
+        for stat in point_data:
+            weekday_name = get_weekday_name(stat['weekday'])
+            response += f"   {weekday_name}:\n"
+            response += f"     🌅 Утро: {stat['morning_avg_completion']}% ({stat['morning_shift_count']} смен)\n"
+            response += f"     🌆 Вечер: {stat['evening_avg_completion']}% ({stat['evening_shift_count']} смен)\n"
+            if stat['hybrid_shift_count'] > 0:
+                response += f"     🔄 Пересмен: {stat['hybrid_avg_completion']}% ({stat['hybrid_shift_count']} смен)\n"
+        response += "\n"
     
-    response = "📊 Статистика выполнения чек-листов\n\n"
-    response += f"📈 Общее количество задач: {total_tasks}\n\n"
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
-    response += "📍 Распределение по точкам:\n"
-    for point, count in points.items():
-        response += f"  • {point}: {count} задач\n"
+    await update.message.reply_text(response, reply_markup=reply_markup)
     
-    response += "\n📅 Распределение по дням недели:\n"
-    for day, count in days.items():
-        response += f"  • {day}: {count} задач\n"
+    context.user_data['stats_type'] = 'point'
+    return CHECKLIST_STATS_POINT_PERIOD
+
+async def checklist_stats_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика по заданиям"""
+    from bot.database.checklist_stats_operations import get_task_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
     
-    response += "\n📈 Модуль отслеживания выполнения в активной разработке.\n"
-    response += "Скоро можно будет просматривать статистику выполнения по сотрудникам и сменам."
+    # Статистика за текущую неделю
+    today = date.today()
+    start_date = today - timedelta(days=today.weekday())
+    end_date = start_date + timedelta(days=6)
+    
+    stats_data = get_task_stats(start_date, end_date)
+    
+    if not stats_data:
+        await update.message.reply_text(
+            "📝 Статистика по заданиям\n\n"
+            "❌ Нет данных для отображения за текущую неделю."
+        )
+        return await checklist_stats(update, context)
+    
+    period_text = format_stats_period(start_date, end_date)
+    response = f"📝 Статистика по заданиям\n\nПериод: {period_text}\n\n"
+    
+    for stat in stats_data[:10]:  # Ограничиваем вывод первыми 10 заданиями
+        weekday_name = get_weekday_name(stat['day_of_week'])
+        response += f"📍 {stat['point']} | {weekday_name} | {stat['shift_type']}\n"
+        response += f"   {stat['task_description']}\n"
+        response += f"   Выполнено: {stat['completed_shifts']}/{stat['total_shifts']} ({stat['completion_percent']}%)\n\n"
+    
+    if len(stats_data) > 10:
+        response += f"... и еще {len(stats_data) - 10} заданий\n\n"
+    
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    
+    context.user_data['stats_type'] = 'task'
+    return CHECKLIST_STATS_TASK_PERIOD
+
+async def handle_individual_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора периода для индивидуальной статистики"""
+    from bot.database.checklist_stats_operations import get_individual_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
+    
+    period_text = update.message.text
+    today = date.today()
+    
+    if period_text == "📅 За неделю":
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+    elif period_text == "📅 За месяц":
+        start_date = date(today.year, today.month, 1)
+        next_month = today.month + 1 if today.month < 12 else 1
+        next_year = today.year if today.month < 12 else today.year + 1
+        end_date = date(next_year, next_month, 1) - timedelta(days=1)
+    elif period_text == "📅 Произвольный период":
+        await update.message.reply_text(
+            "Введите период в формате:\n"
+            "ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n\n"
+            "Например: 2024-01-01 2024-01-31"
+        )
+        context.user_data['stats_type'] = 'individual'
+        return CHECKLIST_STATS_CUSTOM_PERIOD
+    else:
+        await update.message.reply_text("❌ Неизвестный период")
+        return CHECKLIST_STATS_INDIVIDUAL
+    
+    # Показываем отчет
+    stats_data = get_individual_stats(start_date, end_date)
+    
+    if not stats_data:
+        await update.message.reply_text(
+            f"👤 Индивидуальная статистика\n\n"
+            f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+        )
+        return await checklist_stats(update, context)
+    
+    period_text_display = format_stats_period(start_date, end_date)
+    response = f"👤 Индивидуальная статистика\n\nПериод: {period_text_display}\n\n"
+    
+    # Группируем по пользователям
+    user_stats = {}
+    for stat in stats_data:
+        if stat['user_name'] not in user_stats:
+            user_stats[stat['user_name']] = []
+        user_stats[stat['user_name']].append(stat)
+    
+    for user_name, user_data in user_stats.items():
+        response += f"👤 {user_name}:\n"
+        for stat in user_data:
+            weekday_name = get_weekday_name(stat['weekday'])
+            response += f"   {weekday_name}: {stat['completed_tasks']}/{stat['total_tasks']} ({stat['completion_percent']}%)\n"
+        response += "\n"
+    
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    return CHECKLIST_STATS_INDIVIDUAL
+
+async def handle_point_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора периода для статистики по точкам"""
+    from bot.database.checklist_stats_operations import get_point_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
+    
+    period_text = update.message.text
+    today = date.today()
+    
+    if period_text == "📅 За неделю":
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+    elif period_text == "📅 За месяц":
+        start_date = date(today.year, today.month, 1)
+        next_month = today.month + 1 if today.month < 12 else 1
+        next_year = today.year if today.month < 12 else today.year + 1
+        end_date = date(next_year, next_month, 1) - timedelta(days=1)
+    elif period_text == "📅 Произвольный период":
+        await update.message.reply_text(
+            "Введите период в формате:\n"
+            "ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n\n"
+            "Например: 2024-01-01 2024-01-31"
+        )
+        context.user_data['stats_type'] = 'point'
+        return CHECKLIST_STATS_CUSTOM_PERIOD
+    else:
+        await update.message.reply_text("❌ Неизвестный период")
+        return CHECKLIST_STATS_POINT
+    
+    # Показываем отчет
+    stats_data = get_point_stats(start_date, end_date)
+    
+    if not stats_data:
+        await update.message.reply_text(
+            f"📍 Статистика по точкам\n\n"
+            f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+        )
+        return await checklist_stats(update, context)
+    
+    period_text_display = format_stats_period(start_date, end_date)
+    response = f"📍 Статистика по точкам\n\nПериод: {period_text_display}\n\n"
+    
+    # Группируем по точкам
+    point_stats = {}
+    for stat in stats_data:
+        if stat['point'] not in point_stats:
+            point_stats[stat['point']] = []
+        point_stats[stat['point']].append(stat)
+    
+    for point_name, point_data in point_stats.items():
+        response += f"📍 {point_name}:\n"
+        for stat in point_data:
+            weekday_name = get_weekday_name(stat['weekday'])
+            response += f"   {weekday_name}:\n"
+            response += f"     🌅 Утро: {stat['morning_avg_completion']}% ({stat['morning_shift_count']} смен)\n"
+            response += f"     🌆 Вечер: {stat['evening_avg_completion']}% ({stat['evening_shift_count']} смен)\n"
+            if stat['hybrid_shift_count'] > 0:
+                response += f"     🔄 Пересмен: {stat['hybrid_avg_completion']}% ({stat['hybrid_shift_count']} смен)\n"
+        response += "\n"
+    
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    return CHECKLIST_STATS_POINT
+
+async def handle_task_stats_period(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора периода для статистики по заданиям"""
+    from bot.database.checklist_stats_operations import get_task_stats, get_weekday_name, format_stats_period
+    from datetime import date, timedelta
+    
+    period_text = update.message.text
+    today = date.today()
+    
+    if period_text == "📅 За неделю":
+        start_date = today - timedelta(days=today.weekday())
+        end_date = start_date + timedelta(days=6)
+    elif period_text == "📅 За месяц":
+        start_date = date(today.year, today.month, 1)
+        next_month = today.month + 1 if today.month < 12 else 1
+        next_year = today.year if today.month < 12 else today.year + 1
+        end_date = date(next_year, next_month, 1) - timedelta(days=1)
+    elif period_text == "📅 Произвольный период":
+        await update.message.reply_text(
+            "Введите период в формате:\n"
+            "ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n\n"
+            "Например: 2024-01-01 2024-01-31"
+        )
+        context.user_data['stats_type'] = 'task'
+        return CHECKLIST_STATS_CUSTOM_PERIOD
+    else:
+        await update.message.reply_text("❌ Неизвестный период")
+        return CHECKLIST_STATS_TASK
+    
+    # Показываем отчет
+    stats_data = get_task_stats(start_date, end_date)
+    
+    if not stats_data:
+        await update.message.reply_text(
+            f"📝 Статистика по заданиям\n\n"
+            f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+        )
+        return await checklist_stats(update, context)
+    
+    period_text_display = format_stats_period(start_date, end_date)
+    response = f"📝 Статистика по заданиям\n\nПериод: {period_text_display}\n\n"
+    
+    for stat in stats_data[:10]:  # Ограничиваем вывод первыми 10 заданиями
+        weekday_name = get_weekday_name(stat['day_of_week'])
+        response += f"📍 {stat['point']} | {weekday_name} | {stat['shift_type']}\n"
+        response += f"   {stat['task_description']}\n"
+        response += f"   Выполнено: {stat['completed_shifts']}/{stat['total_shifts']} ({stat['completion_percent']}%)\n\n"
+    
+    if len(stats_data) > 10:
+        response += f"... и еще {len(stats_data) - 10} заданий\n\n"
+    
+    keyboard = [
+        [KeyboardButton("📅 За неделю"), KeyboardButton("📅 За месяц"), KeyboardButton("📅 Произвольный период")],
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(response, reply_markup=reply_markup)
+    return CHECKLIST_STATS_TASK
+
+async def handle_custom_period_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка ввода произвольного периода"""
+    from bot.database.checklist_stats_operations import (
+        get_individual_stats, get_point_stats, get_task_stats, 
+        get_weekday_name, format_stats_period
+    )
+    from datetime import datetime
+    
+    try:
+        start_str, end_str = update.message.text.split()
+        start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+        end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+        
+        if start_date > end_date:
+            await update.message.reply_text("❌ Начальная дата не может быть больше конечной")
+            return CHECKLIST_STATS_CUSTOM_PERIOD
+        
+        stats_type = context.user_data.get('stats_type', 'individual')
+        
+        if stats_type == 'individual':
+            stats_data = get_individual_stats(start_date, end_date)
+            if not stats_data:
+                await update.message.reply_text(
+                    f"👤 Индивидуальная статистика\n\n"
+                    f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+                )
+                return await checklist_stats(update, context)
+            
+            period_text_display = format_stats_period(start_date, end_date)
+            response = f"👤 Индивидуальная статистика\n\nПериод: {period_text_display}\n\n"
+            
+            user_stats = {}
+            for stat in stats_data:
+                if stat['user_name'] not in user_stats:
+                    user_stats[stat['user_name']] = []
+                user_stats[stat['user_name']].append(stat)
+            
+            for user_name, user_data in user_stats.items():
+                response += f"👤 {user_name}:\n"
+                for stat in user_data:
+                    weekday_name = get_weekday_name(stat['weekday'])
+                    response += f"   {weekday_name}: {stat['completed_tasks']}/{stat['total_tasks']} ({stat['completion_percent']}%)\n"
+                response += "\n"
+            
+            await update.message.reply_text(response)
+            return await checklist_stats(update, context)
+            
+        elif stats_type == 'point':
+            stats_data = get_point_stats(start_date, end_date)
+            if not stats_data:
+                await update.message.reply_text(
+                    f"📍 Статистика по точкам\n\n"
+                    f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+                )
+                return await checklist_stats(update, context)
+            
+            period_text_display = format_stats_period(start_date, end_date)
+            response = f"📍 Статистика по точкам\n\nПериод: {period_text_display}\n\n"
+            
+            point_stats = {}
+            for stat in stats_data:
+                if stat['point'] not in point_stats:
+                    point_stats[stat['point']] = []
+                point_stats[stat['point']].append(stat)
+            
+            for point_name, point_data in point_stats.items():
+                response += f"📍 {point_name}:\n"
+                for stat in point_data:
+                    weekday_name = get_weekday_name(stat['weekday'])
+                    response += f"   {weekday_name}:\n"
+                    response += f"     🌅 Утро: {stat['morning_avg_completion']}% ({stat['morning_shift_count']} смен)\n"
+                    response += f"     🌆 Вечер: {stat['evening_avg_completion']}% ({stat['evening_shift_count']} смен)\n"
+                    if stat['hybrid_shift_count'] > 0:
+                        response += f"     🔄 Пересмен: {stat['hybrid_avg_completion']}% ({stat['hybrid_shift_count']} смен)\n"
+                response += "\n"
+            
+            await update.message.reply_text(response)
+            return await checklist_stats(update, context)
+            
+        elif stats_type == 'task':
+            stats_data = get_task_stats(start_date, end_date)
+            if not stats_data:
+                await update.message.reply_text(
+                    f"📝 Статистика по заданиям\n\n"
+                    f"❌ Нет данных для отображения за период: {format_stats_period(start_date, end_date)}."
+                )
+                return await checklist_stats(update, context)
+            
+            period_text_display = format_stats_period(start_date, end_date)
+            response = f"📝 Статистика по заданиям\n\nПериод: {period_text_display}\n\n"
+            
+            for stat in stats_data[:10]:
+                weekday_name = get_weekday_name(stat['day_of_week'])
+                response += f"📍 {stat['point']} | {weekday_name} | {stat['shift_type']}\n"
+                response += f"   {stat['task_description']}\n"
+                response += f"   Выполнено: {stat['completed_shifts']}/{stat['total_shifts']} ({stat['completion_percent']}%)\n\n"
+            
+            if len(stats_data) > 10:
+                response += f"... и еще {len(stats_data) - 10} заданий\n\n"
+            
+            await update.message.reply_text(response)
+            return await checklist_stats(update, context)
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверный формат даты. Используйте:\n"
+            "ГГГГ-ММ-ДД ГГГГ-ММ-ДД\n\n"
+            "Например: 2024-01-01 2024-01-31"
+        )
+        return CHECKLIST_STATS_CUSTOM_PERIOD
+
+async def checklist_stats_detailed_log(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Детальный лог за день"""
+    from bot.database.checklist_stats_operations import get_detailed_log
+    from datetime import date, timedelta
+    
+    # По умолчанию показываем за сегодня
+    today = date.today()
+    
+    keyboard = [
+        [KeyboardButton("📅 Сегодня"), KeyboardButton("📅 Вчера")], KeyboardButton("📅 Произвольный период"),
+        [KeyboardButton("⬅️ Назад в меню статистики")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "📋 Детальный лог выполнения\n\n"
+        "Выберите дату:",
+        reply_markup=reply_markup
+    )
+    
+    context.user_data['log_date'] = today
+    return CHECKLIST_STATS_DETAILED_LOG
+
+async def handle_detailed_log_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора даты для детального лога"""
+    from bot.database.checklist_stats_operations import get_detailed_log
+    from datetime import date, timedelta
+    
+    date_text = update.message.text
+    today = date.today()
+    
+    period_text = update.message.text
+    today = date.today()
+        
+    if date_text == "📅 Сегодня":
+        target_date = today
+    elif date_text == "📅 Вчера":
+        target_date = today - timedelta(days=1)
+    elif date_text == "📅 Произвольный период":
+        await update.message.reply_text(
+            "Введите дату в формате:\n"
+            "ГГГГ-ММ-ДД"
+            "Например: 2024-01-01"
+        )
+        context.user_data['stats_type'] = 'point'
+    else:
+        await update.message.reply_text("❌ Выберите дату из предложенных вариантов")
+        return CHECKLIST_STATS_DETAILED_LOG
+    
+    context.user_data['log_date'] = target_date
+    
+    # Запрашиваем точку
+    keyboard = [
+        [KeyboardButton("ДЕ"), KeyboardButton("УЯ")],
+        [KeyboardButton("⬅️ Назад")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"📅 Дата: {target_date.strftime('%d.%m.%Y')}\n\n"
+        "Выберите точку:",
+        reply_markup=reply_markup
+    )
+    return CHECKLIST_STATS_DETAILED_LOG_POINT
+
+async def handle_detailed_log_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора точки для детального лога"""
+    from bot.database.checklist_stats_operations import get_detailed_log
+    
+    point = update.message.text
+    if point not in ['ДЕ', 'УЯ']:
+        await update.message.reply_text("❌ Выберите точку: ДЕ или УЯ")
+        return CHECKLIST_STATS_DETAILED_LOG_POINT
+    
+    target_date = context.user_data.get('log_date')
+    if not target_date:
+        await update.message.reply_text("❌ Дата не установлена")
+        return await checklist_stats_detailed_log(update, context)
+    
+    # Генерируем детальный лог
+    detailed_log = get_detailed_log(target_date, point)
+    
+    if not detailed_log:
+        await update.message.reply_text(
+            f"📋 Детальный лог выполнения\n\n"
+            f"📍 Точка: {point}\n"
+            f"📅 Дата: {target_date.strftime('%d.%m.%Y')}\n\n"
+            "❌ Данные не найдены"
+        )
+        return await checklist_stats(update, context)
+    
+    response = f"📋 Детальный лог выполнения\n\n"
+    response += f"📍 Точка: {point}\n"
+    response += f"📅 Дата: {target_date.strftime('%d.%m.%Y')}\n\n"
+    
+    completed_count = 0
+    for task_log in detailed_log:
+        status = "✅" if task_log['completed'] else "❌"
+        response += f"{status} {task_log['task_description']}\n"
+        
+        if task_log['completed']:
+            completed_count += 1
+            for completion in task_log['completions']:
+                response += f"   👤 {completion['completed_by']} в {completion['completed_at']}\n"
+        response += "\n"
+    
+    response += f"📊 Итого: {completed_count}/{len(detailed_log)} заданий выполнено"
     
     await update.message.reply_text(response)
-    return CHECKLIST_MANAGEMENT_MENU
+    return await checklist_stats(update, context)
+
+
 
 async def start_adding_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало добавления новой задачи"""
@@ -3105,6 +3644,38 @@ def get_settings_conversation_handler():
                 MessageHandler(filters.Regex("^📋 Просмотреть распределения$"), hybrid_view_existing),
                 MessageHandler(filters.Regex("^📊 Статистика выполнения$"), checklist_stats),
                 MessageHandler(filters.Regex("^⬅️ Назад$"), settings_menu),
+            ],
+            # Статистика для чек-листов
+            CHECKLIST_STATS_MENU: [
+            MessageHandler(filters.Regex("^👤 Индивидуальная статистика$"), checklist_stats_individual),
+            MessageHandler(filters.Regex("^📍 Статистика по точкам$"), checklist_stats_point),
+            MessageHandler(filters.Regex("^📝 Статистика по заданиям$"), checklist_stats_task),
+            MessageHandler(filters.Regex("^📋 Детальный лог за день$"), checklist_stats_detailed_log),
+            MessageHandler(filters.Regex("^⬅️ Назад$"), checklist_management),
+            ],
+            CHECKLIST_STATS_INDIVIDUAL_PERIOD: [
+            MessageHandler(filters.Regex("^(📅 За неделю|📅 За месяц|📅 Произвольный период)$"), handle_individual_stats_period),
+            MessageHandler(filters.Regex("^⬅️ Назад в меню статистики$"), checklist_stats),
+            ],
+            CHECKLIST_STATS_POINT_PERIOD: [
+            MessageHandler(filters.Regex("^(📅 За неделю|📅 За месяц|📅 Произвольный период)$"), handle_point_stats_period),
+            MessageHandler(filters.Regex("^⬅️ Назад в меню статистики$"), checklist_stats),
+            ],
+            CHECKLIST_STATS_TASK_PERIOD: [
+            MessageHandler(filters.Regex("^(📅 За неделю|📅 За месяц|📅 Произвольный период)$"), handle_task_stats_period),
+            MessageHandler(filters.Regex("^⬅️ Назад в меню статистики$"), checklist_stats),
+            ],
+            CHECKLIST_STATS_CUSTOM_PERIOD: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_custom_period_input),
+            MessageHandler(filters.Regex("^⬅️ Назад$"), checklist_stats),
+            ],
+            CHECKLIST_STATS_DETAILED_LOG: [
+            MessageHandler(filters.Regex("^(📅 Сегодня|📅 Вчера|📅 Произвольный период)$"), handle_detailed_log_date),
+            MessageHandler(filters.Regex("^⬅️ Назад$"), checklist_stats),
+            ],
+            CHECKLIST_STATS_DETAILED_LOG_POINT: [
+            MessageHandler(filters.Regex("^(ДЕ|УЯ)$"), handle_detailed_log_point),
+            MessageHandler(filters.Regex("^⬅️ Назад$"), checklist_stats_detailed_log),
             ],
             # Cостояния для управления шаблонами
             CHECKLIST_SELECT_POINT: [

@@ -10,6 +10,7 @@ from bot.handlers.review import get_review_conversation_handler
 from bot.handlers.stats import stats_command, get_stats_handlers
 from bot.handlers.settings import get_settings_conversation_handler
 from bot.handlers.checklist import get_checklist_conversation_handler
+from bot.handlers.santa_2026 import santa_start_command, santa_clear_command
 from bot.handlers.schedule import get_swap_conversation_handler
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_mentor, is_senior_or_mentor, get_user_role
@@ -91,6 +92,10 @@ class CoffeeBot:
         
         # Общий обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+        
+        # Обработчик Санты
+        self.application.add_handler(CommandHandler("santastart", santa_start_command))
+        self.application.add_handler(CommandHandler("santaclear", santa_clear_command))
         
         print("✅ Все обработчики настроены!")
     
@@ -284,7 +289,7 @@ class CoffeeBot:
                 return
             # ConversationHandler сам обработает это
             pass
-        elif text == "📊 Статистика":
+        elif text == "📊 Статистика по напиткам":
             await stats_command(update, context)
         elif text == "⬅️ Назад":
             return await cancel_conversation(update, context)
@@ -305,6 +310,20 @@ class CoffeeBot:
             # Доступно всем
             # ConversationHandler сам обработает это
             pass
+        elif text == "📆 Мои смены":
+            await self.show_my_shifts(update, context)
+        elif text == "💎 Контроль качества":
+            from bot.keyboards.menus import get_qc_menu
+            await update.message.reply_text(
+                "📋 Инструменты контроля:",
+                reply_markup=get_qc_menu()
+            )
+        elif text == "📦 Другое":
+            from bot.keyboards.menus import get_other_menu
+            await update.message.reply_text(
+                "📋 Дополнительные функции:",
+                reply_markup=get_other_menu()
+            )
         elif text == "⚙️ Настройки":
             # Проверяем доступ - только старшие и наставники
             if not is_senior_or_mentor(update):
@@ -325,6 +344,26 @@ class CoffeeBot:
                 return
             # ConversationHandler сам обработает это
             pass
+        
+        elif text == "🎅 Тайный Санта":
+            from bot.handlers.santa_2026 import santa_menu
+            await santa_menu(update, context)
+        elif text == "✅ Участвую" or text == "❌ Не участвую":
+            from bot.handlers.santa_2026 import handle_santa_participation
+            await handle_santa_participation(update, context)
+        elif text == "🎁 Чей я Санта":
+            from bot.handlers.santa_2026 import handle_santa_assignment
+            await handle_santa_assignment(update, context)
+        elif text == "📝 Мой вишлист":
+            from bot.handlers.santa_2026 import handle_wishlist_simple
+            await handle_wishlist_simple(update, context)
+        elif context.user_data.get('awaiting_wishlist'):
+            from bot.handlers.santa_2026 import handle_wishlist_update
+            await handle_wishlist_update(update, context)
+        elif text == "⬅️ Назад":
+            from bot.keyboards.menus import get_other_menu
+            await update.message.reply_text("📋 Дополнительные функции:", reply_markup=get_other_menu())
+        
         else:
             await update.message.reply_text(
                 "Используйте кнопки меню или команды:\n"
@@ -344,6 +383,56 @@ class CoffeeBot:
         logger.info(f"🔧 GLOBAL DEBUG: user_data = {context.user_data}")
         await query.answer(f"Debug: {query.data}")
         return ConversationHandler.END
+    
+    async def show_my_shifts(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Показать мои смены на 2 недели вперед"""
+        user = update.effective_user
+    
+        # Получаем пользователя по username
+        db_user = None
+        if user.username:
+            from bot.database.user_operations import get_user_by_username
+            db_user = get_user_by_username(user.username)
+    
+        if not db_user or not db_user.iiko_id:
+            await update.message.reply_text(
+                "❌ Ваш аккаунт не найден в системе. Обратитесь к администратору."
+            )
+            return
+    
+        # Получаем смены на 2 недели вперед
+        from bot.database.schedule_operations import get_upcoming_shifts_by_iiko_id
+        from datetime import date, timedelta
+    
+        shifts = get_upcoming_shifts_by_iiko_id(str(db_user.iiko_id), days=14)
+    
+        if not shifts:
+            await update.message.reply_text("📅 У вас нет запланированных смен на ближайшие 2 недели.")
+            return
+    
+        # Формируем сообщение со сменами
+        message = "📅 Ваши смены на ближайшие 2 недели:\n\n"
+    
+        for shift in shifts:
+            if not shift.shift_type_obj:
+                continue
+            
+            shift_type_names = {
+                'morning': '🌅 Утро',
+                'hybrid': '🌤️ Пересмен', 
+                'evening': '🌆 Вечер'
+            }
+        
+            shift_type_text = shift_type_names.get(shift.shift_type_obj.shift_type, shift.shift_type_obj.shift_type)
+            date_str = shift.shift_date.strftime("%d.%m.%Y")
+            start_str = shift.shift_type_obj.start_time.strftime("%H:%M")
+            end_str = shift.shift_type_obj.end_time.strftime("%H:%M")
+        
+            message += f"• {date_str} ({shift_type_text})\n"
+            message += f"  🏪 {shift.shift_type_obj.point}\n"
+            message += f"  ⏰ {start_str} - {end_str}\n\n"
+    
+        await update.message.reply_text(message)
     
     def run(self):
         """Запуск бота"""

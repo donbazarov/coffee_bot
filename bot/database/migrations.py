@@ -333,6 +333,43 @@ def migrate_schedule_table():
     finally:
         conn.close()
 
+def migrate_secret_santa_table():
+    """Создание таблицы для тайного санты 2026 через прямой SQL"""
+    try:
+        conn = sqlite3.connect('coffee_quality.db')
+        cursor = conn.cursor()
+
+        # Проверяем, существует ли таблица
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='secret_santa_2026'")
+        table_exists = cursor.fetchone()
+
+        if not table_exists:
+            print("🔄 Создаем таблицу secret_santa_2026...")
+            cursor.execute('''
+                CREATE TABLE secret_santa_2026 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    telegram_username TEXT NOT NULL,
+                    wishlist TEXT DEFAULT '',
+                    is_participant BOOLEAN DEFAULT 0,
+                    santa_of TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Создаем индексы
+            cursor.execute('CREATE INDEX idx_santa_username ON secret_santa_2026(telegram_username)')
+            cursor.execute('CREATE INDEX idx_santa_participant ON secret_santa_2026(is_participant)')
+            
+            conn.commit()
+            print("✅ Таблица secret_santa_2026 создана")
+        else:
+            print("✅ Таблица secret_santa_2026 уже существует")
+
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ Ошибка при создании таблицы secret_santa_2026: {e}")
+        
 def init_database():
     """Инициализация БД с миграцией"""
     # Создаем таблицы через SQLAlchemy
@@ -351,3 +388,5 @@ def init_database():
     migrate_hybrid_assignments()
     # Обновляем таблицу schedule на новую структуру
     migrate_schedule_table()
+    # Создаем таблицу для Санты
+    migrate_secret_santa_table()

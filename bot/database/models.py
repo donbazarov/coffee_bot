@@ -145,6 +145,7 @@ class ChecklistLog(Base):
         Index('idx_checklist_log_task', 'task_id'),
     )
 
+
 # Инициализация БД - используем SQLite
 engine = create_engine(BotConfig.database_url, connect_args={"check_same_thread": False} if "sqlite" in BotConfig.database_url else {})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
