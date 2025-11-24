@@ -1,21 +1,31 @@
 """Модуль для работы с Google Sheets API"""
 import gspread
 from google.oauth2.service_account import Credentials
+from bot.config import BotConfig
 import logging
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 from typing import List, Dict, Optional, Tuple
 import os
-from bot.database.schedule_operations import get_shift_type_by_time_strings
+import re
+from bot.database.schedule_operations import (
+    get_shift_type_by_time_strings, get_shifts_by_date_range
+    )
 
 logger = logging.getLogger(__name__)
+
+# Цвета для точек (RGB в формате 0-1)
+POINT_COLORS = {
+    'ДЕ': {'red': 0.3, 'green': 0.5, 'blue': 0.91},  # Голубой
+    'УЯ': {'red': 0.91, 'green': 0.18, 'blue': 0}    # Красный
+}
 
 # ID таблицы из ссылки
 SPREADSHEET_ID = "1-NpGX3AfsBiOGHCBlCWD_6lTsCdMFIMiWgbkPVE0z0Q"
 
 # Области доступа для Google Sheets API
 SCOPES = [
-    'https://www.googleapis.com/auth/spreadsheets.readonly',
-    'https://www.googleapis.com/auth/drive.readonly'
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/drive'
 ]
 
 def get_google_client():
@@ -36,16 +46,47 @@ def get_worksheet_by_month(client, month_name: str):
     """Получить лист по названию месяца (например, 'Декабрь 24')"""
     try:
         spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        
         # Пробуем найти лист с точным названием
         try:
             worksheet = spreadsheet.worksheet(month_name)
+            logger.info(f"Найден лист с точным названием: {month_name}")
             return worksheet
         except gspread.exceptions.WorksheetNotFound:
+            logger.warning(f"Лист с точным названием '{month_name}' не найден, ищем похожие...")
+            
             # Пробуем найти лист, содержащий название месяца
+            available_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+            logger.info(f"Доступные листы: {available_sheets}")
+            
+            # Ищем частичное совпадение
             for sheet in spreadsheet.worksheets():
+                # Приводим к нижнему регистру для поиска
                 if month_name.lower() in sheet.title.lower():
+                    logger.info(f"Найден похожий лист: {sheet.title}")
                     return sheet
-            raise ValueError(f"Лист с названием '{month_name}' не найден")
+            
+            # Если не нашли, пробуем альтернативные форматы
+            alternative_names = [
+                month_name.replace(" ", ""),  # "Ноябрь25"
+                month_name.replace("25", "2025"),  # "Ноябрь 2025"
+                month_name.split()[0]  # "Ноябрь"
+            ]
+            
+            for alt_name in alternative_names:
+                try:
+                    worksheet = spreadsheet.worksheet(alt_name)
+                    logger.info(f"Найден лист с альтернативным названием: {alt_name}")
+                    return worksheet
+                except gspread.exceptions.WorksheetNotFound:
+                    continue
+            
+            # Если ничего не нашли, выводим ошибку с доступными листами
+            available_titles = [sheet.title for sheet in spreadsheet.worksheets()]
+            error_msg = f"Лист '{month_name}' не найден. Доступные листы: {', '.join(available_titles)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+            
     except Exception as e:
         logger.error(f"Ошибка при получении листа '{month_name}': {e}")
         raise
@@ -110,8 +151,8 @@ def determine_shift_type(start_time: str) -> str:
     except Exception:
         return None
 
-def parse_schedule_from_sheet(month_name: str) -> List[Dict]:
-    """Парсит расписание из Google Sheets для указанного месяца"""
+def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> List[Dict]:
+    """Умный парсинг расписания с сохранением замен"""
     shifts = []
     
     try:
@@ -192,6 +233,10 @@ def parse_schedule_from_sheet(month_name: str) -> List[Dict]:
                     'iiko_id': iiko_id,
                     'shift_type_id': shift_type_obj.id
                 })
+                
+                if preserve_swaps:
+                    preserved_swaps = preserve_existing_swaps(month_name, shifts)
+                    shifts.extend(preserved_swaps)
         
         logger.info(f"Успешно распарсено {len(shifts)} смен из листа '{month_name}'")
         return shifts
@@ -199,6 +244,46 @@ def parse_schedule_from_sheet(month_name: str) -> List[Dict]:
     except Exception as e:
         logger.error(f"Ошибка при парсинге расписания из листа '{month_name}': {e}")
         raise
+
+def preserve_existing_swaps(month_name: str, new_shifts: List[Dict]) -> List[Dict]:
+    """Сохраняет существующие замены при парсинге"""
+    try:
+        # Получаем существующие смены из БД для этого месяца
+        month, year = parse_month_name(month_name)
+        start_date = date(year, month, 1)
+        if month == 12:
+            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+        else:
+            end_date = date(year, month + 1, 1) - timedelta(days=1)
+        
+        existing_shifts = get_shifts_by_date_range(start_date, end_date)
+        
+        # Фильтруем замены (source='swap')
+        swap_shifts = [s for s in existing_shifts if getattr(s, 'source', 'sheets') == 'swap']
+        
+        preserved = []
+        for swap_shift in swap_shifts:
+            # Проверяем, не перезаписывается ли замена новым парсингом
+            is_overwritten = any(
+                s['shift_date'] == swap_shift.shift_date and 
+                s['iiko_id'] == swap_shift.iiko_id 
+                for s in new_shifts
+            )
+            
+            if not is_overwritten:
+                preserved.append({
+                    'shift_date': swap_shift.shift_date,
+                    'iiko_id': swap_shift.iiko_id,
+                    'shift_type_id': swap_shift.shift_type_id,
+                    'source': 'swap'  # Помечаем как замену
+                })
+        
+        logger.info(f"Сохранено {len(preserved)} замен при парсинге")
+        return preserved
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении замен: {e}")
+        return []
 
 def _normalize_time_format(time_str: str) -> str:
     """Нормализует формат времени к HH:MM"""
@@ -237,3 +322,301 @@ def get_next_month_name() -> str:
     year = next_month.year % 100
     return f"{month_names[next_month.month]} {year}"
 
+def get_sheet_client():
+    """Получить клиент для работы с Google Sheets (с правами записи)"""
+    try:
+        # ИСПОЛЬЗУЕМ ТЕ ЖЕ SCOPES И CREDENTIALS, ЧТО И В get_google_client
+        credentials_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'credentials.json')
+        if not os.path.exists(credentials_path):
+            raise FileNotFoundError(f"Файл credentials.json не найден по пути: {credentials_path}")
+        
+        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        return client
+    except Exception as e:
+        logger.error(f"Ошибка при подключении к Google Sheets: {e}")
+        raise
+    
+def get_worksheet(month_name: str):
+    """Получить рабочий лист по названию месяца"""
+    try:
+        client = get_sheet_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        return spreadsheet.worksheet(month_name)
+    except Exception as e:
+        logger.error(f"Ошибка при получении листа {month_name}: {e}")
+        raise
+    
+def find_cell_coordinates(worksheet, iiko_id: str, target_date: date) -> Optional[Tuple[int, int]]:
+    """
+    Найти координаты ячейки для конкретного сотрудника и даты
+    Используем ту же логику, что и при парсинге: вычисляем столбец по дню месяца
+    """
+    try:
+        logger.info(f"Поиск координат для {iiko_id} на {target_date}")
+        
+        # Получаем все данные
+        all_data = worksheet.get_all_values()
+        logger.info(f"Размер данных: {len(all_data)} строк, {len(all_data[0]) if all_data else 0} колонок")
+        
+        if not all_data or len(all_data) < 4:
+            logger.error("Недостаточно данных в таблице")
+            return None
+        
+        # Ищем сотрудника по iiko_id (колонка A, начиная с строки 4)
+        target_iiko = str(iiko_id)
+        employee_row = None
+        
+        for row_idx, row in enumerate(all_data[3:], start=4):  # строки с 4 и далее
+            if row and row[0] == target_iiko:
+                employee_row = row_idx
+                logger.info(f"Найден сотрудник в строке {employee_row}")
+                break
+        
+        if not employee_row:
+            logger.error(f"Сотрудник {target_iiko} не найден в таблице")
+            return None
+        
+        # ВЫЧИСЛЯЕМ СТОЛБЕЦ ПО ДНЮ МЕСЯЦА (как при парсинге)
+        # Данные начинаются с колонки C (индекс 2), каждая дата занимает 2 колонки
+        day_of_month = target_date.day
+        # Первая дата (1 число) начинается с колонки C (индекс 2)
+        start_col_index = 2 + (day_of_month - 1) * 2
+        
+        # Проверяем, что столбец не выходит за пределы
+        if start_col_index >= len(all_data[0]):
+            logger.error(f"Вычисленный столбец {start_col_index} выходит за пределы таблицы")
+            return None
+        
+        # Gspread использует 1-индексирование, поэтому +1
+        start_col = start_col_index + 1
+        
+        logger.info(f"Координаты найдены: строка {employee_row}, колонка {start_col} (день {day_of_month})")
+        return (employee_row, start_col)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при поиске координат для {iiko_id} на {target_date}: {e}")
+        return None
+    
+def get_month_name(target_date: date) -> str:
+    """Получить название месяца для листа Google Sheets"""
+    month_names = {
+        1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель",
+        5: "Май", 6: "Июнь", 7: "Июль", 8: "Август", 
+        9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь"
+    }
+    
+    month = target_date.month
+    year_short = str(target_date.year)[2:]
+    return f"{month_names[month]} {year_short}"
+
+def update_shift_in_sheets(iiko_id: str, shift_date: date, start_time: str, end_time: str, point: str) -> bool:
+    """
+    Обновить смену в Google Sheets
+    """
+    try:
+        month_name = get_month_name(shift_date)
+        logger.info(f"Пытаемся получить лист: {month_name}")
+        
+        client = get_sheet_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        
+        # Пробуем найти подходящий лист
+        worksheet = None
+        available_sheets = [sheet.title for sheet in spreadsheet.worksheets()]
+        
+        for sheet_title in available_sheets:
+            if month_name.lower() in sheet_title.lower():
+                worksheet = spreadsheet.worksheet(sheet_title)
+                logger.info(f"Используем лист: {sheet_title}")
+                break
+        
+        if not worksheet:
+            logger.error(f"Не найден подходящий лист для {month_name}")
+            return False
+        
+        coords = find_cell_coordinates(worksheet, iiko_id, shift_date)
+        if not coords:
+            logger.error(f"Не найдены координаты для {iiko_id} на {shift_date}")
+            return False
+        
+        row, start_col = coords
+        end_col = start_col + 1
+        
+        # Разъединение ячеек
+        try:
+            cell_range = f"{gspread.utils.rowcol_to_a1(row, start_col)}:{gspread.utils.rowcol_to_a1(row, end_col)}"
+            worksheet.unmerge_cells(cell_range)
+            logger.info(f"Разъединены ячейки: {cell_range}")
+        except Exception as e:
+            logger.info(f"Ячейки не объединены или уже разъединены: {e}")
+        
+        updates = []
+        
+        if start_time and end_time:
+            start_time_value = start_time
+            end_time_value = end_time
+            
+            updates.extend([
+                {
+                    'range': f"{gspread.utils.rowcol_to_a1(row, start_col)}",
+                    'values': [[start_time_value]]
+                },
+                {
+                    'range': f"{gspread.utils.rowcol_to_a1(row, end_col)}", 
+                    'values': [[end_time_value]]
+                }
+            ])
+            
+            # Устанавливаем цвет
+            color = POINT_COLORS.get(point, POINT_COLORS['ДЕ'])
+            format_requests = [
+                {
+                    'range': f"{gspread.utils.rowcol_to_a1(row, start_col)}:{gspread.utils.rowcol_to_a1(row, end_col)}",
+                    'format': {
+                        'backgroundColor': color,
+                        'numberFormat': {
+                            'type': 'TIME',
+                            'pattern': 'hh:mm'
+                        },
+                        'textFormat': {
+                            'fontFamily': 'Verdana',
+                            'fontSize': 10,
+                            'italic': True  # Курсив
+                        }
+                    }
+                }
+            ]
+            
+            # Выполняем форматирование
+            worksheet.batch_format(format_requests)
+            
+            # Устанавливаем формат времени
+            #set_time_format_for_cells(worksheet, row, start_col, end_col)
+            
+        else:
+            # Очищаем смену - объединяем ячейки и ставим "ВЫХ" курсивом
+            merge_range = f"{gspread.utils.rowcol_to_a1(row, start_col)}:{gspread.utils.rowcol_to_a1(row, end_col)}"
+    
+            # Объединяем ячейки
+            try:
+                worksheet.merge_cells(merge_range)
+                logger.info(f"Объединены ячейки: {merge_range}")
+            except Exception as e:
+                logger.warning(f"Не удалось объединить ячейки: {e}")
+
+            # Записываем "ВЫХ" в объединенную ячейку
+            updates.append({
+                'range': f"{gspread.utils.rowcol_to_a1(row, start_col)}",
+                'values': [['ВЫХ']]
+            })
+    
+            # Устанавливаем формат для объединенной ячейки: курсив и светло-серый фон
+            format_requests = [
+                {
+                    'range': merge_range,
+                    'format': {
+                        'backgroundColor': {'red': 0.85, 'green': 0.85, 'blue': 0.85},  # Светло-серый фон
+                        'textFormat': {
+                            'fontFamily': 'Verdana',
+                            'fontSize': 10,
+                            'italic': True  # Курсив
+                        },
+                        'horizontalAlignment': 'CENTER'  # Выравнивание по центру
+                    }
+                }
+            ]
+    
+            # Выполняем обновления формата
+            worksheet.batch_format(format_requests)
+        
+        # Выполняем обновления значений
+        if updates:
+            worksheet.batch_update(updates, value_input_option='USER_ENTERED')
+        
+        logger.info(f"Успешно обновлена смена в Sheets: {iiko_id} {shift_date}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении Sheets для {iiko_id}: {e}")
+        return False
+        
+def set_time_format_for_cells(worksheet, row: int, start_col: int, end_col: int):
+    """Установить формат времени для указанных ячеек"""
+    try:
+        # Создаем запрос на форматирование
+        requests = []
+        
+        # Форматируем обе ячейки (время начала и окончания)
+        for col in [start_col, end_col]:
+            cell_format = {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": worksheet.id,
+                        "startRowIndex": row - 1,  # 0-based indexing
+                        "endRowIndex": row,
+                        "startColumnIndex": col - 1,
+                        "endColumnIndex": col
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "numberFormat": {
+                                "type": "TIME",
+                                "pattern": "hh:mm:ss"  # 24-часовой формат без ведущих нулей
+                            }
+                        }
+                    },
+                    "fields": "userEnteredFormat.numberFormat"
+                }
+            }
+            requests.append(cell_format)
+        
+        # Выполняем запросы
+        if requests:
+            worksheet.spreadsheet.batch_update({"requests": requests})
+            logger.info(f"Установлен формат времени для ячеек: строка {row}, колонки {start_col}-{end_col}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при установке формата времени: {e}")
+
+def sync_swap_to_sheets(swap_data: Dict) -> bool:
+    """
+    Синхронизировать замену в Google Sheets
+    swap_data: {
+        'from_employee': {'iiko_id': '', 'old_shift': shift_obj, 'new_shift': shift_obj},
+        'to_employee': {'iiko_id': '', 'old_shift': shift_obj, 'new_shift': shift_obj}
+    }
+    """
+    try:
+        results = []
+        
+        # Обрабатываем сотрудника, который отдает смену
+        from_emp = swap_data['from_employee']
+        if from_emp['old_shift']:
+            # Очищаем старую смену
+            success = update_shift_in_sheets(
+                iiko_id=from_emp['iiko_id'],
+                shift_date=from_emp['old_shift'].shift_date,
+                start_time=None,
+                end_time=None,
+                point=None
+            )
+            results.append(success)
+        
+        # Обрабатываем сотрудника, который принимает смену
+        to_emp = swap_data['to_employee'] 
+        if to_emp['new_shift'] and to_emp['new_shift'].shift_type_obj:
+            success = update_shift_in_sheets(
+                iiko_id=to_emp['iiko_id'],
+                shift_date=to_emp['new_shift'].shift_date,
+                start_time=to_emp['new_shift'].shift_type_obj.start_time.strftime("%H:%M"),
+                end_time=to_emp['new_shift'].shift_type_obj.end_time.strftime("%H:%M"),
+                point=to_emp['new_shift'].shift_type_obj.point
+            )
+            results.append(success)
+        
+        return all(results)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при синхронизации замены: {e}")
+        return False

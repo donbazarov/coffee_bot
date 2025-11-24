@@ -2,7 +2,7 @@ import logging
 import sqlite3
 import os
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ConversationHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 from bot.config import BotConfig
 from bot.database.simple_db import init_db
@@ -36,14 +36,19 @@ class CoffeeBot:
         self.setup_handlers()
     
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик ошибок"""
+        """Обработчик ошибок с детальным логированием"""
         logger.error(msg="Exception while handling an update:", exc_info=context.error)
-        
+    
+        # Детальное логирование для отладки
+        if update and hasattr(update, 'effective_message'):
+            logger.error(f"Update content: {update.effective_message.text if update.effective_message else 'No message'}")
+    
         # Отправляем сообщение пользователю
         if update and hasattr(update, 'effective_chat'):
+            error_text = str(context.error)
             text = (
                 "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз или обратитесь к администратору.\n"
-                f"Ошибка: {str(context.error)[:100]}..."
+                f"Ошибка: {error_text[:100]}..."
             )
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
@@ -53,7 +58,7 @@ class CoffeeBot:
     def setup_handlers(self):
         """Настройка обработчиков"""
         print("🔄 Настройка обработчиков бота...")
-        
+              
         # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("stats", stats_command))
@@ -77,6 +82,9 @@ class CoffeeBot:
         
         # ConversationHandler для замен
         self.application.add_handler(get_swap_conversation_handler())
+        
+        # ВРЕМЕННО: Глобальный обработчик callback_query для отладки
+        #self.application.add_handler(CallbackQueryHandler(self.debug_callback))
         
         # ConversationHandler для чек-листов
         self.application.add_handler(get_checklist_conversation_handler())
@@ -328,6 +336,14 @@ class CoffeeBot:
                 "/show_photo [id] - Показать фото\n"
                 "/cancel - Отмена"
             )
+            
+    async def debug_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Временный отладочный обработчик"""
+        query = update.callback_query
+        logger.info(f"🔧 GLOBAL DEBUG: callback_data = {query.data}")
+        logger.info(f"🔧 GLOBAL DEBUG: user_data = {context.user_data}")
+        await query.answer(f"Debug: {query.data}")
+        return ConversationHandler.END
     
     def run(self):
         """Запуск бота"""

@@ -78,16 +78,24 @@ def get_shifts_by_iiko_id(iiko_id: str, start_date: Optional[date] = None,
     try:
         query = db.query(Schedule).filter(Schedule.iiko_id == str(iiko_id))
         
+        logger.info(f"🔍 ДИАГНОСТИКА get_shifts_by_iiko_id: iiko_id={iiko_id}, start_date={start_date}, end_date={end_date}")
+        
         if start_date:
             query = query.filter(Schedule.shift_date >= start_date)
         if end_date:
             query = query.filter(Schedule.shift_date <= end_date)
         
         # Сортируем по дате и времени начала смены
-        return query.order_by(
+        shifts = query.order_by(
             Schedule.shift_date,
             ShiftType.start_time
         ).join(ShiftType).all()
+        
+        logger.info(f"🔍 ДИАГНОСТИКА get_shifts_by_iiko_id: найдено {len(shifts)} смен")
+        for shift in shifts:
+            logger.info(f"🔍 Смена: {shift.shift_date} - {shift.shift_type_obj.start_time if shift.shift_type_obj else 'NO_TYPE'}")
+        
+        return shifts
     finally:
         db.close()
 
@@ -297,5 +305,29 @@ def delete_shift_type(shift_type_id):
     except Exception as e:
         db.rollback()
         raise e
+    finally:
+        db.close()
+        
+def update_shift_iiko_id(shift_id: int, new_iiko_id: str) -> Optional[Schedule]:
+    """Изменить iiko_id смены (для замен) с проверкой"""
+    db = SessionLocal()
+    try:
+        shift = db.query(Schedule).filter(Schedule.shift_id == shift_id).first()
+        if not shift:
+            return None
+        
+        # Логируем изменение
+        logger.info(f"Смена ID {shift_id}: {shift.iiko_id} -> {new_iiko_id}")
+        
+        shift.iiko_id = str(new_iiko_id)
+        shift.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(shift)
+        logger.info(f"Смена ID {shift_id} переназначена на сотрудника {new_iiko_id}")
+        return shift
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при обновлении смены: {e}")
+        raise
     finally:
         db.close()

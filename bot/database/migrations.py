@@ -302,6 +302,37 @@ def migrate_hybrid_assignments():
     finally:
         db.close()
 
+def migrate_schedule_table():
+    """Добавляет новые поля в таблицу schedule"""
+    conn = sqlite3.connect('coffee_quality.db')
+    cursor = conn.cursor()
+    
+    try:
+        # Проверяем существование столбцов
+        cursor.execute("PRAGMA table_info(schedule)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'source' not in columns:
+            cursor.execute("ALTER TABLE schedule ADD COLUMN source TEXT DEFAULT 'sheets'")
+            print("✅ Добавлен столбец 'source'")
+        
+        if 'version' not in columns:
+            cursor.execute("ALTER TABLE schedule ADD COLUMN version INTEGER DEFAULT 1")
+            print("✅ Добавлен столбец 'version'")
+        
+        if 'is_active' not in columns:
+            cursor.execute("ALTER TABLE schedule ADD COLUMN is_active BOOLEAN DEFAULT 1")
+            print("✅ Добавлен столбец 'is_active'")
+        
+        conn.commit()
+        print("✅ Миграция успешно завершена")
+        
+    except Exception as e:
+        print(f"❌ Ошибка миграции: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
 def init_database():
     """Инициализация БД с миграцией"""
     # Создаем таблицы через SQLAlchemy
@@ -318,3 +349,5 @@ def init_database():
     init_checklist_database()
     # Мигрируем распределения задач для пересменов
     migrate_hybrid_assignments()
+    # Обновляем таблицу schedule на новую структуру
+    migrate_schedule_table()

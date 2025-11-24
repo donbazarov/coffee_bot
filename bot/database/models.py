@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Text, Date, Time, Index, ForeignKey
+from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Text, Date, Time, Index, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -61,6 +61,9 @@ class Schedule(Base):
     shift_type_id = Column(Integer, ForeignKey('shift_types.id'), nullable=False)  # ID типа смены
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    source = Column(String(20), default='sheets')  # 'sheets', 'swap', 'manual'
+    version = Column(Integer, default=1)
+    is_active = Column(Boolean, default=True)
     
     # Связь с типом смены
     shift_type_obj = relationship("ShiftType", lazy="joined")
