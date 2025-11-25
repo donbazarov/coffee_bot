@@ -1980,7 +1980,7 @@ async def hybrid_select_evening_task(update: Update, context: ContextTypes.DEFAU
         evening_tasks = context.user_data['selected_evening_tasks']
         
         response = "✅ Итоговое распределение для пересмена:\n\n"
-        response += f"📍 {context.user_data['hybrid_point']} | {context.user_data['hybrid_day_name']}\n\n"
+        response += f"📍 {context.user_data['hybrid_day_name']}\n\n"
         
         response += "🌅 Утренние задачи для пересмена:\n"
         for task in morning_tasks:
@@ -2112,7 +2112,7 @@ async def hybrid_edit_existing(update: Update, context: ContextTypes.DEFAULT_TYP
     response = "✏️ Выберите распределение для редактирования:\n\n"
     
     for i, assignment in enumerate(assignments, 1):
-        response += f"{i}. 📍 {assignment.point} | {day_names[assignment.day_of_week]}\n"
+        response += f"{i}. 📍 {day_names[assignment.day_of_week]}\n"
         
         # Получаем задачи для этого распределения
         morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
@@ -2159,7 +2159,6 @@ async def hybrid_edit_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Сохраняем выбранное распределение для редактирования
         context.user_data['editing_assignment'] = assignment
         context.user_data['editing_assignment_id'] = assignment.id
-        context.user_data['hybrid_point'] = assignment.point
         context.user_data['hybrid_day'] = assignment.day_of_week
         context.user_data['hybrid_day_name'] = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"][assignment.day_of_week]
         
@@ -2167,13 +2166,11 @@ async def hybrid_edit_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
         from bot.database.checklist_operations import get_checklist_templates, get_hybrid_assignment_tasks
         
         morning_tasks = get_checklist_templates(
-            point=assignment.point,
             day_of_week=assignment.day_of_week,
             shift_type='morning'
         )
         
         evening_tasks = get_checklist_templates(
-            point=assignment.point,
             day_of_week=assignment.day_of_week,
             shift_type='evening'
         )
@@ -2190,7 +2187,7 @@ async def hybrid_edit_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         # Показываем текущее распределение и начинаем процесс редактирования
         response = f"✏️ Редактирование распределения:\n\n"
-        response += f"📍 {assignment.point} | {context.user_data['hybrid_day_name']}\n\n"
+        response += f"📍 {context.user_data['hybrid_day_name']}\n\n"
         
         response += "🌅 Текущие утренние задачи для пересмена:\n"
         if current_morning_tasks:
@@ -2240,7 +2237,7 @@ async def hybrid_delete_existing(update: Update, context: ContextTypes.DEFAULT_T
     response = "🗑️ Выберите распределение для удаления:\n\n"
     
     for i, assignment in enumerate(assignments, 1):
-        response += f"{i}. 📍 {assignment.point} | {day_names[assignment.day_of_week]}\n"
+        response += f"{i}. 📍 {day_names[assignment.day_of_week]}\n"
         
         # Получаем задачи для этого распределения
         morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
@@ -2295,7 +2292,7 @@ async def hybrid_delete_select(update: Update, context: ContextTypes.DEFAULT_TYP
         evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
         
         response = "🗑️ Подтверждение удаления:\n\n"
-        response += f"📍 {assignment.point} | {day_names[assignment.day_of_week]}\n\n"
+        response += f"📍 {day_names[assignment.day_of_week]}\n\n"
         
         response += "🌅 Утренние задачи:\n"
         if morning_tasks:
@@ -3142,7 +3139,7 @@ async def edit_task_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for i, task in enumerate(templates, 1):
         response += f"{i}. {task.task_description}\n"
-        response += f"   📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
+        response += f"   {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
     
     await update.message.reply_text(
         response + "Введите номер задачи для редактирования:",
@@ -3220,7 +3217,7 @@ async def delete_task_select(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     for i, task in enumerate(templates, 1):
         response += f"{i}. {task.task_description}\n"
-        response += f"   📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
+        response += f"  {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n\n"
     
     await update.message.reply_text(
         response + "Введите номер задачи для удаления:",
@@ -3247,7 +3244,7 @@ async def delete_task_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         await update.message.reply_text(
             f"🗑️ Удаление задачи:\n"
-            f"📍 {task.point} | {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n"
+            f"📍 {day_names[task.day_of_week]} | {shift_names.get(task.shift_type, task.shift_type)}\n"
             f"📝 {task.task_description}\n\n"
             f"⚠️ Вы уверены, что хотите удалить эту задачу?\n"
             f"Введите 'ДА' для подтверждения или 'НЕТ' для отмены:"
