@@ -8,7 +8,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def create_checklist_template(point: str, day_of_week: int, shift_type: str, task_description: str, order_index: int = 0) -> ChecklistTemplate:
+def create_checklist_template(day_of_week: int, shift_type: str, task_description: str, order_index: int = 0) -> ChecklistTemplate:
     """Создать шаблон задания для чек-листа"""
     db = SessionLocal()
     try:
@@ -31,7 +31,7 @@ def create_checklist_template(point: str, day_of_week: int, shift_type: str, tas
     finally:
         db.close()
 
-def get_checklist_templates(point: Optional[str] = None, day_of_week: Optional[int] = None, 
+def get_checklist_templates(day_of_week: Optional[int] = None, 
                           shift_type: Optional[str] = None) -> List[ChecklistTemplate]:
     """Получить шаблоны чек-листов с фильтрами"""
     db = SessionLocal()

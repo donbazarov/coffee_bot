@@ -501,48 +501,6 @@ def get_swap_conversation_handler():
         per_user=True,
         per_chat=True
     )
-
-async def complete_swap(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Завершение замены с синхронизацией в Google Sheets"""
-    query = update.callback_query
-    await query.answer()
-    
-    swap_data = context.user_data.get('swap_data')
-    if not swap_data:
-        await query.edit_message_text("❌ Данные замены не найдены")
-        return ConversationHandler.END
-    
-    logger.info(f"Начинаем завершение замены: {swap_data}")
-    
-    try:
-        # Сохраняем замену в БД
-        swap_success = save_swap_to_db(swap_data)
-        logger.info(f"Результат сохранения в БД: {swap_success}")
-        
-        if swap_success:
-            # Синхронизируем с Google Sheets
-            from bot.utils.google_sheets import sync_swap_to_sheets
-            logger.info("Начинаем синхронизацию с Google Sheets...")
-            
-            
-            if sheets_success:
-                message = "✅ Замена успешно выполнена и синхронизирована с расписанием!"
-            else:
-                message = "✅ Замена выполнена, но не удалось обновить Google Sheets. Сообщите администратору."
-            
-            # Отправляем уведомления участникам
-            await notify_swap_participants(swap_data, context)
-        else:
-            message = "❌ Ошибка при сохранении замены"
-        
-        await query.edit_message_text(message)
-        
-    except Exception as e:
-        logger.error(f"Ошибка при завершении замены: {e}")
-        await query.edit_message_text("❌ Произошла ошибка при выполнении замены")
-    
-    context.user_data.clear()
-    return ConversationHandler.END
         
 async def show_processing_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str = "🔄 Замена в процессе, ожидайте..."):
     """Показывает сообщение о процессе и убирает клавиатуру"""

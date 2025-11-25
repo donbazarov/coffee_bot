@@ -2,7 +2,7 @@
 from bot.database.models import init_db, User, Schedule, ShiftType, SessionLocal, engine, Base, HybridAssignmentTask
 from bot.config import BotConfig
 from bot.database.user_operations import get_user_by_iiko_id, get_user_by_telegram_id, get_user_by_username, create_user
-from .checklist_migrations import init_checklist_database
+from .checklist_migrations import init_checklist_database, remove_point_from_checklist
 import sqlite3
 from datetime import time
 import logging
@@ -393,18 +393,6 @@ def init_database():
     migrate_schedule_table()
     # Создаем таблицу для Санты
     migrate_secret_santa_table()
-    try:
-        from .checklist_migrations import remove_point_from_hybrid_assignments
-        remove_point_from_hybrid_assignments()
-    except ImportError as e:
-        logger.warning(f"⚠️ Модуль миграции checklist_migrations не доступен: {e}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при миграции checklist_migrations: {e}")
-    try:
-        from .checklist_migrations import remove_point_from_templates
-        remove_point_from_templates()
-    except ImportError as e:
-        logger.warning(f"⚠️ Модуль миграции checklist_migrations не доступен: {e}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при миграции checklist_migrations: {e}")
-        
+    # Удаляем point из чек-листов
+    remove_point_from_checklist()
+  
