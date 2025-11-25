@@ -5,6 +5,9 @@ from bot.database.user_operations import get_user_by_iiko_id, get_user_by_telegr
 from .checklist_migrations import init_checklist_database
 import sqlite3
 from datetime import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 def migrate_users_from_config():
     """Миграция пользователей из config.py в БД"""
@@ -390,3 +393,18 @@ def init_database():
     migrate_schedule_table()
     # Создаем таблицу для Санты
     migrate_secret_santa_table()
+    try:
+        from .checklist_migrations import remove_point_from_hybrid_assignments
+        remove_point_from_hybrid_assignments()
+    except ImportError as e:
+        logger.warning(f"⚠️ Модуль миграции checklist_migrations не доступен: {e}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при миграции checklist_migrations: {e}")
+    try:
+        from .checklist_migrations import remove_point_from_templates
+        remove_point_from_templates()
+    except ImportError as e:
+        logger.warning(f"⚠️ Модуль миграции checklist_migrations не доступен: {e}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при миграции checklist_migrations: {e}")
+        

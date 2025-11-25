@@ -81,7 +81,7 @@ class ChecklistTemplate(Base):
     __tablename__ = 'checklist_templates'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    #point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ' - убрали из-за объединения списка чек-листов
     day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
     shift_type = Column(String(20), nullable=False)  # 'morning', 'evening' (для пересмена не создаем отдельные)
     task_description = Column(String(500), nullable=False)
@@ -113,7 +113,7 @@ class HybridShiftAssignment(Base):
     __tablename__ = 'hybrid_shift_assignments'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    #point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
     day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
     created_at = Column(DateTime, default=datetime.utcnow)
     
