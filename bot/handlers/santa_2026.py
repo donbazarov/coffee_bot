@@ -120,55 +120,52 @@ async def handle_wishlist_simple(update: Update, context: ContextTypes.DEFAULT_T
     finally:
         conn.close()
 
-async def handle_wishlist_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_wishlist_update(update: Update, context):
     """Обработка обновления вишлиста"""
-    if context.user_data.get('awaiting_wishlist'):
-        user = update.effective_user
-        wishlist_text = update.message.text
+    user = update.effective_user
+    wishlist_text = update.message.text
+    
+    # Проверяем, нажата ли кнопка отмены
+    if wishlist_text == "❌ Отмена":
+        context.user_data['awaiting_wishlist'] = False
+        await update.message.reply_text("❌ Отменено", reply_markup=get_santa_menu())
+        return
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Находим или создаем запись
+        cursor.execute(
+            "SELECT * FROM secret_santa_2026 WHERE telegram_username = ?", 
+            (user.username,)
+        )
+        santa_record = cursor.fetchone()
         
-        if wishlist_text in ['❌ Отмена', 'отмена', 'cancel']:
-            context.user_data['awaiting_wishlist'] = False
-            await update.message.reply_text("❌ Отменено", reply_markup=get_santa_menu())
-            return
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            # Находим или создаем запись
+        if not santa_record:
             cursor.execute(
-                "SELECT * FROM secret_santa_2026 WHERE telegram_username = ?", 
-                (user.username,)
+                "INSERT INTO secret_santa_2026 (telegram_username, wishlist, is_participant) VALUES (?, ?, ?)",
+                (user.username, wishlist_text, 1)
             )
-            santa_record = cursor.fetchone()
-            
-            if not santa_record:
-                cursor.execute(
-                    "INSERT INTO secret_santa_2026 (telegram_username, wishlist, is_participant) VALUES (?, ?, ?)",
-                    (user.username, wishlist_text, 1)
-                )
-            else:
-                cursor.execute(
-                    "UPDATE secret_santa_2026 SET wishlist = ?, is_participant = 1, updated_at = CURRENT_TIMESTAMP WHERE telegram_username = ?",
-                    (wishlist_text, user.username)
-                )
-            
-            conn.commit()
-            context.user_data['awaiting_wishlist'] = False
-            await update.message.reply_text(
-                "✅ Ваш вишлист сохранен!",
-                reply_markup=get_santa_menu()
+        else:
+            cursor.execute(
+                "UPDATE secret_santa_2026 SET wishlist = ?, is_participant = 1, updated_at = CURRENT_TIMESTAMP WHERE telegram_username = ?",
+                (wishlist_text, user.username)
             )
-            
-        except Exception as e:
-            logger.error(f"Ошибка при сохранении вишлиста: {e}")
-            conn.rollback()
-            await update.message.reply_text("❌ Произошла ошибка при сохранении.")
-        finally:
-            conn.close()
-    else:
-        # Если не ожидаем вишлист, передаем обработку дальше
-        await handle_message(update, context)
+        
+        conn.commit()
+        context.user_data['awaiting_wishlist'] = False
+        await update.message.reply_text(
+            "✅ Ваш вишлист сохранен!",
+            reply_markup=get_santa_menu()
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении вишлиста: {e}")
+        conn.rollback()
+        await update.message.reply_text("❌ Произошла ошибка при сохранении.")
+    finally:
+        conn.close()
 
 
 async def handle_santa_assignment(update: Update, context: ContextTypes.DEFAULT_TYPE):

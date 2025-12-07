@@ -2,9 +2,12 @@
 from bot.database.models import init_db, User, Schedule, ShiftType, SessionLocal, engine, Base, HybridAssignmentTask
 from bot.config import BotConfig
 from bot.database.user_operations import get_user_by_iiko_id, get_user_by_telegram_id, get_user_by_username, create_user
-from .checklist_migrations import init_checklist_database
+from .checklist_migrations import init_checklist_database, remove_point_from_checklist
 import sqlite3
 from datetime import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 def migrate_users_from_config():
     """Миграция пользователей из config.py в БД"""
@@ -390,3 +393,6 @@ def init_database():
     migrate_schedule_table()
     # Создаем таблицу для Санты
     migrate_secret_santa_table()
+    # Удаляем point из чек-листов
+    remove_point_from_checklist()
+  

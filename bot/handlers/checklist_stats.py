@@ -1,6 +1,7 @@
 """Обработчики для управления чек-листами (только для старших и наставников)"""
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler
+from bot.utils.common_handlers import start_cancel_conversation, cancel_conversation
 from bot.utils.auth import require_roles, ROLE_MENTOR, ROLE_SENIOR
 from bot.database.checklist_operations import (
     create_checklist_template, get_checklist_templates, 
@@ -339,12 +340,6 @@ def get_checklist_management_handler():
             MessageHandler(filters.Regex("^⚙️ Управление чек-листами$"), checklist_management_start)
         ],
         states={
-            MANAGEMENT_MENU: [
-                MessageHandler(filters.Regex("^📋 Управление шаблонами$"), templates_management),
-                MessageHandler(filters.Regex("^🔄 Управление пересменами$"), hybrid_management),
-                MessageHandler(filters.Regex("^📊 Статистика выполнения$"), checklist_stats),
-                MessageHandler(filters.Regex("^⬅️ Назад$"), cancel_management),
-            ],
             STATS_MENU: [
                 MessageHandler(filters.Regex("^👤 Индивидуальная статистика$"), stats_individual),
                 MessageHandler(filters.Regex("^📍 Статистика по точкам$"), stats_point),
@@ -369,9 +364,9 @@ def get_checklist_management_handler():
             # ... остальные состояния для управления шаблонами ...
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_management),
-            CommandHandler("start", cancel_management),
-            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_management),
+            CommandHandler("cancel", cancel_conversation),
+            CommandHandler("start", start_cancel_conversation),
+            MessageHandler(filters.Regex("^❌ Отмена$"), cancel_conversation),
         ],
         allow_reentry=True
     )

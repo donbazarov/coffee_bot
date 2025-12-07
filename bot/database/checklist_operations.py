@@ -8,12 +8,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def create_checklist_template(point: str, day_of_week: int, shift_type: str, task_description: str, order_index: int = 0) -> ChecklistTemplate:
+def create_checklist_template(day_of_week: int, shift_type: str, task_description: str, order_index: int = 0) -> ChecklistTemplate:
     """Создать шаблон задания для чек-листа"""
     db = SessionLocal()
     try:
         template = ChecklistTemplate(
-            point=point,
+            #point=point,
             day_of_week=day_of_week,
             shift_type=shift_type,
             task_description=task_description,
@@ -22,7 +22,7 @@ def create_checklist_template(point: str, day_of_week: int, shift_type: str, tas
         db.add(template)
         db.commit()
         db.refresh(template)
-        logger.info(f"Создан шаблон чек-листа ID {template.id} для {point} {shift_type} день {day_of_week}")
+        logger.info(f"Создан шаблон чек-листа ID {template.id} {shift_type} день {day_of_week}")
         return template
     except Exception as e:
         db.rollback()
@@ -31,15 +31,15 @@ def create_checklist_template(point: str, day_of_week: int, shift_type: str, tas
     finally:
         db.close()
 
-def get_checklist_templates(point: Optional[str] = None, day_of_week: Optional[int] = None, 
+def get_checklist_templates(day_of_week: Optional[int] = None, 
                           shift_type: Optional[str] = None) -> List[ChecklistTemplate]:
     """Получить шаблоны чек-листов с фильтрами"""
     db = SessionLocal()
     try:
         query = db.query(ChecklistTemplate).filter(ChecklistTemplate.is_active == 1)
         
-        if point:
-            query = query.filter(ChecklistTemplate.point == point)
+        #if point:
+            #query = query.filter(ChecklistTemplate.point == point)
         if day_of_week is not None:
             query = query.filter(ChecklistTemplate.day_of_week == day_of_week)
         if shift_type:
@@ -166,7 +166,7 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
         
         if shift_type == 'hybrid':
             # Для пересмена получаем назначенные ему задачи
-            assignment = get_hybrid_assignment(point, day_of_week)
+            assignment = get_hybrid_assignment(day_of_week)
             if not assignment:
                 return []
             
@@ -176,8 +176,8 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
             
         elif shift_type == 'morning':
             # Для утра - исключаем задачи, переданные пересмену
-            morning_tasks = get_checklist_templates(point=point, day_of_week=day_of_week, shift_type='morning')
-            assignment = get_hybrid_assignment(point, day_of_week)
+            morning_tasks = get_checklist_templates(day_of_week=day_of_week, shift_type='morning')
+            assignment = get_hybrid_assignment(day_of_week)
             if assignment:
                 hybrid_morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
                 hybrid_task_ids = [t.id for t in hybrid_morning_tasks]
@@ -186,8 +186,8 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
             
         elif shift_type == 'evening':
             # Для вечера - аналогично утру
-            evening_tasks = get_checklist_templates(point=point, day_of_week=day_of_week, shift_type='evening')
-            assignment = get_hybrid_assignment(point, day_of_week)
+            evening_tasks = get_checklist_templates(day_of_week=day_of_week, shift_type='evening')
+            assignment = get_hybrid_assignment(day_of_week)
             if assignment:
                 hybrid_evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
                 hybrid_task_ids = [t.id for t in hybrid_evening_tasks]
@@ -247,25 +247,20 @@ def mark_task_completed(user_id: int, task_id: int, shift_date: date, shift_type
     finally:
         db.close()
 
-def get_hybrid_assignments(point: Optional[str] = None) -> List[HybridShiftAssignment]:
-    """Получить распределения задач для пересменов с загрузкой связанных задач"""
+def get_hybrid_assignments() -> List[HybridShiftAssignment]:
+    """Получить все распределения задач для пересменов"""
     db = SessionLocal()
     try:
         from sqlalchemy.orm import joinedload
         
-        query = db.query(HybridShiftAssignment).options(
+        return db.query(HybridShiftAssignment).options(
             joinedload(HybridShiftAssignment.assigned_tasks).joinedload(HybridAssignmentTask.task)
-        )
-        
-        if point:
-            query = query.filter(HybridShiftAssignment.point == point)
-        
-        return query.order_by(HybridShiftAssignment.point, HybridShiftAssignment.day_of_week).all()
+        ).order_by(HybridShiftAssignment.day_of_week).all()
     finally:
         db.close()
 
-def get_hybrid_assignment(point: str, day_of_week: int) -> Optional[HybridShiftAssignment]:
-    """Получить распределение для конкретной точки и дня с загрузкой связанных задач"""
+def get_hybrid_assignment(day_of_week: int) -> Optional[HybridShiftAssignment]:
+    """Получить распределение для конкретного дня"""
     db = SessionLocal()
     try:
         from sqlalchemy.orm import joinedload
@@ -273,10 +268,7 @@ def get_hybrid_assignment(point: str, day_of_week: int) -> Optional[HybridShiftA
         return db.query(HybridShiftAssignment).options(
             joinedload(HybridShiftAssignment.assigned_tasks).joinedload(HybridAssignmentTask.task)
         ).filter(
-            and_(
-                HybridShiftAssignment.point == point,
-                HybridShiftAssignment.day_of_week == day_of_week
-            )
+            HybridShiftAssignment.day_of_week == day_of_week
         ).first()
     finally:
         db.close()
@@ -299,14 +291,14 @@ def delete_hybrid_assignment(assignment_id: int) -> bool:
     finally:
         db.close()
         
-def create_hybrid_assignment_with_tasks(point: str, day_of_week: int, morning_task_ids: List[int], evening_task_ids: List[int]) -> HybridShiftAssignment:
+def create_hybrid_assignment_with_tasks(day_of_week: int, morning_task_ids: List[int], evening_task_ids: List[int]) -> HybridShiftAssignment:
     """Создать или обновить распределение задач для пересмена с поддержкой нескольких задач"""
     db = SessionLocal()
     try:
         # Проверяем, существует ли уже распределение для этой точки и дня
         existing = db.query(HybridShiftAssignment).filter(
             and_(
-                HybridShiftAssignment.point == point,
+                #HybridShiftAssignment.point == point,
                 HybridShiftAssignment.day_of_week == day_of_week
             )
         ).first()
@@ -320,7 +312,7 @@ def create_hybrid_assignment_with_tasks(point: str, day_of_week: int, morning_ta
         else:
             # Создаем новое распределение
             assignment = HybridShiftAssignment(
-                point=point,
+                #point=point,
                 day_of_week=day_of_week
             )
             db.add(assignment)
@@ -347,7 +339,7 @@ def create_hybrid_assignment_with_tasks(point: str, day_of_week: int, morning_ta
         
         db.commit()
         db.refresh(assignment)
-        logger.info(f"Создано/обновлено распределение для {point} день {day_of_week} с {len(morning_task_ids)} утренними и {len(evening_task_ids)} вечерними задачами")
+        logger.info(f"Создано/обновлено распределение для {day_of_week} с {len(morning_task_ids)} утренними и {len(evening_task_ids)} вечерними задачами")
         return assignment
     except Exception as e:
         db.rollback()

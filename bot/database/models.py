@@ -81,7 +81,7 @@ class ChecklistTemplate(Base):
     __tablename__ = 'checklist_templates'
     
     id = Column(Integer, primary_key=True, autoincrement=True)
-    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
+    #point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ' - убрали из-за объединения списка чек-листов
     day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
     shift_type = Column(String(20), nullable=False)  # 'morning', 'evening' (для пересмена не создаем отдельные)
     task_description = Column(String(500), nullable=False)
@@ -89,6 +89,17 @@ class ChecklistTemplate(Base):
     is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class HybridShiftAssignment(Base):
+    """Распределение задач для пересменов"""
+    __tablename__ = 'hybrid_shift_assignments'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связи
+    assigned_tasks = relationship("HybridAssignmentTask", back_populates="assignment")
 
 class HybridAssignmentTask(Base):
     """Связь между распределением и задачами (многие ко многим)"""
@@ -103,22 +114,6 @@ class HybridAssignmentTask(Base):
     # Связи
     assignment = relationship("HybridShiftAssignment", back_populates="assigned_tasks")
     task = relationship("ChecklistTemplate")
-    
-    __table_args__ = (
-        Index('idx_assignment_task', 'assignment_id', 'task_id'),
-    )
-
-class HybridShiftAssignment(Base):
-    """Распределение задач для пересменов"""
-    __tablename__ = 'hybrid_shift_assignments'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
-    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Убираем старые связи и добавляем новую
-    assigned_tasks = relationship("HybridAssignmentTask", back_populates="assignment", cascade="all, delete-orphan")
 
 class ChecklistLog(Base):
     """Лог выполнения чек-листов"""
