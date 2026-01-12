@@ -7,3 +7,4 @@ backup/
 venv/
 credentials.json
 credentials.json
+bot/config.py
