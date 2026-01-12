@@ -7,3 +7,9 @@ backup/
 venv/
 credentials.json
 credentials.json
+*.patch
+.patch
+.pyc
+.db
+.log
+coffee_quality.db
