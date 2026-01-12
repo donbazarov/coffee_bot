@@ -49,6 +49,14 @@ def get_worksheet_by_month(client, month_name: str):
         
         # Пробуем найти лист с точным названием
         try:
+            uppercase_month_name = month_name.upper()
+            worksheet = spreadsheet.worksheet(uppercase_month_name)
+            logger.info(f"Найден лист с точным названием: {uppercase_month_name}")
+            return worksheet
+        except gspread.exceptions.WorksheetNotFound:
+            logger.warning(f"Лист с названием '{uppercase_month_name}' не найден, пробуем исходный формат...")
+        
+        try:
             worksheet = spreadsheet.worksheet(month_name)
             logger.info(f"Найден лист с точным названием: {month_name}")
             return worksheet
@@ -333,15 +341,16 @@ def get_current_month_name() -> str:
 
 def get_next_month_name() -> str:
     """Получить название следующего месяца в формате таблицы"""
-    next_month = datetime.now() + timedelta(days=32)
-    next_month = next_month.replace(day=1)
+    now = datetime.now()
+    next_month_number = 1 if now.month == 12 else now.month + 1
+    next_year = now.year + (1 if now.month == 12 else 0)
     month_names = {
         1: 'Январь', 2: 'Февраль', 3: 'Март', 4: 'Апрель',
         5: 'Май', 6: 'Июнь', 7: 'Июль', 8: 'Август',
         9: 'Сентябрь', 10: 'Октябрь', 11: 'Ноябрь', 12: 'Декабрь'
     }
-    year = next_month.year % 100
-    return f"{month_names[next_month.month]} {year}"
+    year = next_year % 100
+    return f"{month_names[next_month_number]} {year}"
 
 def get_sheet_client():
     """Получить клиент для работы с Google Sheets (с правами записи)"""

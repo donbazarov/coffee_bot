@@ -17,6 +17,20 @@ logger = logging.getLogger(__name__)
 # Состояния для чек-листов
 (CHECKLIST_MENU, CHECKLIST_VIEW, CHECKLIST_TASK_ACTION) = range(3)
 
+BUTTON_TASK_PREFIX_LENGTH = 20
+
+def format_task_button(task_description: str, completed: bool) -> str:
+    """Сформировать текст кнопки для задачи с укороченным описанием."""
+    prefix = task_description[:BUTTON_TASK_PREFIX_LENGTH].rstrip()
+    if len(task_description) > BUTTON_TASK_PREFIX_LENGTH:
+        prefix = f"{prefix}…"
+    status = "✅" if completed else "☐"
+    return f"{status} {prefix}"
+
+def get_task_prefix(task_description: str) -> str:
+    """Получить префикс задачи для сопоставления."""
+    return task_description[:BUTTON_TASK_PREFIX_LENGTH]
+
 async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Главное меню чек-листа"""
     user = update.effective_user
@@ -87,8 +101,7 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Создаем клавиатуру с задачами
     keyboard = []
     for task in tasks:
-        status = "✅" if task.id in completed_tasks else "☐"
-        button_text = f"{status} {task.task_description}"
+        button_text = format_task_button(task.task_description, task.id in completed_tasks)
         keyboard.append([KeyboardButton(button_text)])
     
     keyboard.append([KeyboardButton("🔄 Обновить статус")])
@@ -105,12 +118,18 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     completion_count = len([t for t in tasks if t.id in completed_tasks])
     completion_percent = (completion_count / len(tasks)) * 100 if tasks else 0
     
+    tasks_text = "\n".join(
+        f"{'✅' if task.id in completed_tasks else '☐'} {task.task_description}"
+        for task in tasks
+    )
+    
     await update.message.reply_text(
         f"📝 Чек-лист смены\n\n"
         f"📍 Точка: {shift_info['point']}\n"
         f"🕒 Смена: {shift_type_names.get(shift_info['shift_type'].shift_type, shift_info['shift_type'].shift_type)}\n"
         f"📅 Дата: {shift_info['shift'].shift_date.strftime('%d.%m.%Y')}\n"
         f"📊 Прогресс: {completion_count}/{len(tasks)} ({completion_percent:.0f}%)\n\n"
+        f"Задания:\n{tasks_text}\n\n"
         "Нажмите на задачу чтобы отметить выполнение:",
         reply_markup=reply_markup
     )
@@ -140,12 +159,13 @@ async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Убираем эмодзи и пробел из начала
     task_description = button_text[2:]  # Убираем "☐ " или "✅ "
+    task_prefix = task_description[:BUTTON_TASK_PREFIX_LENGTH]
     
     # Ищем задачу в сохраненном списке
     tasks = context.user_data.get('tasks', [])
     task_to_mark = None
     for task in tasks:
-        if task.task_description == task_description:
+        if get_task_prefix(task.task_description) == task_prefix:
             task_to_mark = task
             break
     
@@ -168,7 +188,9 @@ async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     
     if success:
-        await update.message.reply_text(f"✅ Задача отмечена как выполненная: {task_description}")
+        await update.message.reply_text(
+            f"✅ Задача отмечена как выполненная: {task_to_mark.task_description}"
+        )
         
         # Обновляем клавиатуру
         tasks = get_tasks_for_shift(
@@ -181,8 +203,7 @@ async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         keyboard = []
         for task in tasks:
-            status = "✅" if task.id in completed_tasks else "☐"
-            button_text = f"{status} {task.task_description}"
+            button_text = format_task_button(task.task_description, task.id in completed_tasks)
             keyboard.append([KeyboardButton(button_text)])
         
         keyboard.append([KeyboardButton("🔄 Обновить статус")])

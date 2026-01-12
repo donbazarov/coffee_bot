@@ -151,7 +151,7 @@ class CoffeeBot:
             reply_markup=reply_markup
         )
     
-    async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cancel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /cancel"""
         return await cancel_conversation(update, context)
         

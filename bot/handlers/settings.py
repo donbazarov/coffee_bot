@@ -8,6 +8,7 @@ from bot.database.user_operations import (
 from bot.database.schedule_operations import (
     get_upcoming_shifts_by_iiko_id, get_shifts_by_iiko_id,
     create_shift, update_shift, get_shift_by_id, bulk_create_shifts, delete_shifts_by_date_range,
+    remove_stale_shifts,
     create_shift_type, get_shift_types, update_shift_type, delete_shift_type, get_shift_type_by_id
 )
 from bot.database.checklist_operations import get_hybrid_assignment_tasks
@@ -797,10 +798,10 @@ async def parse_current_month(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text(f"❌ Не удалось получить данные для {month_name}")
             return await schedule_management(update, context)
         
-        # Удаляем старые смены этого месяца
+        # Удаляем только устаревшие смены, сохраняя совпадающие
         first_date = min(s['shift_date'] for s in shifts_data)
         last_date = max(s['shift_date'] for s in shifts_data)
-        delete_shifts_by_date_range(first_date, last_date)
+        remove_stale_shifts(shifts_data, first_date, last_date)
         
         # Создаем новые смены
         created_count = bulk_create_shifts(shifts_data)
@@ -828,10 +829,10 @@ async def parse_next_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"❌ Не удалось получить данные для {month_name}")
             return await schedule_management(update, context)
         
-        # Удаляем старые смены этого месяца
+        # Удаляем только устаревшие смены, сохраняя совпадающие
         first_date = min(s['shift_date'] for s in shifts_data)
         last_date = max(s['shift_date'] for s in shifts_data)
-        delete_shifts_by_date_range(first_date, last_date)
+        remove_stale_shifts(shifts_data, first_date, last_date)
         
         # Создаем новые смены
         created_count = bulk_create_shifts(shifts_data)

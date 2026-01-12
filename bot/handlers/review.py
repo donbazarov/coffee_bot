@@ -4,7 +4,7 @@ from bot.config import BotConfig
 from bot.database.simple_db import save_review
 from bot.database.user_operations import get_users_by_role
 from bot.keyboards.menus import get_main_menu
-from bot.utils.auth import is_mentor
+from bot.utils.auth import is_senior_or_mentor
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 
 # Состояния - расширяем для детальной оценки
@@ -12,18 +12,174 @@ from bot.utils.common_handlers import cancel_conversation, start_cancel_conversa
  ESPRESSO_DRINK_TYPE, ESPRESSO_BALANCE, ESPRESSO_BOUQUET, ESPRESSO_BODY, ESPRESSO_AFTERTASTE, ESPRESSO_COMMENT,
  MILK_DRINK_TYPE, MILK_BALANCE, MILK_BOUQUET, MILK_FOAM, MILK_LATTE_ART, MILK_PHOTO, MILK_COMMENT) = range(16)
 
-# Клавиатуры для оценок 1-5 с кнопкой отмены
+# Клавиатуры для оценок 1-5 с кнопками назад и отмены
+BACK_BUTTON = "⬅️ Назад"
 rating_keyboard = [[str(i)] for i in range(1, 6)]
+rating_keyboard.append([BACK_BUTTON])
 rating_keyboard.append(["❌ Отмена"])
 rating_markup = ReplyKeyboardMarkup(rating_keyboard, resize_keyboard=True)
 
+async def prompt_point_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор точки."""
+    barista_name = context.user_data.get('barista', 'Не выбран')
+    keyboard = [[point] for point in BotConfig.points]
+    keyboard.append([BACK_BUTTON])
+    keyboard.append(["❌ Отмена"])
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"✅ Бариста: {barista_name}\n\nТеперь выберите точку:",
+        reply_markup=reply_markup
+    )
+    return SELECTING_POINT
+
+async def prompt_category_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор категории напитка."""
+    point = context.user_data.get('point', 'Не выбрана')
+    keyboard = [["Эспрессо/Фильтр"], ["Молочный напиток"]]
+    keyboard.append([BACK_BUTTON])
+    keyboard.append(["❌ Отмена"])
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        f"✅ Точка: {point}\n\nВыберите категорию напитка:",
+        reply_markup=reply_markup
+    )
+    return SELECTING_CATEGORY
+
+async def prompt_espresso_drink_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор типа эспрессо/фильтра."""
+    keyboard = [["Эспрессо", "Фильтр", "Альт."], [BACK_BUTTON], ["❌ Отмена"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "Выберите тип напитка:",
+        reply_markup=reply_markup
+    )
+    return ESPRESSO_DRINK_TYPE
+
+async def prompt_espresso_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку баланса эспрессо/фильтра."""
+    drink_type = context.user_data.get('drink_type', '')
+    await update.message.reply_text(
+        f"☕ {drink_type}\n\nОцените баланс вкуса (1-5):\n"
+        "1 - Несбалансированный\n5 - Идеально сбалансированный",
+        reply_markup=rating_markup
+    )
+    return ESPRESSO_BALANCE
+
+async def prompt_espresso_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку букета эспрессо/фильтра."""
+    await update.message.reply_text(
+        "Оцените качество букета (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return ESPRESSO_BOUQUET
+
+async def prompt_espresso_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку тела эспрессо/фильтра."""
+    await update.message.reply_text(
+        "Оцените качество тела напитка (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return ESPRESSO_BODY
+
+async def prompt_espresso_aftertaste(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку послевкусия эспрессо/фильтра."""
+    await update.message.reply_text(
+        "Оцените качество послевкусия (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return ESPRESSO_AFTERTASTE
+
+async def prompt_espresso_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать ввод комментария для эспрессо/фильтра."""
+    cancel_keyboard = [["-"], [BACK_BUTTON], ["❌ Отмена"]]
+    await update.message.reply_text(
+        "Добавьте комментарий (или напишите '-' если комментарий не нужен):",
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+    )
+    return ESPRESSO_COMMENT
+
+async def prompt_milk_drink_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать выбор типа молочного напитка."""
+    keyboard = [["Капучино", "Флэт Уайт"], [BACK_BUTTON], ["❌ Отмена"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    await update.message.reply_text(
+        "Выберите тип молочного напитка:",
+        reply_markup=reply_markup
+    )
+    return MILK_DRINK_TYPE
+
+async def prompt_milk_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку баланса молочного напитка."""
+    drink_type = context.user_data.get('drink_type', '')
+    await update.message.reply_text(
+        f"🥛 {drink_type}\n\nОцените баланс вкуса (1-5):\n"
+        "1 - Несбалансированный\n5 - Идеально сбалансированный",
+        reply_markup=rating_markup
+    )
+    return MILK_BALANCE
+
+async def prompt_milk_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку букета молочного напитка."""
+    await update.message.reply_text(
+        "Оцените качество букета (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return MILK_BOUQUET
+
+async def prompt_milk_foam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку пены молочного напитка."""
+    await update.message.reply_text(
+        "Оцените качество пены (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return MILK_FOAM
+
+async def prompt_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать оценку латте-арта."""
+    await update.message.reply_text(
+        "Оцените латте-арт (1-5):\n"
+        "1 - Низкое качество \n5 - Высокое качество",
+        reply_markup=rating_markup
+    )
+    return MILK_LATTE_ART
+
+async def prompt_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать запрос фото молочного напитка."""
+    cancel_keyboard = [["-"], [BACK_BUTTON], ["❌ Отмена"]]
+    await update.message.reply_text(
+        "Добавьте фото напитка (или отправьте '-' чтобы пропустить):",
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+    )
+    return MILK_PHOTO
+
+async def prompt_milk_comment(update: Update, context: ContextTypes.DEFAULT_TYPE, with_success: bool = False):
+    """Показать ввод комментария для молочного напитка."""
+    cancel_keyboard = [["-"], [BACK_BUTTON], ["❌ Отмена"]]
+    text = "Добавьте комментарий (или напишите '-' если комментарий не нужен):"
+    if with_success:
+        text = "✅ Фото получено!\n\n" + text
+    await update.message.reply_text(
+        text,
+        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
+    )
+    return MILK_COMMENT
+
 async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало оценки напитка"""
-    # Проверяем доступ - только наставники могут оценивать
-    if not is_mentor(update):
+    # Проверяем доступ - наставники и старшие могут оценивать
+    if not is_senior_or_mentor(update):
         await update.message.reply_text(
             "❌ У вас нет доступа к этой функции.\n"
-            "Оценивать напитки могут только наставники."
+            "Оценивать напитки могут только наставники и старшие."
         )
         return ConversationHandler.END
     
@@ -38,6 +194,7 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
         baristas = [barista['name'] for barista in BotConfig.baristas]
     
     keyboard = [[barista] for barista in baristas]
+    keyboard.append([BACK_BUTTON])
     keyboard.append(["❌ Отмена"])
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -54,6 +211,9 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if barista_name == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if barista_name == BACK_BUTTON:
+        return await cancel_conversation(update, context)
+    
     # Получаем бариста из БД
     barista_users = get_users_by_role('barista', active_only=True)
     barista_names = [barista.name for barista in barista_users]
@@ -68,15 +228,7 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data['barista'] = barista_name
     
-    keyboard = [[point] for point in BotConfig.points]
-    keyboard.append(["❌ Отмена"])
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        f"✅ Бариста: {barista_name}\n\nТеперь выберите точку:",
-        reply_markup=reply_markup
-    )
-    return SELECTING_POINT
+    return await prompt_point_selection(update, context)
 
 async def select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор точки"""
@@ -85,21 +237,16 @@ async def select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if point == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if point == BACK_BUTTON:
+        return await start_review(update, context)
+    
     if point not in BotConfig.points:
         await update.message.reply_text("❌ Пожалуйста, выберите точку из списка:")
         return SELECTING_POINT
     
     context.user_data['point'] = point
     
-    keyboard = [["Эспрессо/Фильтр"], ["Молочный напиток"]]
-    keyboard.append(["❌ Отмена"])
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        f"✅ Точка: {point}\n\nВыберите категорию напитка:",
-        reply_markup=reply_markup
-    )
-    return SELECTING_CATEGORY
+    return await prompt_category_selection(update, context)
 
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор категории напитка - переход к детальной оценке"""
@@ -107,6 +254,9 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if category == "❌ Отмена":
         return await cancel_conversation(update, context)
+    
+    if category == BACK_BUTTON:
+        return await prompt_point_selection(update, context)
     
     valid_categories = ["Эспрессо/Фильтр", "Молочный напиток"]
     if category not in valid_categories:
@@ -123,14 +273,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_espresso_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало оценки эспрессо/фильтра"""
-    keyboard = [["Эспрессо", "Фильтр"], ["❌ Отмена"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        "Выберите тип напитка:",
-        reply_markup=reply_markup
-    )
-    return ESPRESSO_DRINK_TYPE
+    return await prompt_espresso_drink_type(update, context)
 
 async def select_espresso_drink_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор типа эспрессо/фильтра"""
@@ -139,19 +282,17 @@ async def select_espresso_drink_type(update: Update, context: ContextTypes.DEFAU
     if drink_type == "❌ Отмена":
         return await cancel_conversation(update, context)
     
-    valid_types = ["Эспрессо", "Фильтр"]
+    if drink_type == BACK_BUTTON:
+        return await prompt_category_selection(update, context)
+    
+    valid_types = ["Эспрессо", "Фильтр", "Альт."]
     if drink_type not in valid_types:
         await update.message.reply_text("❌ Пожалуйста, выберите тип напитка из списка:")
         return ESPRESSO_DRINK_TYPE
     
     context.user_data['drink_type'] = drink_type
     
-    await update.message.reply_text(
-        f"☕ {drink_type}\n\nОцените баланс вкуса (1-5):\n"
-        "1 - Несбалансированный\n5 - Идеально сбалансированный",
-        reply_markup=rating_markup
-    )
-    return ESPRESSO_BALANCE
+    return await prompt_espresso_balance(update, context)
 
 async def select_espresso_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка баланса эспрессо/фильтра"""
@@ -160,18 +301,16 @@ async def select_espresso_balance(update: Update, context: ContextTypes.DEFAULT_
     if balance == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if balance == BACK_BUTTON:
+        return await prompt_espresso_drink_type(update, context)
+    
     if balance not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return ESPRESSO_BALANCE
     
     context.user_data['balance'] = int(balance)
     
-    await update.message.reply_text(
-        "Оцените качество букета (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return ESPRESSO_BOUQUET
+    return await prompt_espresso_bouquet(update, context)
 
 async def select_espresso_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка букета эспрессо/фильтра"""
@@ -180,18 +319,16 @@ async def select_espresso_bouquet(update: Update, context: ContextTypes.DEFAULT_
     if bouquet == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if bouquet == BACK_BUTTON:
+        return await prompt_espresso_balance(update, context)
+    
     if bouquet not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return ESPRESSO_BOUQUET
     
     context.user_data['bouquet'] = int(bouquet)
     
-    await update.message.reply_text(
-        "Оцените качество тела напитка (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return ESPRESSO_BODY
+    return await prompt_espresso_body(update, context)
 
 async def select_espresso_body(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка тела эспрессо/фильтра"""
@@ -200,18 +337,16 @@ async def select_espresso_body(update: Update, context: ContextTypes.DEFAULT_TYP
     if body == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if body == BACK_BUTTON:
+        return await prompt_espresso_bouquet(update, context)
+    
     if body not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return ESPRESSO_BODY
     
     context.user_data['body'] = int(body)
     
-    await update.message.reply_text(
-        "Оцените качество послевкусия (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return ESPRESSO_AFTERTASTE
+    return await prompt_espresso_aftertaste(update, context)
 
 async def select_espresso_aftertaste(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка послевкусия эспрессо/фильтра"""
@@ -220,18 +355,16 @@ async def select_espresso_aftertaste(update: Update, context: ContextTypes.DEFAU
     if aftertaste == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if aftertaste == BACK_BUTTON:
+        return await prompt_espresso_body(update, context)
+    
     if aftertaste not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return ESPRESSO_AFTERTASTE
     
     context.user_data['aftertaste'] = int(aftertaste)
     
-    cancel_keyboard = [["-"], ["❌ Отмена"]]
-    await update.message.reply_text(
-        "Добавьте комментарий (или напишите '-' если комментарий не нужен):",
-        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
-    )
-    return ESPRESSO_COMMENT
+    return await prompt_espresso_comment(update, context)
 
 async def select_espresso_comment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Комментарий для эспрессо/фильтра"""
@@ -239,6 +372,9 @@ async def select_espresso_comment(update: Update, context: ContextTypes.DEFAULT_
     
     if comment == "❌ Отмена":
         return await cancel_conversation(update, context)
+    
+    if comment == BACK_BUTTON:
+        return await prompt_espresso_aftertaste(update, context)
     
     context.user_data['comment'] = comment
     
@@ -248,14 +384,7 @@ async def select_espresso_comment(update: Update, context: ContextTypes.DEFAULT_
 
 async def start_milk_evaluation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начало оценки молочного напитка"""
-    keyboard = [["Капучино", "Флэт Уайт"], ["❌ Отмена"]]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    
-    await update.message.reply_text(
-        "Выберите тип молочного напитка:",
-        reply_markup=reply_markup
-    )
-    return MILK_DRINK_TYPE
+    return await prompt_milk_drink_type(update, context)
 
 async def select_milk_drink_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор типа молочного напитка"""
@@ -264,6 +393,9 @@ async def select_milk_drink_type(update: Update, context: ContextTypes.DEFAULT_T
     if drink_type == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if drink_type == BACK_BUTTON:
+        return await prompt_category_selection(update, context)
+    
     valid_types = ["Капучино", "Флэт Уайт"]
     if drink_type not in valid_types:
         await update.message.reply_text("❌ Пожалуйста, выберите тип напитка из списка:")
@@ -271,12 +403,7 @@ async def select_milk_drink_type(update: Update, context: ContextTypes.DEFAULT_T
     
     context.user_data['drink_type'] = drink_type
     
-    await update.message.reply_text(
-        f"🥛 {drink_type}\n\nОцените баланс вкуса (1-5):\n"
-        "1 - Несбалансированный\n5 - Идеально сбалансированный",
-        reply_markup=rating_markup
-    )
-    return MILK_BALANCE
+    return await prompt_milk_balance(update, context)
 
 async def select_milk_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка баланса молочного напитка"""
@@ -285,18 +412,16 @@ async def select_milk_balance(update: Update, context: ContextTypes.DEFAULT_TYPE
     if balance == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if balance == BACK_BUTTON:
+        return await prompt_milk_drink_type(update, context)
+    
     if balance not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return MILK_BALANCE
     
     context.user_data['balance'] = int(balance)
     
-    await update.message.reply_text(
-        "Оцените качество букета (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return MILK_BOUQUET
+    return await prompt_milk_bouquet(update, context)
 
 async def select_milk_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка букета молочного напитка"""
@@ -305,18 +430,16 @@ async def select_milk_bouquet(update: Update, context: ContextTypes.DEFAULT_TYPE
     if bouquet == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if bouquet == BACK_BUTTON:
+        return await prompt_milk_balance(update, context)
+    
     if bouquet not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return MILK_BOUQUET
     
     context.user_data['bouquet'] = int(bouquet)
     
-    await update.message.reply_text(
-        "Оцените качество пены (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return MILK_FOAM
+    return await prompt_milk_foam(update, context)
 
 async def select_milk_foam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка пены молочного напитка"""
@@ -325,18 +448,16 @@ async def select_milk_foam(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if foam == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if foam == BACK_BUTTON:
+        return await prompt_milk_bouquet(update, context)
+    
     if foam not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return MILK_FOAM
     
     context.user_data['foam'] = int(foam)
     
-    await update.message.reply_text(
-        "Оцените латте-арт (1-5):\n"
-        "1 - Низкое качество \n5 - Высокое качество",
-        reply_markup=rating_markup
-    )
-    return MILK_LATTE_ART
+    return await prompt_milk_latte_art(update, context)
 
 async def select_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Оценка латте-арта"""
@@ -345,32 +466,28 @@ async def select_milk_latte_art(update: Update, context: ContextTypes.DEFAULT_TY
     if latte_art == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if latte_art == BACK_BUTTON:
+        return await prompt_milk_foam(update, context)
+    
     if latte_art not in ['1', '2', '3', '4', '5']:
         await update.message.reply_text("❌ Пожалуйста, выберите оценку от 1 до 5:")
         return MILK_LATTE_ART
     
     context.user_data['latte_art'] = int(latte_art)
     
-    cancel_keyboard = [["-"], ["❌ Отмена"]]
-    await update.message.reply_text(
-        "Добавьте фото напитка (или отправьте '-' чтобы пропустить):",
-        reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
-    )
-    return MILK_PHOTO
+    return await prompt_milk_photo(update, context)
 
 async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка фото молочного напитка через Telegram file_id"""
     if update.message.text == "❌ Отмена":
         return await cancel_conversation(update, context)
     
+    if update.message.text == BACK_BUTTON:
+        return await prompt_milk_latte_art(update, context)
+    
     if update.message.text == "-":
         context.user_data['photo_file_id'] = None
-        cancel_keyboard = [["-"], ["❌ Отмена"]]
-        await update.message.reply_text(
-            "Добавьте комментарий (или напишите '-' если комментарий не нужен):",
-            reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
-        )
-        return MILK_COMMENT
+        return await prompt_milk_comment(update, context)
     elif update.message.photo:
         try:
             # Получаем file_id самого большого фото (последний элемент в списке)
@@ -379,15 +496,10 @@ async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Сохраняем file_id
             context.user_data['photo_file_id'] = photo_file_id
             
-            cancel_keyboard = [["-"], ["❌ Отмена"]]
-            await update.message.reply_text(
-                "✅ Фото получено!\n\nДобавьте комментарий (или напишите '-' если комментарий не нужен):",
-                reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
-            )
-            return MILK_COMMENT
+            return await prompt_milk_comment(update, context, with_success=True)
             
         except Exception as e:
-            cancel_keyboard = [["-"], ["❌ Отмена"]]
+            cancel_keyboard = [["-"], [BACK_BUTTON], ["❌ Отмена"]]
             await update.message.reply_text(
                 f"❌ Ошибка при обработке фото: {str(e)}\n\n"
                 "Попробуйте отправить фото еще раз или отправьте '-' чтобы пропустить:",
@@ -395,7 +507,7 @@ async def select_milk_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return MILK_PHOTO
     else:
-        cancel_keyboard = [["-"], ["❌ Отмена"]]
+        cancel_keyboard = [["-"], [BACK_BUTTON], ["❌ Отмена"]]
         await update.message.reply_text(
             "❌ Пожалуйста, отправьте фото или '-' чтобы пропустить:",
             reply_markup=ReplyKeyboardMarkup(cancel_keyboard, resize_keyboard=True)
@@ -408,6 +520,9 @@ async def select_milk_comment(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if comment == "❌ Отмена":
         return await cancel_conversation(update, context)
+    
+    if comment == BACK_BUTTON:
+        return await prompt_milk_photo(update, context)
     
     context.user_data['comment'] = comment
     

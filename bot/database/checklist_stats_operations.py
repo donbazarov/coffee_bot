@@ -211,12 +211,10 @@ def get_task_stats(start_date: date, end_date: date, task_id: Optional[int] = No
         results = []
         
         for task in tasks:
-            # Для каждой точки, для которой есть это задание
-            points = [task.point] if point else ['ДЕ', 'УЯ']
+            # Для каждой точки, для которой нужно вывести статистику
+            points = [point] if point else ['ДЕ', 'УЯ']
             
             for point_name in points:
-                if task.point != point_name:
-                    continue
                     
                 # Находим все смены, где это задание должно было быть
                 total_shifts_with_task = 0
@@ -300,7 +298,7 @@ def get_detailed_log(target_date: date, point: str) -> List[Dict]:
             return []
         
         # Собираем все задачи для всех смен этого дня
-        all_tasks = set()
+        all_tasks = {}
         for shift in shifts:
             shift_type_obj = shift.shift_type_obj
             if not shift_type_obj:
@@ -316,7 +314,8 @@ def get_detailed_log(target_date: date, point: str) -> List[Dict]:
                 shift_type_obj.shift_type,
                 point
             )
-            all_tasks.update(tasks)
+            for task in tasks:
+                all_tasks[task.id] = task
         
         # Получаем информацию о выполнении задач
         completed_tasks = db.query(ChecklistLog).filter(
@@ -338,7 +337,7 @@ def get_detailed_log(target_date: date, point: str) -> List[Dict]:
         
         # Формируем результат
         results = []
-        for task in all_tasks:
+        for task in all_tasks.values():
             task_completions = completion_info.get(task.id, [])
             completed = len(task_completions) > 0
             

@@ -99,7 +99,6 @@ def get_current_shift_for_user(user_id: int) -> Optional[Dict]:
     try:
         now = datetime.now()
         today = now.date()
-        current_time = now.time()
         
         # Получаем пользователя
         user = db.query(User).filter(User.id == user_id).first()
@@ -119,15 +118,19 @@ def get_current_shift_for_user(user_id: int) -> Optional[Dict]:
             if not shift_type:
                 continue
             
-            # Расширяем временное окно на +-1 час
             start_time = shift_type.start_time
             end_time = shift_type.end_time
             
-            # Создаем расширенные временные окна
-            start_window = (datetime.combine(today, start_time) - timedelta(hours=1)).time()
-            end_window = (datetime.combine(today, end_time) + timedelta(hours=1)).time()
+            start_dt = datetime.combine(today, start_time)
+            end_dt = datetime.combine(today, end_time)
             
-            if start_window <= current_time <= end_window:
+            if end_dt <= start_dt:
+                end_dt += timedelta(days=1)
+            
+            start_window = start_dt - timedelta(hours=1)
+            end_window = end_dt + timedelta(hours=1)
+            
+            if start_window <= now <= end_window:
                 return {
                     'shift': shift,
                     'shift_type': shift_type,
