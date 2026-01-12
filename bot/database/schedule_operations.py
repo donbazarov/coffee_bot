@@ -257,6 +257,41 @@ def delete_shifts_by_date_range(start_date: date, end_date: date) -> int:
     finally:
         db.close()
 
+def remove_stale_shifts(new_shifts: List[Dict], start_date: date, end_date: date) -> int:
+    """Удалить смены, отсутствующие в новом наборе данных (только источник sheets)."""
+    db = SessionLocal()
+    try:
+        new_keys = {
+            (shift['shift_date'], str(shift['iiko_id']), shift['shift_type_id'])
+            for shift in new_shifts
+        }
+        deleted_count = 0
+        existing_shifts = db.query(Schedule).filter(
+            and_(
+                Schedule.shift_date >= start_date,
+                Schedule.shift_date <= end_date
+            )
+        ).all()
+        
+        for shift in existing_shifts:
+            key = (shift.shift_date, str(shift.iiko_id), shift.shift_type_id)
+            if key in new_keys:
+                continue
+            if shift.source not in (None, 'sheets'):
+                continue
+            db.delete(shift)
+            deleted_count += 1
+        
+        db.commit()
+        logger.info(f"Удалено {deleted_count} устаревших смен в диапазоне {start_date} - {end_date}")
+        return deleted_count
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при удалении устаревших смен: {e}")
+        raise
+    finally:
+        db.close()
+
 def get_all_shifts_for_user_in_range(iiko_id: str, start_date: date, end_date: date) -> List[Schedule]:
     """Получить все смены пользователя в диапазоне дат"""
     return get_shifts_by_iiko_id(iiko_id, start_date=start_date, end_date=end_date)
