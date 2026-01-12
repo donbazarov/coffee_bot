@@ -13,3 +13,4 @@ credentials.json
 .db
 .log
 coffee_quality.db
+bot/config.py
