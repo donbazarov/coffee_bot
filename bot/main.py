@@ -10,13 +10,12 @@ from bot.handlers.review import get_review_conversation_handler
 from bot.handlers.stats import stats_command, get_stats_handlers
 from bot.handlers.settings import get_settings_conversation_handler
 from bot.handlers.checklist import get_checklist_conversation_handler
-from bot.handlers.santa_2026 import santa_start_command, santa_clear_command
 from bot.handlers.schedule import get_swap_conversation_handler
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_mentor, is_senior_or_mentor, get_user_role
 from bot.utils.common_handlers import cancel_conversation
 from bot.database.user_operations import get_user_by_username
-from bot.database.schedule_operations import get_upcoming_shifts_by_iiko_id
+from bot.database.schedule_operations import get_upcoming_shifts_by_iiko_id, get_shift_partner
 from datetime import date, timedelta
 
 # Настройка логирования с обработкой ошибок
@@ -63,7 +62,6 @@ class CoffeeBot:
         # Основные команды
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("stats", stats_command))
-        self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         
          # Обработчики статистики
         stats_handlers = get_stats_handlers()
@@ -92,12 +90,27 @@ class CoffeeBot:
         
         # Общий обработчик сообщений
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-        
-        # Обработчик Санты
-        self.application.add_handler(CommandHandler("santastart", santa_start_command))
-        self.application.add_handler(CommandHandler("santaclear", santa_clear_command))
+
+        # Команда отмены должна идти после ConversationHandler'ов
+        self.application.add_handler(CommandHandler("cancel", self.cancel_command))
         
         print("✅ Все обработчики настроены!")
+
+    def _format_partner_line(self, shift, current_iiko_id: str) -> str:
+        """Сформировать строку с напарником для смены."""
+        partner_info = get_shift_partner(
+            shift.shift_date,
+            shift.shift_type_obj.point,
+            shift.shift_type_obj.shift_type,
+            current_iiko_id
+        )
+        if not partner_info:
+            return ""
+
+        partner_name = partner_info["user"].name
+        if partner_info["shift_type"] == "hybrid" and shift.shift_type_obj.shift_type != "hybrid":
+            return f"  🤝 Напарник: {partner_name} (пересмен)\n"
+        return f"  🤝 Напарник: {partner_name}\n"
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Команда /start"""
@@ -139,7 +152,10 @@ class CoffeeBot:
                         date_str = shift.shift_date.strftime("%d.%m")
                         start_str = shift.shift_type_obj.start_time.strftime("%H:%M")
                         end_str = shift.shift_type_obj.end_time.strftime("%H:%M")
-                        greeting += f"• {date_str} ({shift_type_text}) {shift.shift_type_obj.point}: {start_str} - {end_str}\n"
+                        greeting += (
+                            f"• {date_str} ({shift_type_text}) {shift.shift_type_obj.point}: {start_str} - {end_str}\n"
+                            f"{self._format_partner_line(shift, str(db_user.iiko_id))}"
+                        )
                 else:
                     greeting += "\n\n📅 Ближайших смен не найдено"
         else:
@@ -345,21 +361,6 @@ class CoffeeBot:
             # ConversationHandler сам обработает это
             pass
         
-        elif text == "🎅 Тайный Санта":
-            from bot.handlers.santa_2026 import santa_menu
-            await santa_menu(update, context)
-        elif text == "✅ Участвую" or text == "❌ Не участвую":
-            from bot.handlers.santa_2026 import handle_santa_participation
-            await handle_santa_participation(update, context)
-        elif text == "🎁 Чей я Санта":
-            from bot.handlers.santa_2026 import handle_santa_assignment
-            await handle_santa_assignment(update, context)
-        elif text == "📝 Мой вишлист":
-            from bot.handlers.santa_2026 import handle_wishlist_simple
-            await handle_wishlist_simple(update, context)
-        elif context.user_data.get('awaiting_wishlist'):
-            from bot.handlers.santa_2026 import handle_wishlist_update
-            await handle_wishlist_update(update, context)
         elif text == "⬅️ Назад":
             from bot.keyboards.menus import get_other_menu
             await update.message.reply_text("📋 Дополнительные функции:", reply_markup=get_other_menu())
@@ -430,7 +431,9 @@ class CoffeeBot:
         
             message += f"• {date_str} ({shift_type_text})\n"
             message += f"  🏪 {shift.shift_type_obj.point}\n"
-            message += f"  ⏰ {start_str} - {end_str}\n\n"
+            message += f"  ⏰ {start_str} - {end_str}\n"
+            message += self._format_partner_line(shift, str(db_user.iiko_id))
+            message += "\n"
     
         await update.message.reply_text(message)
     

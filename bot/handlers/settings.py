@@ -12,13 +12,14 @@ from bot.database.schedule_operations import (
     create_shift_type, get_shift_types, update_shift_type, delete_shift_type, get_shift_type_by_id
 )
 from bot.database.checklist_operations import get_hybrid_assignment_tasks
-from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet
+from bot.utils.google_sheets import get_current_month_name, get_next_month_name, parse_schedule_from_sheet, parse_month_name
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
 from bot.utils.emulation import is_emulation_mode, stop_emulation, start_emulation, get_emulated_user
 from bot.keyboards.menus import get_main_menu
 import sqlite3
 import os
 from datetime import datetime, date, timedelta
+import calendar
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
  DELETING_USER_CONFIRM, CLEARING_REVIEWS,
  # Состояния для расписания
  SCHEDULE_MENU, PARSING_MONTH, SELECTING_EMPLOYEE_FOR_SHIFTS, VIEWING_SHIFTS,
+ MANUAL_PARSING_MONTH, MANUAL_PARSING_START_DAY, MANUAL_PARSING_END_DAY,
  ADDING_SHIFT_DATE, ADDING_SHIFT_IIKO_ID, ADDING_SHIFT_POINT, ADDING_SHIFT_TYPE,
  ADDING_SHIFT_START, ADDING_SHIFT_END, EDITING_SHIFT_ID, EDITING_SHIFT_FIELD,
  EDITING_SHIFT_MENU, EDITING_SHIFT_DATE, EDITING_SHIFT_IIKO_ID, 
@@ -48,7 +50,7 @@ logger = logging.getLogger(__name__)
  CHECKLIST_STATS_MENU, CHECKLIST_STATS_INDIVIDUAL, CHECKLIST_STATS_POINT, CHECKLIST_STATS_TASK,
  CHECKLIST_STATS_DETAILED_LOG, CHECKLIST_STATS_DETAILED_LOG_POINT,
  CHECKLIST_STATS_INDIVIDUAL_PERIOD, CHECKLIST_STATS_POINT_PERIOD,
- CHECKLIST_STATS_TASK_PERIOD, CHECKLIST_STATS_CUSTOM_PERIOD) = range(69)
+ CHECKLIST_STATS_TASK_PERIOD, CHECKLIST_STATS_CUSTOM_PERIOD) = range(72)
 
 @require_roles([ROLE_MENTOR, ROLE_SENIOR])
 async def settings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -772,6 +774,7 @@ async def schedule_management(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard = [
         [KeyboardButton("🔄 Парсить текущий месяц")],
         [KeyboardButton("📅 Парсить следующий месяц")],
+        [KeyboardButton("📝 Ручной парсинг")],
         [KeyboardButton("👥 Смены по сотрудникам")],
         [KeyboardButton("➕ Назначить смену вручную")],
         [KeyboardButton("✏️ Изменить смену по ID")],
@@ -848,6 +851,117 @@ async def parse_next_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return await schedule_management(update, context)
 
+async def manual_parsing_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Запрос месяца для ручного парсинга"""
+    await update.message.reply_text(
+        "📝 Ручной парсинг\n\n"
+        "Введите месяц и год в формате МЕСЯЦ ГГ (например: Март 25):"
+    )
+    return MANUAL_PARSING_MONTH
+
+async def manual_parsing_month(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение месяца для ручного парсинга"""
+    month_name = update.message.text.strip()
+    try:
+        month, year = parse_month_name(month_name)
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Неверный формат месяца. Пример: Март 25."
+        )
+        return MANUAL_PARSING_MONTH
+
+    context.user_data['manual_parse_month_name'] = month_name
+    context.user_data['manual_parse_month'] = month
+    context.user_data['manual_parse_year'] = year
+
+    await update.message.reply_text(
+        "Введите дату начала диапазона (число месяца):"
+    )
+    return MANUAL_PARSING_START_DAY
+
+async def manual_parsing_start_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение даты начала диапазона для ручного парсинга"""
+    try:
+        start_day = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Введите число месяца, например 5.")
+        return MANUAL_PARSING_START_DAY
+
+    month = context.user_data.get('manual_parse_month')
+    year = context.user_data.get('manual_parse_year')
+    last_day = calendar.monthrange(year, month)[1]
+
+    if not (1 <= start_day <= last_day):
+        await update.message.reply_text(f"❌ День должен быть от 1 до {last_day}.")
+        return MANUAL_PARSING_START_DAY
+
+    context.user_data['manual_parse_start_day'] = start_day
+    await update.message.reply_text("Введите дату окончания диапазона (число месяца):")
+    return MANUAL_PARSING_END_DAY
+
+async def manual_parsing_end_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получение даты окончания диапазона для ручного парсинга"""
+    try:
+        end_day = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text("❌ Введите число месяца, например 25.")
+        return MANUAL_PARSING_END_DAY
+
+    month = context.user_data.get('manual_parse_month')
+    year = context.user_data.get('manual_parse_year')
+    start_day = context.user_data.get('manual_parse_start_day')
+    month_name = context.user_data.get('manual_parse_month_name')
+    last_day = calendar.monthrange(year, month)[1]
+
+    if not (1 <= end_day <= last_day):
+        await update.message.reply_text(f"❌ День должен быть от 1 до {last_day}.")
+        return MANUAL_PARSING_END_DAY
+
+    if end_day < start_day:
+        await update.message.reply_text("❌ Дата окончания не может быть раньше даты начала.")
+        return MANUAL_PARSING_END_DAY
+
+    start_date = date(year, month, start_day)
+    end_date = date(year, month, end_day)
+
+    await update.message.reply_text("🔄 Начинаю ручной парсинг...")
+
+    try:
+        shifts_data = parse_schedule_from_sheet(
+            month_name,
+            start_date=start_date,
+            end_date=end_date
+        )
+
+        if not shifts_data:
+            await update.message.reply_text(
+                f"❌ Не удалось получить смены за период {start_day}-{end_day}."
+            )
+            context.user_data.pop('manual_parse_month_name', None)
+            context.user_data.pop('manual_parse_month', None)
+            context.user_data.pop('manual_parse_year', None)
+            context.user_data.pop('manual_parse_start_day', None)
+            return await schedule_management(update, context)
+
+        remove_stale_shifts(shifts_data, start_date, end_date)
+        created_count = bulk_create_shifts(shifts_data)
+
+        await update.message.reply_text(
+            f"✅ Парсинг завершен!\n"
+            f"Месяц: {month_name}\n"
+            f"Диапазон: {start_day}-{end_day}\n"
+            f"Создано/обновлено смен: {created_count}"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при ручном парсинге: {e}")
+        await update.message.reply_text(f"❌ Ошибка при парсинге: {str(e)}")
+
+    context.user_data.pop('manual_parse_month_name', None)
+    context.user_data.pop('manual_parse_month', None)
+    context.user_data.pop('manual_parse_year', None)
+    context.user_data.pop('manual_parse_start_day', None)
+    return await schedule_management(update, context)
+
 async def select_employee_for_shifts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Выбор сотрудника для просмотра смен"""
     users = get_all_users(active_only=True)
@@ -887,6 +1001,7 @@ async def handle_employee_shifts_callback(update: Update, context: ContextTypes.
             reply_markup=ReplyKeyboardMarkup([
                 [KeyboardButton("🔄 Парсить текущий месяц")],
                 [KeyboardButton("📅 Парсить следующий месяц")],
+                [KeyboardButton("📝 Ручной парсинг")],
                 [KeyboardButton("👥 Смены по сотрудникам")],
                 [KeyboardButton("➕ Назначить смену вручную")],
                 [KeyboardButton("✏️ Изменить смену по ID")],
@@ -936,6 +1051,7 @@ async def handle_employee_shifts_callback(update: Update, context: ContextTypes.
             reply_markup=ReplyKeyboardMarkup([
                 [KeyboardButton("🔄 Парсить текущий месяц")],
                 [KeyboardButton("📅 Парсить следующий месяц")],
+                [KeyboardButton("📝 Ручной парсинг")],
                 [KeyboardButton("👥 Смены по сотрудникам")],
                 [KeyboardButton("➕ Назначить смену вручную")],
                 [KeyboardButton("✏️ Изменить смену по ID")],
@@ -952,6 +1068,7 @@ async def schedule_management_callback(context: ContextTypes.DEFAULT_TYPE, chat_
         reply_markup=ReplyKeyboardMarkup([
             [KeyboardButton("🔄 Парсить текущий месяц")],
             [KeyboardButton("📅 Парсить следующий месяц")],
+            [KeyboardButton("📝 Ручной парсинг")],
             [KeyboardButton("👥 Смены по сотрудникам")],
             [KeyboardButton("➕ Назначить смену вручную")],
             [KeyboardButton("✏️ Изменить смену по ID")],
@@ -3302,6 +3419,7 @@ async def send_emulation_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         keyboard = [
             [KeyboardButton("🔄 Замены от лица сотрудника")],
+            [KeyboardButton("📝 Чек-лист от лица сотрудника")],
             [KeyboardButton("🔚 Завершить эмуляцию")],
             [KeyboardButton("⬅️ Назад")]
         ]
@@ -3422,6 +3540,7 @@ async def start_emulated_swap(update: Update, context: ContextTypes.DEFAULT_TYPE
     from bot.handlers.schedule import swap_menu
     return await swap_menu(update, context)
 
+
 def get_settings_conversation_handler():
     """Возвращает ConversationHandler для настроек"""
     return ConversationHandler(
@@ -3450,6 +3569,7 @@ def get_settings_conversation_handler():
             SCHEDULE_MENU: [
                 MessageHandler(filters.Regex("^🔄 Парсить текущий месяц$"), parse_current_month),
                 MessageHandler(filters.Regex("^📅 Парсить следующий месяц$"), parse_next_month),
+                MessageHandler(filters.Regex("^📝 Ручной парсинг$"), manual_parsing_start),
                 MessageHandler(filters.Regex("^👥 Смены по сотрудникам$"), select_employee_for_shifts),
                 MessageHandler(filters.Regex("^➕ Назначить смену вручную$"), start_adding_shift),
                 MessageHandler(filters.Regex("^✏️ Изменить смену по ID$"), start_editing_shift),
@@ -3459,6 +3579,9 @@ def get_settings_conversation_handler():
             SELECTING_EMPLOYEE_FOR_SHIFTS: [
                 CallbackQueryHandler(handle_employee_shifts_callback, pattern="^(view_shifts_|cancel_schedule)"),
             ],
+            MANUAL_PARSING_MONTH: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_parsing_month)],
+            MANUAL_PARSING_START_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_parsing_start_day)],
+            MANUAL_PARSING_END_DAY: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_parsing_end_day)],
             ADDING_SHIFT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_date)],
             ADDING_SHIFT_IIKO_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_iiko_id)],
             ADDING_SHIFT_POINT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_shift_point)],

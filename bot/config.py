@@ -4,9 +4,9 @@ from dataclasses import dataclass
 @dataclass
 class BotConfig:
     # MAIN TOKEN
-    token: str = "8531765653:AAEWDaM2crEA1ZMLoNFRLFxC-48CAxwMKOE"
+    #token: str = "8531765653:AAEWDaM2crEA1ZMLoNFRLFxC-48CAxwMKOE"
     # TEST TOKEN
-    #token: str = "8239602085:AAEGTNVaNh9OX8Em4PxNsdZn3fii1QRLqfk"
+    token: str = "8239602085:AAEGTNVaNh9OX8Em4PxNsdZn3fii1QRLqfk"
     
     # ИСПОЛЬЗУЕМ SQLITE вместо PostgreSQL
     database_url: str = "sqlite:///coffee_quality.db"

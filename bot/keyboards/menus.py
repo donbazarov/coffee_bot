@@ -20,7 +20,6 @@ def get_qc_menu():
 def get_other_menu():
     """Меню другого"""
     keyboard = [
-        [KeyboardButton("🎅 Тайный Санта")],
         [KeyboardButton("⬅️ Назад")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)

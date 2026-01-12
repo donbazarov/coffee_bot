@@ -250,6 +250,43 @@ def mark_task_completed(user_id: int, task_id: int, shift_date: date, shift_type
     finally:
         db.close()
 
+def toggle_task_completion(user_id: int, task_id: int, shift_date: date, shift_type: str, point: str) -> Optional[bool]:
+    """Переключить выполнение задачи. Возвращает True если выполнено, False если снято."""
+    db = SessionLocal()
+    try:
+        existing = db.query(ChecklistLog).filter(
+            and_(
+                ChecklistLog.task_id == task_id,
+                ChecklistLog.shift_date == shift_date,
+                ChecklistLog.point == point
+            )
+        ).first()
+
+        if existing:
+            db.delete(existing)
+            db.commit()
+            logger.info(f"Задача {task_id} снята пользователем {user_id}")
+            return False
+
+        log_entry = ChecklistLog(
+            user_id=user_id,
+            task_id=task_id,
+            shift_date=shift_date,
+            shift_type=shift_type,
+            point=point,
+            completed_by_user_id=user_id
+        )
+        db.add(log_entry)
+        db.commit()
+        logger.info(f"Задача {task_id} отмечена как выполненная пользователем {user_id}")
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Ошибка при переключении задачи: {e}")
+        return None
+    finally:
+        db.close()
+
 def get_hybrid_assignments() -> List[HybridShiftAssignment]:
     """Получить все распределения задач для пересменов"""
     db = SessionLocal()

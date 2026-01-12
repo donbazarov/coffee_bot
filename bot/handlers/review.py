@@ -49,7 +49,7 @@ async def prompt_category_selection(update: Update, context: ContextTypes.DEFAUL
 
 async def prompt_espresso_drink_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать выбор типа эспрессо/фильтра."""
-    keyboard = [["Эспрессо", "Фильтр", "Альт."], [BACK_BUTTON], ["❌ Отмена"]]
+    keyboard = [["Эспрессо", "Фильтр", "Альт"], [BACK_BUTTON], ["❌ Отмена"]]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     await update.message.reply_text(
@@ -285,7 +285,7 @@ async def select_espresso_drink_type(update: Update, context: ContextTypes.DEFAU
     if drink_type == BACK_BUTTON:
         return await prompt_category_selection(update, context)
     
-    valid_types = ["Эспрессо", "Фильтр", "Альт."]
+    valid_types = ["Эспрессо", "Фильтр", "Альт"]
     if drink_type not in valid_types:
         await update.message.reply_text("❌ Пожалуйста, выберите тип напитка из списка:")
         return ESPRESSO_DRINK_TYPE

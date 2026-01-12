@@ -1,13 +1,14 @@
 """Обработчики для системы чек-листов"""
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler, CallbackQueryHandler
 from bot.utils.auth import require_roles, ROLE_MENTOR, ROLE_SENIOR
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
-from bot.database.user_operations import get_user_by_username
+from bot.database.user_operations import get_user_by_username, get_user_by_iiko_id
 from bot.database.checklist_operations import (
     get_current_shift_for_user, get_tasks_for_shift, get_completed_tasks_for_shift,
-    mark_task_completed
+    toggle_task_completion
 )
+from bot.utils.emulation import is_emulation_mode, get_emulated_user
 from bot.keyboards.menus import get_main_menu
 from datetime import datetime, date
 import logging
@@ -31,11 +32,31 @@ def get_task_prefix(task_description: str) -> str:
     """Получить префикс задачи для сопоставления."""
     return task_description[:BUTTON_TASK_PREFIX_LENGTH]
 
-async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Главное меню чек-листа"""
+async def _resolve_checklist_user(update: Update, context: ContextTypes.DEFAULT_TYPE, use_emulation: bool):
+    """Получить пользователя для чек-листа с учетом режима эмуляции."""
+    if use_emulation:
+        if not is_emulation_mode(context):
+            await update.message.reply_text("❌ Сначала запустите эмуляцию сотрудника")
+            return None, "❌ Сначала запустите эмуляцию сотрудника"
+
+        emulated = get_emulated_user(context)
+        emulated_iiko_id = emulated.get("iiko_id")
+        try:
+            emulated_iiko_id_int = int(emulated_iiko_id)
+        except (TypeError, ValueError):
+            await update.message.reply_text("❌ Некорректный Iiko ID для эмуляции.")
+            return None, "❌ Некорректный Iiko ID"
+
+        db_user = get_user_by_iiko_id(emulated_iiko_id_int)
+        if not db_user:
+            await update.message.reply_text(
+                f"❌ Сотрудник с iiko_id {emulated_iiko_id} не найден в системе."
+            )
+            return None, "❌ Сотрудник не найден"
+        return db_user, None
+
     user = update.effective_user
-    
-    # Ищем пользователя по telegram_username
+
     if not user.username:
         await update.message.reply_text(
             "❌ У вас не установлен username в Telegram.\n\n"
@@ -43,10 +64,9 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "1. Установить username в настройках Telegram\n"
             "2. Сообщить администратору для привязки к вашей учетной записи"
         )
-        return ConversationHandler.END
-    
+        return None, "❌ Нет username"
+
     db_user = get_user_by_username(user.username)
-    
     if not db_user:
         await update.message.reply_text(
             f"❌ Пользователь @{user.username} не найден в системе.\n\n"
@@ -54,7 +74,12 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Ваш username не привязан к учетной записи\n"
             "• Обратитесь к администратору для добавления"
         )
-        return ConversationHandler.END
+        return None, "❌ Пользователь не найден"
+
+    return db_user, None
+
+async def _render_checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, db_user, header_prefix: str = ""):
+    """Показ чек-листа для указанного пользователя."""
     
     if not db_user.iiko_id:
         await update.message.reply_text(
@@ -124,7 +149,7 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text(
-        f"📝 Чек-лист смены\n\n"
+        f"{header_prefix}📝 Чек-лист смены\n\n"
         f"📍 Точка: {shift_info['point']}\n"
         f"🕒 Смена: {shift_type_names.get(shift_info['shift_type'].shift_type, shift_info['shift_type'].shift_type)}\n"
         f"📅 Дата: {shift_info['shift'].shift_date.strftime('%d.%m.%Y')}\n"
@@ -140,6 +165,23 @@ async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['user_id'] = db_user.id
     
     return CHECKLIST_VIEW
+
+async def checklist_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Главное меню чек-листа"""
+    db_user, _ = await _resolve_checklist_user(update, context, use_emulation=False)
+    if not db_user:
+        return ConversationHandler.END
+
+    return await _render_checklist_menu(update, context, db_user)
+
+async def checklist_menu_emulated(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Чек-лист от лица эмулированного сотрудника"""
+    db_user, _ = await _resolve_checklist_user(update, context, use_emulation=True)
+    if not db_user:
+        return ConversationHandler.END
+
+    header_prefix = f"🔁 Эмуляция: {db_user.name}\n\n"
+    return await _render_checklist_menu(update, context, db_user, header_prefix=header_prefix)
 
 async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка отметки выполнения задачи"""
@@ -178,8 +220,8 @@ async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Информация о смене устарела")
         return await checklist_menu(update, context)
     
-    # Отмечаем задачу как выполненную
-    success = mark_task_completed(
+    # Переключаем задачу
+    completion_state = toggle_task_completion(
         user_id,
         task_to_mark.id,
         shift_info['shift'].shift_date,
@@ -187,9 +229,10 @@ async def handle_task_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         shift_info['point']
     )
     
-    if success:
+    if completion_state is not None:
+        action_text = "✅ Задача отмечена как выполненная" if completion_state else "↩️ Отметка снята"
         await update.message.reply_text(
-            f"✅ Задача отмечена как выполненная: {task_to_mark.task_description}"
+            f"{action_text}: {task_to_mark.task_description}"
         )
         
         # Обновляем клавиатуру
@@ -234,7 +277,8 @@ def get_checklist_conversation_handler():
     """Возвращает ConversationHandler для чек-листов"""
     return ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^📝 Чек-лист смены$"), checklist_menu)
+            MessageHandler(filters.Regex("^📝 Чек-лист смены$"), checklist_menu),
+            MessageHandler(filters.Regex("^📝 Чек-лист от лица сотрудника$"), checklist_menu_emulated)
         ],
         states={
             CHECKLIST_VIEW: [

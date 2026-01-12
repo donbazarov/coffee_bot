@@ -1,7 +1,7 @@
 """Операции для работы с расписанием смен"""
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
-from .models import SessionLocal, Schedule, ShiftType
+from sqlalchemy import and_, or_, cast, String
+from .models import SessionLocal, Schedule, ShiftType, User
 from typing import Optional, List, Dict
 from datetime import date, datetime, timedelta, time
 import logging
@@ -130,6 +130,42 @@ def get_upcoming_shifts_by_iiko_id(iiko_id: str, days: int = 7) -> List[Schedule
     today = date.today()
     end_date = today + timedelta(days=days)
     return get_shifts_by_iiko_id(iiko_id, start_date=today, end_date=end_date)
+
+def _find_partner_by_shift_type(db: Session, shift_date: date, point: str, shift_type: str, exclude_iiko_id: str) -> Optional[User]:
+    """Найти напарника по типу смены на точке и дате."""
+    return (
+        db.query(User)
+        .join(Schedule, cast(User.iiko_id, String) == Schedule.iiko_id)
+        .join(ShiftType, Schedule.shift_type_id == ShiftType.id)
+        .filter(
+            and_(
+                Schedule.shift_date == shift_date,
+                ShiftType.point == point,
+                ShiftType.shift_type == shift_type,
+                Schedule.iiko_id != str(exclude_iiko_id),
+                User.is_active == 1
+            )
+        )
+        .order_by(User.name)
+        .first()
+    )
+
+def get_shift_partner(shift_date: date, point: str, shift_type: str, exclude_iiko_id: str) -> Optional[Dict[str, object]]:
+    """Найти напарника по смене. Возвращает пользователя и фактический тип смены."""
+    db = SessionLocal()
+    try:
+        partner = _find_partner_by_shift_type(db, shift_date, point, shift_type, exclude_iiko_id)
+        if partner:
+            return {"user": partner, "shift_type": shift_type}
+
+        if shift_type != "hybrid":
+            partner = _find_partner_by_shift_type(db, shift_date, point, "hybrid", exclude_iiko_id)
+            if partner:
+                return {"user": partner, "shift_type": "hybrid"}
+
+        return None
+    finally:
+        db.close()
 
 def update_shift_iiko_id(shift_id: int, new_iiko_id: str) -> Optional[Schedule]:
     """Изменить iiko_id смены (для замен)"""

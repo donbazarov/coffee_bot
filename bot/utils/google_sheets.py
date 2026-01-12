@@ -173,7 +173,12 @@ def determine_shift_type(start_time: str) -> str:
     except Exception:
         return None
 
-def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> List[Dict]:
+def parse_schedule_from_sheet(
+    month_name: str,
+    preserve_swaps: bool = True,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> List[Dict]:
     """Умный парсинг расписания с сохранением замен"""
     shifts = []
     
@@ -220,6 +225,12 @@ def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> L
                     day = int(str(date_str).strip())
                     shift_date = datetime(year, month, day).date()
                     
+                    if start_date and shift_date < start_date:
+                        continue
+
+                    if end_date and shift_date > end_date:
+                        continue
+
                     if shift_date < today:
                         continue
                     
@@ -263,9 +274,14 @@ def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> L
                     'shift_type_id': shift_type_obj.id
                 })
                 
-                if preserve_swaps:
-                    preserved_swaps = preserve_existing_swaps(month_name, shifts)
-                    shifts.extend(preserved_swaps)
+        if preserve_swaps:
+            preserved_swaps = preserve_existing_swaps(
+                month_name,
+                shifts,
+                start_date=start_date,
+                end_date=end_date
+            )
+            shifts.extend(preserved_swaps)
         
         logger.info(f"Успешно распарсено {len(shifts)} смен из листа '{month_name}'")
         return shifts
@@ -274,18 +290,23 @@ def parse_schedule_from_sheet(month_name: str, preserve_swaps: bool = True) -> L
         logger.error(f"Ошибка при парсинге расписания из листа '{month_name}': {e}")
         raise
 
-def preserve_existing_swaps(month_name: str, new_shifts: List[Dict]) -> List[Dict]:
+def preserve_existing_swaps(
+    month_name: str,
+    new_shifts: List[Dict],
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None
+) -> List[Dict]:
     """Сохраняет существующие замены при парсинге"""
     try:
         # Получаем существующие смены из БД для этого месяца
         month, year = parse_month_name(month_name)
-        start_date = date(year, month, 1)
+        month_start = date(year, month, 1)
         if month == 12:
-            end_date = date(year + 1, 1, 1) - timedelta(days=1)
+            month_end = date(year + 1, 1, 1) - timedelta(days=1)
         else:
-            end_date = date(year, month + 1, 1) - timedelta(days=1)
+            month_end = date(year, month + 1, 1) - timedelta(days=1)
         
-        existing_shifts = get_shifts_by_date_range(start_date, end_date)
+        existing_shifts = get_shifts_by_date_range(month_start, month_end)
         
         # Фильтруем замены (source='swap')
         swap_shifts = [s for s in existing_shifts if getattr(s, 'source', 'sheets') == 'swap']
@@ -300,6 +321,10 @@ def preserve_existing_swaps(month_name: str, new_shifts: List[Dict]) -> List[Dic
             )
             
             if not is_overwritten:
+                if start_date and swap_shift.shift_date < start_date:
+                    continue
+                if end_date and swap_shift.shift_date > end_date:
+                    continue
                 preserved.append({
                     'shift_date': swap_shift.shift_date,
                     'iiko_id': swap_shift.iiko_id,
