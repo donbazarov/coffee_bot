@@ -185,9 +185,16 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.clear()
     
-    # Получаем бариста из БД
-    barista_users = get_users_by_role('barista', active_only=True)
-    baristas = [barista.name for barista in barista_users]
+    # Получаем бариста из БД (barista и senior)
+    barista_users = []
+    for role in ("barista", "senior"):
+        barista_users.extend(get_users_by_role(role, active_only=True))
+    baristas = []
+    seen_names = set()
+    for barista in barista_users:
+        if barista.name not in seen_names:
+            baristas.append(barista.name)
+            seen_names.add(barista.name)
     
     # Если в БД нет бариста, используем config.py как fallback
     if not baristas:
@@ -214,9 +221,16 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if barista_name == BACK_BUTTON:
         return await cancel_conversation(update, context)
     
-    # Получаем бариста из БД
-    barista_users = get_users_by_role('barista', active_only=True)
-    barista_names = [barista.name for barista in barista_users]
+    # Получаем бариста из БД (barista и senior)
+    barista_users = []
+    for role in ("barista", "senior"):
+        barista_users.extend(get_users_by_role(role, active_only=True))
+    barista_names = []
+    seen_names = set()
+    for barista in barista_users:
+        if barista.name not in seen_names:
+            barista_names.append(barista.name)
+            seen_names.add(barista.name)
     
     # Если в БД нет бариста, используем config.py как fallback
     if not barista_names:

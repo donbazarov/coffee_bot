@@ -166,9 +166,12 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
     db = SessionLocal()
     try:
         day_of_week = shift_date.weekday()
+        hybrid_exists = check_hybrid_shift_exists(point, shift_date)
         
         if shift_type == 'hybrid':
             # Для пересмена получаем назначенные ему задачи
+            if not hybrid_exists:
+                return []
             assignment = get_hybrid_assignment(day_of_week)
             if not assignment:
                 return []
@@ -180,21 +183,23 @@ def get_tasks_for_shift(user_id: int, shift_date: date, shift_type: str, point: 
         elif shift_type == 'morning':
             # Для утра - исключаем задачи, переданные пересмену
             morning_tasks = get_checklist_templates(day_of_week=day_of_week, shift_type='morning')
-            assignment = get_hybrid_assignment(day_of_week)
-            if assignment:
-                hybrid_morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
-                hybrid_task_ids = [t.id for t in hybrid_morning_tasks]
-                morning_tasks = [task for task in morning_tasks if task.id not in hybrid_task_ids]
+            if hybrid_exists:
+                assignment = get_hybrid_assignment(day_of_week)
+                if assignment:
+                    hybrid_morning_tasks = get_hybrid_assignment_tasks(assignment.id, 'morning')
+                    hybrid_task_ids = [t.id for t in hybrid_morning_tasks]
+                    morning_tasks = [task for task in morning_tasks if task.id not in hybrid_task_ids]
             return morning_tasks
             
         elif shift_type == 'evening':
             # Для вечера - аналогично утру
             evening_tasks = get_checklist_templates(day_of_week=day_of_week, shift_type='evening')
-            assignment = get_hybrid_assignment(day_of_week)
-            if assignment:
-                hybrid_evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
-                hybrid_task_ids = [t.id for t in hybrid_evening_tasks]
-                evening_tasks = [task for task in evening_tasks if task.id not in hybrid_task_ids]
+            if hybrid_exists:
+                assignment = get_hybrid_assignment(day_of_week)
+                if assignment:
+                    hybrid_evening_tasks = get_hybrid_assignment_tasks(assignment.id, 'evening')
+                    hybrid_task_ids = [t.id for t in hybrid_evening_tasks]
+                    evening_tasks = [task for task in evening_tasks if task.id not in hybrid_task_ids]
             return evening_tasks
         
         return []
