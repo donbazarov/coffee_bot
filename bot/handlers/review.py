@@ -1,8 +1,8 @@
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CommandHandler
-from bot.config import BotConfig
 from bot.database.simple_db import save_review
 from bot.database.user_operations import get_users_by_role
+from bot.database.schedule_operations import get_shift_types
 from bot.keyboards.menus import get_main_menu
 from bot.utils.auth import is_senior_or_mentor
 from bot.utils.common_handlers import cancel_conversation, start_cancel_conversation
@@ -19,10 +19,25 @@ rating_keyboard.append([BACK_BUTTON])
 rating_keyboard.append(["❌ Отмена"])
 rating_markup = ReplyKeyboardMarkup(rating_keyboard, resize_keyboard=True)
 
+def _get_points_from_db():
+    shift_types = get_shift_types()
+    points = sorted({shift_type.point for shift_type in shift_types if shift_type.point})
+    return points
+
 async def prompt_point_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать выбор точки."""
     barista_name = context.user_data.get('barista', 'Не выбран')
-    keyboard = [[point] for point in BotConfig.points]
+    points = context.user_data.get("points")
+    if points is None:
+        points = _get_points_from_db()
+        context.user_data["points"] = points
+    if not points:
+        await update.message.reply_text(
+            "❌ В базе нет доступных точек. Обратитесь к администратору."
+        )
+        return ConversationHandler.END
+    
+    keyboard = [[point] for point in points]
     keyboard.append([BACK_BUTTON])
     keyboard.append(["❌ Отмена"])
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
@@ -198,7 +213,10 @@ async def start_review(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Если в БД нет бариста, используем config.py как fallback
     if not baristas:
-        baristas = [barista['name'] for barista in BotConfig.baristas]
+        await update.message.reply_text(
+            "❌ В базе нет доступных бариста. Обратитесь к администратору."
+        )
+        return ConversationHandler.END
     
     keyboard = [[barista] for barista in baristas]
     keyboard.append([BACK_BUTTON])
@@ -234,7 +252,10 @@ async def select_barista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Если в БД нет бариста, используем config.py как fallback
     if not barista_names:
-        barista_names = [barista['name'] for barista in BotConfig.baristas]
+        await update.message.reply_text(
+            "❌ В базе нет доступных бариста. Обратитесь к администратору."
+        )
+        return ConversationHandler.END
     
     if barista_name not in barista_names:
         await update.message.reply_text("❌ Пожалуйста, выберите бариста из списка:")
@@ -254,7 +275,11 @@ async def select_point(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if point == BACK_BUTTON:
         return await start_review(update, context)
     
-    if point not in BotConfig.points:
+    points = context.user_data.get("points")
+    if points is None:
+        points = _get_points_from_db()
+        context.user_data["points"] = points
+    if point not in (points or []):
         await update.message.reply_text("❌ Пожалуйста, выберите точку из списка:")
         return SELECTING_POINT
     

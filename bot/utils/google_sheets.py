@@ -1,7 +1,6 @@
 """Модуль для работы с Google Sheets API"""
 import gspread
 from google.oauth2.service_account import Credentials
-from bot.config import BotConfig
 import logging
 from datetime import datetime, timedelta, time, date
 from typing import List, Dict, Optional, Tuple

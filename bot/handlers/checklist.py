@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 # Состояния для чек-листов
 (CHECKLIST_MENU, CHECKLIST_VIEW, CHECKLIST_TASK_ACTION) = range(3)
 
-BUTTON_TASK_PREFIX_LENGTH = 20
+BUTTON_TASK_PREFIX_LENGTH = 15
 
 def format_task_button(task_description: str, completed: bool) -> str:
     """Сформировать текст кнопки для задачи с укороченным описанием."""

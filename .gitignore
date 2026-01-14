@@ -1,16 +1,36 @@
+# Python
 __pycache__/
-backup/
-*.pyc
-.env
-*.db
-*.log
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
-credentials.json
-credentials.json
+env/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project specific
+.env
+.env.local
+.env.*.local
+*.log
+*.db
+*.sqlite3
 *.patch
-.patch
-.pyc
-.db
-.log
+credentials.json
 coffee_quality.db
-bot/config.py
+backup/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cursor
+.cursor/
