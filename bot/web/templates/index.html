@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10110f">
+  <title>Качество кофе · НЕФТЬ</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-csrf="{{ csrf_token }}">
+  {% if not user %}
+  <main class="login-screen">
+    <div class="login-grain" aria-hidden="true"></div>
+    <header class="brand brand-login">
+      <span class="brand-symbol">Н</span>
+      <span class="brand-name">НЕФТЬ<small>КОФЕЙНАЯ КОМАНДА</small></span>
+    </header>
+    <section class="login-content">
+      <p class="eyebrow">COFFEE QUALITY / 01</p>
+      <h1>Вкус начинается<br>с внимания.</h1>
+      <p class="login-copy">Пространство команды для оценки напитков и качества работы.</p>
+      {% if bot_username %}
+      <div class="telegram-login">
+        <script async src="https://telegram.org/js/telegram-widget.js?22"
+                data-telegram-login="{{ bot_username }}" data-size="large"
+                data-radius="8" data-onauth="telegramLogin(user)" data-request-access="write"></script>
+      </div>
+      {% else %}
+      <p class="setup-notice">Добавьте <code>TELEGRAM_BOT_USERNAME</code> в переменные окружения сервиса.</p>
+      {% endif %}
+      <p class="login-error" id="login-error" role="alert" hidden></p>
+    </section>
+    <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span><span>01 — 24</span></footer>
+  </main>
+  {% else %}
+  <div class="app-shell">
+    <aside class="rail">
+      <a class="brand" href="/" aria-label="НЕФТЬ, главная"><span class="brand-symbol">Н</span><span class="brand-name">НЕФТЬ<small>QUALITY DESK</small></span></a>
+      <nav class="rail-nav" aria-label="Основная навигация">
+        <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon">◫</span><span>Обзор</span></button>
+        {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon">♧</span><span>Команда</span></button>{% endif %}
+      </nav>
+      <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span><span class="rail-version">WEB / 01</span></div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+          <div class="topbar-title"><span class="eyebrow">ПАНЕЛЬ КАЧЕСТВА</span><h1 id="page-title" data-name="{{ user.name }}">Добрый день, {{ user.name }}</h1></div>
+        <div class="account-area">
+          <div class="account-mark">{{ user.name[:1] | upper }}</div>
+          <div class="account-copy"><strong>{{ user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}</span></div>
+          <button class="icon-button" type="button" id="logout-button" aria-label="Выйти" title="Выйти"><span>↗</span></button>
+        </div>
+      </header>
+
+      <section class="view is-visible" id="overview-view">
+        <div class="section-heading">
+          <div><p class="eyebrow">ОБРАТНАЯ СВЯЗЬ</p><h2>Обзор оценок</h2></div>
+          <div class="period-switch" role="group" aria-label="Период">
+            <button type="button" data-period="7d">7 дней</button><button class="is-selected" type="button" data-period="30d">30 дней</button><button type="button" data-period="90d">90 дней</button><button type="button" data-period="all">Всё время</button>
+          </div>
+        </div>
+
+        <div class="metric-grid" aria-live="polite">
+          <article class="metric metric-primary"><span class="metric-label">ОЦЕНОК ЗА ПЕРИОД</span><strong id="metric-reviews">—</strong><span class="metric-foot">НАПИТКИ И КОМАНДА</span><span class="metric-mark">01</span></article>
+          <article class="metric"><span class="metric-label">СРЕДНЯЯ ОЦЕНКА</span><strong><span id="metric-average">—</span><small>/ 5</small></strong><span class="metric-foot">ПО ВСЕМ КРИТЕРИЯМ</span><span class="metric-mark">02</span></article>
+          <article class="metric"><span class="metric-label">АКТИВНЫХ СОТРУДНИКОВ</span><strong id="metric-staff">—</strong><span class="metric-foot">В КОМАНДЕ</span><span class="metric-mark">03</span></article>
+        </div>
+
+        <div class="content-grid">
+          <section class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">РИТМ КОМАНДЫ</p><h3>Оценки за неделю</h3></div><span class="panel-index">01 / 07</span></div><div class="chart" id="weekly-chart" aria-label="Оценки за последние семь дней"></div></section>
+          <section class="panel leaderboard-panel"><div class="panel-heading"><div><p class="eyebrow">ПО СРЕДНЕЙ ОЦЕНКЕ</p><h3>Команда</h3></div><span class="panel-index">ТОП</span></div><div class="leaderboard" id="leaderboard"></div></section>
+        </div>
+
+        <section class="panel recent-panel"><div class="panel-heading"><div><p class="eyebrow">ПОСЛЕДНИЕ ЗАПИСИ</p><h3>Свежие оценки</h3></div><span class="panel-index">LIVE / 08</span></div><div class="review-list" id="recent-reviews"></div></section>
+      </section>
+
+      {% if user.role in ['senior', 'mentor'] %}
+      <section class="view" id="team-view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">ДОСТУП И РОЛИ</p><h2>Команда</h2></div><button type="button" class="button button-primary" id="add-user-button"><span>＋</span> Добавить сотрудника</button></div>
+        <div class="team-summary"><span class="status-light"></span><span id="team-count">Загрузка команды</span><span class="team-summary-note">УЧЁТНЫЕ ЗАПИСИ</span></div>
+        <div class="user-list" id="user-list"></div>
+      </section>
+      {% endif %}
+
+      <footer class="app-footer"><span>НЕФТЬ / КАЧЕСТВО КОФЕ</span><span>СОЗДАНО ДЛЯ КОМАНДЫ</span></footer>
+    </main>
+  </div>
+  {% if user.role in ['senior', 'mentor'] %}
+  <nav class="mobile-nav" aria-label="Основная навигация"><button class="is-active" type="button" data-view="overview"><span>◫</span>Обзор</button><button type="button" data-view="team"><span>♧</span>Команда</button></nav>
+  <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть">×</button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
+  {% endif %}
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  {% endif %}
+</body>
+</html>

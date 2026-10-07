@@ -1,12 +1,10 @@
-import sys
 import os
 
-# Добавляем папку bot в путь Python
-sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
-
-from bot.main import CoffeeBot
-
 if __name__ == "__main__":
-    print("🚀 Запуск Coffee Quality Bot...")
-    bot = CoffeeBot()
-    bot.run()
+    import uvicorn
+
+    uvicorn.run(
+        "bot.web.app:app",
+        host=os.getenv("WEB_HOST", "127.0.0.1"),
+        port=int(os.getenv("WEB_PORT", "8000")),
+    )
