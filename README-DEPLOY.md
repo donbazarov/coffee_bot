@@ -2,14 +2,14 @@
 
 Пошаговая инструкция: как поднять сайт на сервере и потом обновлять его одной командой.
 
-> **Важно:** везде ниже встречается `coffee.example.com` — это заглушка.
-> Замените её на свой домен. Достаточно выполнить одну команду после клонирования:
+> **Домен проекта: `neftcoffee.shop`** — он уже прописан в `deploy/nginx.conf`,
+> `.env.example` и в вашем `.env`.
 >
-> ```bash
-> grep -rl 'coffee.example.com' .env deploy/ | xargs sed -i 's/coffee.example.com/ВАШ-ДОМЕН/g'
-> ```
+> Все секреты и настройки лежат в одном файле `.env` в корне проекта
+> (токен бота, ключ подписи сессий, данные Google, домен). Он не попадает в git
+> и переносится на сервер как есть — см. шаг 5.
 >
-> Имя пользователя `coffee` и путь `/opt/coffee_bot` тоже можно поменять — тогда
+> Имя пользователя `coffee` и путь `/opt/coffee_bot` можно поменять — тогда
 > поправьте их во всех командах и в `deploy/coffee-bot.service`.
 
 ---
@@ -84,7 +84,18 @@ sudo -u coffee /opt/coffee_bot/venv/bin/pip install -r /opt/coffee_bot/requireme
 
 ## Шаг 5. Настройки
 
-Создайте `.env` из шаблона и откройте на редактирование:
+Все ключи и приватные данные лежат в одном файле `.env` в корне проекта.
+Домен вписан в тексте ниже как `neftcoffee.shop` — если он изменится, поправьте
+значение `TELEGRAM_AUTH_CALLBACK_URL`.
+
+**Вариант А — скопировать готовый `.env` со своей машины** (проще всего, он уже заполнен):
+
+```bash
+# запускать на СВОЁМ компьютере, не на сервере
+scp .env coffee@ВАШ-IP:/opt/coffee_bot/.env
+```
+
+**Вариант Б — собрать на сервере из шаблона:**
 
 ```bash
 sudo -u coffee cp /opt/coffee_bot/.env.example /opt/coffee_bot/.env
@@ -96,19 +107,25 @@ sudo -u coffee nano /opt/coffee_bot/.env
 | Переменная | Что писать |
 |---|---|
 | `WEB_SESSION_SECRET` | длинная случайная строка: `openssl rand -hex 32` |
-| `TELEGRAM_BOT_USERNAME` | имя бота без `@`, например `NeftCoffeeBot` |
-| `TELEGRAM_AUTH_CALLBACK_URL` | `https://ВАШ-ДОМЕН/auth/telegram/callback` |
-| `TELEGRAM_BOT_TOKEN` | токен бота (можно оставить пустым, если рядом лежит `credentials.json`) |
+| `TELEGRAM_BOT_USERNAME` | `NeftCoffeeBot` |
+| `TELEGRAM_AUTH_CALLBACK_URL` | `https://neftcoffee.shop/auth/telegram/callback` |
+| `TELEGRAM_BOT_TOKEN` | токен бота. Если пусто — берётся `bot_token` из `credentials.json` |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | сервисный аккаунт Google одной строкой JSON. Нужен только старому боту, сайту не требуется |
 | `WEB_COOKIE_SECURE` | `1` — обязательно, сайт работает по HTTPS |
-| `NEFT_DATA_DIR` | `/opt/coffee_bot/data/stories` |
+| `NEFT_DATA_DIR` | `/opt/coffee_bot/data/stories` (или оставьте пустым — путь по умолчанию совпадает) |
 
 `.env` не хранится в git, поэтому переживает любые обновления — заполняется один раз.
+Значения из `.env` имеют приоритет над переменными окружения, так что устаревшая
+переменная в терминале не сможет подменить домен или токен.
 
 Файл с секретами должен быть доступен только владельцу:
 
 ```bash
 sudo chmod 600 /opt/coffee_bot/.env
 ```
+
+После переноса `.env` отдельный `credentials.json` на сервере не нужен —
+токен бота уже внутри `.env`.
 
 ---
 
@@ -140,7 +157,6 @@ sudo journalctl -u coffee-bot -n 50 --no-pager
 
 ```bash
 sudo cp /opt/coffee_bot/deploy/nginx.conf /etc/nginx/sites-available/coffee-bot
-sudo sed -i 's/coffee.example.com/ВАШ-ДОМЕН/g' /etc/nginx/sites-available/coffee-bot
 sudo ln -s /etc/nginx/sites-available/coffee-bot /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
@@ -155,7 +171,7 @@ sudo systemctl reload nginx
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d ВАШ-ДОМЕН
+sudo certbot --nginx -d neftcoffee.shop -d www.neftcoffee.shop
 ```
 
 Certbot сам поправит конфиг nginx и настроит автопродление. Проверьте его:
@@ -164,15 +180,15 @@ Certbot сам поправит конфиг nginx и настроит авто�
 sudo certbot renew --dry-run
 ```
 
-Теперь сайт открывается по `https://ВАШ-ДОМЕН`.
+Теперь сайт открывается по `https://neftcoffee.shop`.
 
 ---
 
 ## Шаг 9. Вход через Telegram
 
-1. Откройте [@BotFather](https://t.me/BotFather) → `/mybots` → ваш бот → **Bot Settings → Domain**.
-   Укажите домен **без** `https://` и без слэша: `ВАШ-ДОМЕН`.
-2. Откройте `https://ВАШ-ДОМЕН` — на экране входа должен появиться виджет Telegram.
+1. Откройте [@BotFather](https://t.me/BotFather) → `/mybots` → `@NeftCoffeeBot` → **Bot Settings → Domain**.
+   Укажите домен **без** `https://` и без слэша: `neftcoffee.shop`.
+2. Откройте `https://neftcoffee.shop` — на экране входа должен появиться виджет Telegram.
 3. Войдите. Если вашего аккаунта нет в базе, заявка попадёт в раздел
    **Команда** (панель наставника) — там её нужно одобрить и выдать роль.
 
@@ -186,7 +202,7 @@ sudo certbot renew --dry-run
 Публичная страница живёт по адресу:
 
 ```
-https://ВАШ-ДОМЕН/stories
+https://neftcoffee.shop/stories
 ```
 
 Она **не** появляется в навигации панели сотрудников — это страница для гостей.
@@ -218,25 +234,43 @@ source ~/.bashrc
 # дальше достаточно:  deploy-coffee
 ```
 
-### Автодеплой по кнопке из GitHub (по желанию)
+### Автодеплой при пуше в GitHub (по желанию)
 
-1. Сгенерируйте ключ и добавьте его в GitHub → репозиторий → *Settings → Deploy keys* (с правом на запись):
+В репозитории лежит готовый workflow `.github/workflows/deploy.yml`: на каждый
+пуш в `main` он заходит по SSH на сервер и запускает `deploy/deploy.sh`.
 
-   ```bash
-   sudo -u coffee ssh-keygen -t ed25519 -f /opt/coffee_bot/.ssh/deploy_key -N ""
-   sudo -u coffee cat /opt/coffee_bot/.ssh/deploy_key.pub
-   ```
+Включить — три шага:
 
-2. Склонируйте репозиторий по SSH (если ещё клонирован по HTTPS):
+1. Сгенерируйте отдельный ключ **на сервере** и разрешите вход по нему:
 
    ```bash
-   sudo -u coffee git -C /opt/coffee_bot remote set-url origin git@github.com:donbazarov/coffee_bot.git
+   sudo -u coffee ssh-keygen -t ed25519 -f /home/coffee/.ssh/github_deploy -N ""
+   sudo -u coffee sh -c 'cat /home/coffee/.ssh/github_deploy.pub >> /home/coffee/.ssh/authorized_keys'
+   sudo -u coffee cat /home/coffee/.ssh/github_deploy       # приватный ключ — целиком, с BEGIN и END
    ```
 
-3. В репозитории → *Settings → Webhooks* → **Add webhook**:
-   * Payload URL: `https://ВАШ-ДОМЕН/deploy-hook` — либо просто запускайте деплой вручную.
+2. В GitHub → репозиторий → *Settings → Secrets and variables → Actions* добавьте:
 
-Для маленького проекта проще ручной запуск: он предсказуем и занимает секунды.
+   | Secret | Значение |
+   |---|---|
+   | `SSH_HOST` | IP или домен сервера |
+   | `SSH_USER` | `coffee` |
+   | `SSH_KEY` | приватный ключ из шага 1 целиком |
+
+3. Разрешите пользователю `coffee` перезапускать сервис без пароля:
+
+   ```bash
+   echo "coffee ALL=(ALL) NOPASSWD: /bin/systemctl restart coffee-bot, /bin/systemctl is-active coffee-bot, /bin/systemctl status coffee-bot" | sudo tee /etc/sudoers.d/coffee-bot
+   sudo chmod 440 /etc/sudoers.d/coffee-bot
+   ```
+
+   Этот же файл нужен и для ручного `./deploy/deploy.sh` — без него скрипт
+   спросит пароль и не сможет работать из Actions.
+
+После этого любой пуш в `main` сам обновляет сайт. Проверить можно на вкладке
+**Actions** в репозитории.
+
+Ручной запуск всё равно остаётся: `cd /opt/coffee_bot && ./deploy/deploy.sh`.
 
 ---
 

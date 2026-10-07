@@ -1,24 +1,16 @@
 """Точка входа веб-сервиса НЕФТЬ.
 
-Сначала читаем .env рядом с проектом, затем поднимаем uvicorn.
-Один и тот же файл .env работает и локально, и на сервере под systemd.
+Настройки и секреты читаются из .env в корне проекта (см. bot/config.py),
+поэтому один и тот же файл работает и локально, и на сервере под systemd.
 """
 
 import os
-from pathlib import Path
-
-
-def _load_env() -> None:
-    """Подхватывает .env, не перезатирая уже заданные переменные окружения."""
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 
 if __name__ == "__main__":
-    _load_env()
+    from bot.config import load_env_file
+
+    load_env_file()  # .env нужен до чтения WEB_HOST и WEB_PORT
 
     import uvicorn
 

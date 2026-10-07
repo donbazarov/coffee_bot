@@ -6,11 +6,23 @@ from datetime import datetime, timedelta, time, date
 from typing import List, Dict, Optional, Tuple
 import os
 import re
+from bot.config import google_service_account
 from bot.database.schedule_operations import (
     get_shift_type_by_time_strings, get_shifts_by_date_range
     )
 
 logger = logging.getLogger(__name__)
+
+
+def _service_account_info() -> dict:
+    """Данные сервисного аккаунта Google: сначала .env, потом credentials.json."""
+    info = google_service_account()
+    if not info:
+        raise FileNotFoundError(
+            "Нет данных сервисного аккаунта Google: задайте GOOGLE_SERVICE_ACCOUNT_JSON в .env "
+            "или положите credentials.json в корень проекта"
+        )
+    return info
 
 # Цвета для точек (RGB в формате 0-1)
 POINT_COLORS = {
@@ -30,11 +42,7 @@ SCOPES = [
 def get_google_client():
     """Получить клиент Google Sheets"""
     try:
-        credentials_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'credentials.json')
-        if not os.path.exists(credentials_path):
-            raise FileNotFoundError(f"Файл credentials.json не найден по пути: {credentials_path}")
-        
-        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+        creds = Credentials.from_service_account_info(_service_account_info(), scopes=SCOPES)
         client = gspread.authorize(creds)
         return client
     except Exception as e:
@@ -380,11 +388,7 @@ def get_sheet_client():
     """Получить клиент для работы с Google Sheets (с правами записи)"""
     try:
         # ИСПОЛЬЗУЕМ ТЕ ЖЕ SCOPES И CREDENTIALS, ЧТО И В get_google_client
-        credentials_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'credentials.json')
-        if not os.path.exists(credentials_path):
-            raise FileNotFoundError(f"Файл credentials.json не найден по пути: {credentials_path}")
-        
-        creds = Credentials.from_service_account_file(credentials_path, scopes=SCOPES)
+        creds = Credentials.from_service_account_info(_service_account_info(), scopes=SCOPES)
         client = gspread.authorize(creds)
         return client
     except Exception as e:

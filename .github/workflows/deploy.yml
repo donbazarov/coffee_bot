@@ -1,0 +1,61 @@
+# Автодеплой на VDS при пуше в main.
+#
+# Что делает: заходит по SSH на сервер и запускает deploy/deploy.sh,
+# то есть «git pull → обновить зависимости → перезапустить сервис».
+#
+# Требуемые секреты репозитория (Settings → Secrets and variables → Actions):
+#   SSH_HOST — IP или домен сервера
+#   SSH_USER — пользователь приложения, например coffee
+#   SSH_KEY  — приватный ключ для входа на сервер
+#
+# Подробности — в README-DEPLOY.md, раздел «Автодеплой при пуше в GitHub».
+
+name: Deploy to VDS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Обновление сайта на сервере
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Подготовка SSH-ключа
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Ключ хоста сервера, чтобы не спрашивало подтверждение
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Запуск deploy.sh на сервере
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=accept-new \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              'cd /opt/coffee_bot && ./deploy/deploy.sh'
+
+      - name: Проверка, что сайт отвечает
+        env:
+          APP_URL: https://neftcoffee.shop
+        run: |
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$APP_URL/" || true)
+            echo "Попытка $attempt: HTTP $code"
+            if [ "$code" = "200" ]; then
+              echo "Сайт отвечает."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Сайт не ответил 200 — проверьте: journalctl -u coffee-bot -n 50"
+          exit 1
