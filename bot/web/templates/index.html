@@ -5,10 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10110f">
   <title>Качество кофе · НЕФТЬ</title>
+  <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="manifest" href="/site.webmanifest">
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body data-authenticated="{{ 'true' if user else 'false' }}" data-csrf="{{ csrf_token }}">
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}">
   {% if not user %}
   <main class="login-screen">
     <div class="login-grain" aria-hidden="true"></div>
@@ -20,16 +24,16 @@
       <p class="eyebrow">COFFEE QUALITY / 01</p>
       <h1>Вкус начинается<br>с внимания.</h1>
       <p class="login-copy">Пространство команды для оценки напитков и качества работы.</p>
-      {% if bot_username %}
+      {% if telegram_login_enabled %}
       <div class="telegram-login">
         <script async src="https://telegram.org/js/telegram-widget.js?22"
                 data-telegram-login="{{ bot_username }}" data-size="large"
-                data-radius="8" data-onauth="telegramLogin(user)" data-request-access="write"></script>
+                data-radius="8" data-auth-url="{{ telegram_callback_url }}"></script>
       </div>
       {% else %}
-      <p class="setup-notice">Добавьте <code>TELEGRAM_BOT_USERNAME</code> в переменные окружения сервиса.</p>
+      <p class="setup-notice">Задайте <code>TELEGRAM_BOT_USERNAME</code> и публичный HTTPS <code>TELEGRAM_AUTH_CALLBACK_URL</code>, чтобы включить вход.</p>
       {% endif %}
-      <p class="login-error" id="login-error" role="alert" hidden></p>
+      {% if auth_error %}<p class="login-error" role="alert">{{ auth_error }}</p>{% endif %}
     </section>
     <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span><span>01 — 24</span></footer>
   </main>
@@ -39,7 +43,9 @@
       <a class="brand" href="/" aria-label="НЕФТЬ, главная"><span class="brand-symbol">Н</span><span class="brand-name">НЕФТЬ<small>QUALITY DESK</small></span></a>
       <nav class="rail-nav" aria-label="Основная навигация">
         <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon">◫</span><span>Обзор</span></button>
+        <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon">▦</span><span>График смен</span></button>
         {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon">♧</span><span>Команда</span></button>{% endif %}
+        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon">⚙</span><span>Личный кабинет</span></button>
       </nav>
       <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span><span class="rail-version">WEB / 01</span></div>
     </aside>
@@ -50,11 +56,22 @@
         <div class="account-area">
           <div class="account-mark">{{ user.name[:1] | upper }}</div>
           <div class="account-copy"><strong>{{ user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}</span></div>
+          <button class="icon-button" type="button" data-view="settings" aria-label="Личный кабинет" title="Личный кабинет"><span>⚙</span></button>
           <button class="icon-button" type="button" id="logout-button" aria-label="Выйти" title="Выйти"><span>↗</span></button>
         </div>
       </header>
 
       <section class="view is-visible" id="overview-view">
+        <section class="schedule-summary" id="calendar-summary" aria-label="Сводка по сменам">
+          <div class="section-heading schedule-heading"><div><p class="eyebrow">МОЙ ГРАФИК</p><h2>Этот месяц</h2></div><button class="button button-quiet" type="button" data-view="calendar">Открыть календарь <span>↗</span></button></div>
+          <div class="hours-grid">
+            <article class="hour-stat"><span>ЗАПЛАНИРОВАНО</span><strong id="hours-total">—</strong><small>часов</small></article>
+            <article class="hour-stat"><span>ПРОШЛО ПО ГРАФИКУ</span><strong id="hours-worked">—</strong><small>часов</small></article>
+            <article class="hour-stat"><span>ОСТАЛОСЬ</span><strong id="hours-remaining">—</strong><small>часов</small></article>
+          </div>
+          <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe">↗ Мой календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
+        </section>
+        <div id="quality-dashboard">
         <div class="section-heading">
           <div><p class="eyebrow">ОБРАТНАЯ СВЯЗЬ</p><h2>Обзор оценок</h2></div>
           <div class="period-switch" role="group" aria-label="Период">
@@ -74,6 +91,55 @@
         </div>
 
         <section class="panel recent-panel"><div class="panel-heading"><div><p class="eyebrow">ПОСЛЕДНИЕ ЗАПИСИ</p><h3>Свежие оценки</h3></div><span class="panel-index">LIVE / 08</span></div><div class="review-list" id="recent-reviews"></div></section>
+        </div>
+      </section>
+
+      <section class="view" id="calendar-view" hidden>
+        <div class="section-heading calendar-heading">
+          <div><p class="eyebrow">КОМАНДА / ГРАФИК</p><h2 id="calendar-month-title">График смен</h2></div>
+          <div class="calendar-actions"><button type="button" class="icon-button" id="month-previous" aria-label="Предыдущий месяц" title="Предыдущий месяц">‹</button><button type="button" class="icon-button" id="month-next" aria-label="Следующий месяц" title="Следующий месяц">›</button></div>
+        </div>
+        <div class="calendar-legend"><span><i class="point-swatch point-uy"></i>УЯ</span><span><i class="point-swatch point-de"></i>ДЕ</span><span class="legend-note">Время локальное</span></div>
+        <div class="matrix-toolbar">
+          <span id="matrix-summary">Сотрудники × дни месяца</span>
+          <div class="matrix-tools">
+            <button class="button button-primary" id="edit-calendar-toggle" type="button" aria-pressed="false">Править график</button>
+            <div class="matrix-edit-tools" hidden>
+            <div class="matrix-mode" role="group" aria-label="Режим ячеек"><button class="is-selected" type="button" data-matrix-mode="edit">Ячейка</button><button type="button" data-matrix-mode="select">Диапазон</button></div>
+            <button class="button button-quiet" id="matrix-copy" type="button" disabled>Копировать</button>
+            <button class="button button-quiet" id="matrix-paste" type="button" disabled>Вставить</button>
+            <button class="button button-quiet" id="matrix-discard" type="button">Отменить</button>
+            <button class="button button-primary" id="matrix-save" type="button" disabled>Сохранить изменения</button>
+            </div>
+          </div>
+          <span class="matrix-status" id="matrix-status" aria-live="polite">Режим просмотра</span>
+        </div>
+        <div class="matrix-scroll"><table class="shift-matrix" id="calendar-grid" aria-label="Смены по сотрудникам и дням месяца"></table></div>
+        <section class="panel swaps-panel"><div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ ПРАВОК</p><h3>Изменения графика</h3></div><span class="panel-index" id="history-count">0</span></div><div id="shift-history" class="swap-list"></div></section>
+      </section>
+
+      <section class="view" id="settings-view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">ПРОФИЛЬ</p><h2>Личный кабинет</h2></div></div>
+        <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">МОИ МОДУЛИ</p><h3>Разделы сайта</h3></div></div>
+          <label class="module-setting"><span><strong>Контроль качества</strong><small>Оценки напитков и статистика команды</small></span><input type="checkbox" id="quality-module-toggle"><i></i></label>
+          <label class="module-setting"><span><strong>Календарь смен</strong><small>График команды, часы и замены</small></span><input type="checkbox" id="calendar-module-toggle"><i></i></label>
+        </section>
+        {% if user.role in ['senior', 'mentor'] %}
+        <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
+          <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"><i></i></label>
+        </section>
+        <section class="panel settings-panel" id="stories-admin-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ИСТОРИИ ГОСТЕЙ</p><h3>Модерация</h3></div><span class="panel-index" id="stories-admin-stats">—</span></div>
+          <p class="settings-hint">Гостевая страница живёт по прямой ссылке <a href="/stories" target="_blank" rel="noopener">/stories</a> — в навигации её нет. В карусель попадают только опубликованные истории.</p>
+          <div class="stories-filters" role="group" aria-label="Фильтр историй">
+            <button class="button button-quiet is-active" type="button" data-stories-filter="all">Все</button>
+            <button class="button button-quiet" type="button" data-stories-filter="pending">На модерации</button>
+            <button class="button button-quiet" type="button" data-stories-filter="published">Опубликованные</button>
+          </div>
+          <p class="stories-admin-status" id="stories-admin-status" role="status"></p>
+          <div class="stories-admin-list" id="stories-admin-list"></div>
+        </section>
+        {% endif %}
       </section>
 
       {% if user.role in ['senior', 'mentor'] %}
@@ -88,9 +154,11 @@
     </main>
   </div>
   {% if user.role in ['senior', 'mentor'] %}
-  <nav class="mobile-nav" aria-label="Основная навигация"><button class="is-active" type="button" data-view="overview"><span>◫</span>Обзор</button><button type="button" data-view="team"><span>♧</span>Команда</button></nav>
+  <nav class="mobile-nav {% if user.role in ['senior', 'mentor'] %}mobile-nav-manager{% endif %}" aria-label="Основная навигация"><button class="is-active" type="button" data-view="overview"><span>◫</span>Обзор</button><button type="button" data-view="calendar"><span>▦</span>График</button>{% if user.role in ['senior', 'mentor'] %}<button type="button" data-view="team"><span>♧</span>Команда</button>{% endif %}<button type="button" data-view="settings"><span>⚙</span>Профиль</button></nav>
   <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть">×</button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
   {% endif %}
+  <dialog class="user-dialog shift-dialog" id="shift-dialog"><form id="shift-form"><div class="dialog-top"><div><p class="eyebrow" id="shift-dialog-kicker">РАСПИСАНИЕ</p><h2 id="shift-dialog-title">Смена</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть">×</button></div><label>Бариста<select name="user_id" id="shift-employee" required></select></label><label>Дата<input name="date" type="date" required></label><div class="time-fields"><label>Приход<input name="start_time" type="time" required></label><label>Уход<input name="end_time" type="time" required></label></div><fieldset class="point-picker"><legend>Точка</legend><label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required><span><i class="point-swatch point-uy"></i>УЯ</span></label><label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label></fieldset><p class="dialog-error" id="shift-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet" id="delete-shift-button" type="button">Выходной</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Готово</button></div></form></dialog>
+  <dialog class="user-dialog feed-dialog" id="feed-dialog"><div class="dialog-top"><div><p class="eyebrow">ЛИЧНЫЕ СОБЫТИЯ</p><h2>Мой календарь</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть">×</button></div><div class="feed-actions"><a class="button button-primary" id="webcal-open" href="#">Подключить календарь</a><button class="button button-quiet" id="feed-copy" type="button">Копировать ссылку</button></div><p class="feed-status" id="feed-status" role="status"></p></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   {% endif %}
 </body>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0a0a0c" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="Истории гостей кофейни НЕФТЬ" />
+  <title>НЕФТЬ · Истории гостей</title>
+  <link rel="icon" href="/static/icons/favicon.ico" sizes="any" />
+  <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png" />
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
+  <link rel="manifest" href="/site.webmanifest" />
+  <link rel="stylesheet" href="/static/stories/styles.css" />
+</head>
+<body>
+  <!-- Фон: медленные разноцветные кривые Безье (радужные масляные разводы) -->
+  <canvas id="oil-canvas" aria-hidden="true"></canvas>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <a class="brand" href="/stories" aria-label="Кофейня НЕФТЬ — истории гостей">
+      <span class="brand-mark">НЕФТЬ</span>
+      <span class="brand-sub">кофейня · истории гостей</span>
+    </a>
+    <button class="btn btn-ghost" id="header-share">Поделиться</button>
+  </header>
+
+  <main class="stage">
+    <section class="hero">
+      <p class="eyebrow">Истории гостей</p>
+      <h1 class="hero-title">Время, проведённое здесь</h1>
+      <p class="hero-lead">
+        Каждая история на этой странице — от наших любимых гостей.
+        Листайте, читайте и расскажите свою.
+      </p>
+    </section>
+
+    <!-- Карусель -->
+    <section class="carousel" id="carousel" aria-roledescription="карусель" aria-label="Истории гостей">
+      <div class="carousel-viewport" id="carousel-viewport">
+        <div class="carousel-track" id="carousel-track"><!-- слайды --></div>
+      </div>
+
+      <div class="carousel-empty" id="carousel-empty" hidden>
+        <p>Пока ни одна история не опубликована.</p>
+        <p class="muted">Станьте первым — ваша история появится здесь после проверки.</p>
+      </div>
+
+      <div class="carousel-controls" id="carousel-controls" hidden>
+        <button class="btn btn-round" id="prev-btn" aria-label="Предыдущая история">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <div class="dots" id="dots" role="tablist" aria-label="Выбор истории"></div>
+        <button class="btn btn-round" id="next-btn" aria-label="Следующая история">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+      <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
+    </section>
+
+    <div class="cta">
+      <button class="btn btn-primary btn-lg" id="share-btn">Поделиться своей историей</button>
+      <p class="cta-note" id="cta-note">До 600 символов и одна фотография. История появится после проверки.</p>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <span>© <span id="year"></span> НЕФТЬ Coffee Shop</span>
+    <span class="dot">•</span>
+    <span class="footer-note">Истории проходят модерацию</span>
+  </footer>
+
+  <!-- Модальное окно: редактор истории -->
+  <div class="modal" id="editor-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+      <button class="modal-close" id="editor-close" aria-label="Закрыть">×</button>
+
+      <div class="modal-body" id="editor-view">
+        <h2 id="editor-title">Расскажите свою историю</h2>
+        <p class="muted small" id="editor-subtitle">Мы проверим её и опубликуем в общей карусели.</p>
+
+        <label class="field-label" for="guest-name">Как вас зовут</label>
+        <input
+          type="text"
+          id="guest-name"
+          class="name-input"
+          maxlength="40"
+          autocomplete="name"
+          placeholder="Имя" />
+
+        <label class="field-label" for="story-text">Ваша история</label>
+        <textarea
+          id="story-text"
+          class="story-input"
+          maxlength="600"
+          rows="7"
+          placeholder="Расскажи запоминающуюся историю из жизни, которая произошла в нашей кофейне"></textarea>
+
+        <div class="meter" aria-hidden="true">
+          <div class="meter-track"><span class="meter-fill" id="meter-fill"></span></div>
+          <div class="meter-label"><span id="counter">0 / 600</span><span class="muted" id="meter-hint">символов</span></div>
+        </div>
+
+        <div class="photo-row">
+          <label class="btn btn-ghost photo-pick" for="photo-input">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h3l2-2h8l2 2h3v12H3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+            Приложить фото
+          </label>
+          <input type="file" id="photo-input" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+          <span class="muted small" id="photo-name">Фотография не выбрана</span>
+        </div>
+        <div class="photo-preview" id="photo-preview" hidden>
+          <img id="photo-preview-img" alt="Предпросмотр фотографии" />
+          <button class="btn btn-ghost btn-sm" id="photo-remove" type="button">Убрать</button>
+        </div>
+
+        <p class="form-error" id="form-error" hidden></p>
+
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="submit-btn">Отправить историю</button>
+        </div>
+      </div>
+
+      <!-- Экран благодарности с купоном -->
+      <div class="modal-body thanks" id="thanks-view" hidden>
+        <div class="thanks-badge" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M20 12a2 2 0 0 0 0-4V6H4v2a2 2 0 0 0 0 4v2a2 2 0 0 0 0 4h16v-2a2 2 0 0 0 0-4z"/></svg>
+        </div>
+        <h2 id="thanks-title">Спасибо! История отправлена</h2>
+        <p class="thanks-text" id="thanks-text">
+          Ты можешь получить купон на бесплатный напиток при показе этого экрана бариста.
+        </p>
+        <p class="muted small" id="thanks-note">После проверки история появится в общей карусели.</p>
+        <div class="modal-actions">
+          <button class="btn btn-primary" id="thanks-done">Готово</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <template id="slide-template">
+    <article class="slide">
+      <div class="slide-photo">
+        <img alt="" draggable="false" decoding="async" />
+      </div>
+      <div class="slide-content">
+        <p class="slide-text"></p>
+        <p class="slide-meta">
+          <span class="slide-author"></span>
+          <span class="slide-sep">·</span>
+          <span class="slide-date"></span>
+        </p>
+        <button class="btn slide-more" type="button" aria-expanded="false">
+          <span class="slide-more-label">Показать полностью</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+    </article>
+  </template>
+
+  <script src="/static/stories/app.js" defer></script>
+</body>
+</html>

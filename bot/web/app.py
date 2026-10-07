@@ -1,18 +1,31 @@
 import os
 import hmac
-from datetime import date, timedelta
+import logging
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import engine
-from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_session, find_active_user, read_session, verify_telegram_login
+from bot.web import stories_service
+from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
+from bot.web.calendar_service import (
+    app_timezone,
+    apply_schedule_changes,
+    build_calendar_feed,
+    get_month_calendar,
+    get_shift_history,
+    get_user_preferences,
+    initialize_calendar_schema,
+    save_user_preferences,
+)
+from bot.web.migrations import migrate_legacy_telegram_ids
 
 BASE_DIR = Path(__file__).resolve().parent
 ROLE_VALUES = {"barista", "senior", "mentor"}
@@ -31,6 +44,13 @@ SCORE_SQL = """
 app = FastAPI(title="Coffee Quality", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+ICONS_DIR = BASE_DIR / "static" / "icons"
+
+
+@app.exception_handler(stories_service.StoriesError)
+async def stories_error_handler(_request: Request, error: stories_service.StoriesError) -> JSONResponse:
+    """Истории отвечают форматом {"error": ...} — именно его ждёт клиент гостевой страницы."""
+    return JSONResponse({"error": error.message}, status_code=error.status)
 
 
 @app.middleware("http")
@@ -53,10 +73,10 @@ def _session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
     if not session:
         return None, None
     with engine.connect() as connection:
-        user = connection.execute(
-            text("SELECT id, name, role FROM users WHERE id = :id AND is_active = 1"),
-            {"id": session["user_id"]},
-        ).mappings().first()
+        user = connection.execute(text("""
+            SELECT id,name,role FROM users
+            WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
+        """), {"id": session["user_id"]}).mappings().first()
     return (dict(user), session["csrf_token"]) if user else (None, None)
 
 
@@ -79,6 +99,40 @@ def require_csrf(request: Request, user: dict[str, Any] = Depends(require_user))
     return user
 
 
+@app.on_event("startup")
+def migrate_database():
+    migrate_legacy_telegram_ids()
+    initialize_calendar_schema(engine)
+    stories_migration = stories_service.migrate_from_prototype()
+    if stories_migration["photos"] or stories_migration["removed_key"]:
+        logging.getLogger("bot.web").info(
+            "Истории гостей: перенесено фото %s, ключ модерации удалён: %s",
+            stories_migration["photos"],
+            bool(stories_migration["removed_key"]),
+        )
+
+
+@app.get("/api/shift-history")
+def shift_history(year: int, month: int, _: dict[str, Any] = Depends(require_user)):
+    if year < 2000 or year > 2100 or month < 1 or month > 12:
+        raise HTTPException(status_code=422, detail="Некорректный месяц")
+    return get_shift_history(engine, year, month)
+
+
+@app.get("/api/preferences")
+def preferences(user: dict[str, Any] = Depends(require_user)):
+    return get_user_preferences(engine, user["id"])
+
+
+@app.patch("/api/preferences")
+async def update_preferences(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    allowed = {"quality_enabled", "calendar_enabled"}
+    if not payload or set(payload) - allowed or any(not isinstance(value, bool) for value in payload.values()):
+        raise HTTPException(status_code=422, detail="Ожидаются настройки модулей типа boolean")
+    return save_user_preferences(engine, user["id"], payload)
+
+
 def _check_csrf(request: Request, csrf_token: str | None) -> None:
     supplied = request.headers.get("X-CSRF-Token")
     if not csrf_token or not supplied or not hmac.compare_digest(csrf_token, supplied):
@@ -91,35 +145,53 @@ def require_manager_csrf(request: Request, user: dict[str, Any] = Depends(requir
     return user
 
 
+async def _read_json_object(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Некорректный JSON") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Ожидался JSON-объект")
+    return payload
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     user, csrf_token = _session_user(request)
+    bot_username = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+    telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "user": user,
             "csrf_token": csrf_token or "",
-            "bot_username": os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@"),
+            "bot_username": bot_username,
+            "telegram_callback_url": telegram_callback_url,
+            "telegram_login_enabled": bool(bot_username and telegram_callback_url.startswith("https://")),
+            "auth_error": {
+                "verify": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз.",
+                "account": "Ваш Telegram не привязан к активной учётной записи команды.",
+                "pending": "Запрос на доступ сохранён. Ожидайте, пока администратор назначит вам роль.",
+                "conflict": "Не удалось однозначно сопоставить аккаунт. Обратитесь к администратору.",
+                "disabled": "Доступ к аккаунту отключён. Обратитесь к администратору.",
+            }.get(request.query_params.get("auth_error"), ""),
             "role_names": ROLE_NAMES,
         },
     )
 
 
-@app.post("/api/auth/telegram")
-async def telegram_login(request: Request, response: Response):
-    try:
-        payload = await request.json()
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail="Некорректные данные Telegram") from error
-    if not isinstance(payload, dict) or not verify_telegram_login(payload):
-        raise HTTPException(status_code=401, detail="Не удалось проверить вход через Telegram")
-
-    user = find_active_user(payload)
-    if not user:
-        raise HTTPException(status_code=403, detail="Аккаунт не найден или деактивирован")
+@app.get("/auth/telegram/callback", name="telegram_callback")
+def telegram_callback(request: Request):
+    payload = dict(request.query_params)
+    if not verify_telegram_login(payload):
+        return RedirectResponse("/?auth_error=verify", status_code=303)
+    user, status = register_or_find_telegram_user(payload)
+    if status != "approved" or user is None:
+        return RedirectResponse(f"/?auth_error={status}", status_code=303)
 
     cookie_value, _ = create_session(user["id"])
+    response = RedirectResponse("/", status_code=303)
     response.set_cookie(
         COOKIE_NAME,
         cookie_value,
@@ -129,7 +201,49 @@ async def telegram_login(request: Request, response: Response):
         samesite="strict",
         path="/",
     )
-    return {"ok": True}
+    return response
+
+
+@app.get("/api/calendar")
+def calendar_month(year: int | None = None, month: int | None = None, user: dict[str, Any] = Depends(require_user)):
+    today = datetime.now(app_timezone()).date()
+    year = year or today.year
+    month = month or today.month
+    if year < 2000 or year > 2100 or month < 1 or month > 12:
+        raise HTTPException(status_code=422, detail="Некорректный месяц")
+    return get_month_calendar(engine, user, year, month)
+
+
+@app.get("/api/calendar/feed-link")
+def calendar_feed_link(request: Request, user: dict[str, Any] = Depends(require_user)):
+    token = create_calendar_token(user["id"])
+    https_url = str(request.url_for("calendar_feed", token=token))
+    return {"https_url": https_url, "webcal_url": https_url.replace("https://", "webcal://", 1).replace("http://", "webcal://", 1)}
+
+
+@app.get("/calendar/feed/{token}.ics", name="calendar_feed")
+def calendar_feed(token: str):
+    user_id = read_calendar_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="Календарь не найден")
+    content = build_calendar_feed(engine, user_id, app_timezone())
+    return Response(content, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "private, no-cache"})
+
+
+@app.post("/api/shifts/save")
+async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    operations = payload.get("operations")
+    if not isinstance(operations, list) or any(not isinstance(item, dict) for item in operations):
+        raise HTTPException(status_code=422, detail="Ожидался список ячеек")
+    try:
+        return apply_schedule_changes(engine, user["id"], operations)
+    except (KeyError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except FileExistsError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.post("/api/logout")
@@ -205,7 +319,11 @@ def list_users(_: dict[str, Any] = Depends(require_manager)):
             SELECT id, name, iiko_id, telegram_username, role, is_active, telegram_id
             FROM users ORDER BY is_active DESC, name COLLATE NOCASE
         """)).mappings().all()
-    return [{**dict(user), "role_name": ROLE_NAMES.get(user["role"], user["role"])} for user in users]
+    role_names = {**ROLE_NAMES, "guest": "Ожидает доступа"}
+    return [
+        {**dict(user), "role_name": role_names.get(user["role"], user["role"]), "access_pending": user["role"] == "guest"}
+        for user in users
+    ]
 
 
 def _clean_username(value: Any) -> str | None:
@@ -275,6 +393,10 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
         ).mappings().first()
         if not current_user:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
+        target_role = values.get("role", current_user["role"])
+        target_active = values.get("is_active", current_user["is_active"])
+        if target_role == "guest" and target_active:
+            raise HTTPException(status_code=400, detail="Назначьте роль сотрудника до выдачи доступа")
         will_remove_manager = (
             current_user["role"] in {"senior", "mentor"}
             and current_user["is_active"]
@@ -294,3 +416,117 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
         if result.rowcount == 0:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Истории гостей
+#
+# Публичная страница живёт по прямой ссылке /stories. В интерфейсе сотрудников
+# на неё нет ни одной ссылки: страница для гостей, а не для команды.
+# Модерация перенесена из отдельного прототипа в личный кабинет наставника и
+# работает по обычной сессии сайта — приватный ключ Neft_moderation_key больше
+# не нужен.
+# --------------------------------------------------------------------------- #
+
+def _guest_token(request: Request) -> str:
+    return request.cookies.get(stories_service.GUEST_COOKIE) or ""
+
+
+@app.get("/stories", response_class=HTMLResponse)
+def stories_page(request: Request):
+    return templates.TemplateResponse(request=request, name="stories.html", context={})
+
+
+@app.get("/stories/api/stories")
+def stories_public_list():
+    """Только опубликованные истории — для карусели."""
+    return {"stories": stories_service.list_published()}
+
+
+@app.post("/stories/api/stories", status_code=201)
+async def stories_create(request: Request):
+    """Приём новой истории. Публикуется только после модерации."""
+    body = await _read_json_object(request)
+    story, token = stories_service.create_story(body, _guest_token(request))
+    response = JSONResponse({"ok": True, "id": story["id"]}, status_code=201)
+    if token != _guest_token(request):
+        # Кука «памяти гостя»: одно устройство — одна история.
+        response.set_cookie(
+            stories_service.GUEST_COOKIE,
+            token,
+            max_age=stories_service.GUEST_COOKIE_MAX_AGE,
+            path=stories_service.GUEST_COOKIE_PATH,
+            httponly=True,
+            secure=os.getenv("WEB_COOKIE_SECURE", "0") == "1",
+            samesite="lax",
+        )
+    return response
+
+
+@app.get("/stories/api/me")
+def stories_me(request: Request):
+    """История текущего устройства, чтобы предложить её изменить."""
+    story = stories_service.find_guest_story(_guest_token(request))
+    return {
+        "hasStory": story is not None,
+        "story": stories_service.author_story(story) if story else None,
+    }
+
+
+@app.patch("/stories/api/stories/mine")
+async def stories_update_mine(request: Request):
+    """Правка своей истории. После изменения она снова уходит на модерацию."""
+    body = await _read_json_object(request)
+    return {"ok": True, "story": stories_service.update_my_story(body, _guest_token(request))}
+
+
+@app.get("/stories/uploads/{filename}")
+def stories_upload(filename: str):
+    found = stories_service.read_upload(filename)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Файл не найден")
+    path, media_type = found
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/stories/moderation")
+def stories_moderation_list(_: dict[str, Any] = Depends(require_manager)):
+    """Все истории для панели модерации в личном кабинете."""
+    return {"stories": stories_service.list_all(), "stats": stories_service.stats()}
+
+
+@app.patch("/api/stories/moderation/{story_id}")
+async def stories_moderation_update(story_id: str, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    body = await _read_json_object(request)
+    return {
+        "ok": True,
+        "story": stories_service.update_moderation_story(story_id, body),
+        "stats": stories_service.stats(),
+    }
+
+
+@app.delete("/api/stories/moderation/{story_id}")
+def stories_moderation_delete(story_id: str, _: dict[str, Any] = Depends(require_manager_csrf)):
+    if not stories_service.delete_story(story_id):
+        raise HTTPException(status_code=404, detail="История не найдена")
+    return {"ok": True, "stats": stories_service.stats()}
+
+
+# --- иконки и манифест: браузеры запрашивают их из корня сайта --------------- #
+
+@app.get("/site.webmanifest")
+def web_manifest():
+    return FileResponse(ICONS_DIR / "site.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/favicon.ico")
+def favicon():
+    return FileResponse(ICONS_DIR / "favicon.ico", media_type="image/x-icon")
+
+
+@app.get("/apple-touch-icon.png")
+def apple_touch_icon():
+    return FileResponse(ICONS_DIR / "apple-touch-icon.png", media_type="image/png")
+
+
+__all__ = ["app"]

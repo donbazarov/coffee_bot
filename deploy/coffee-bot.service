@@ -1,0 +1,45 @@
+# =============================================================================
+#  НЕФТЬ · Coffee Bot — systemd-юнит
+#
+#  Установка на VDS:
+#      sudo cp deploy/coffee-bot.service /etc/systemd/system/coffee-bot.service
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now coffee-bot
+#
+#  Если проект лежит не в /opt/coffee_bot, поправьте WorkingDirectory
+#  и EnvironmentFile ниже, а также пути в deploy/deploy.sh.
+# =============================================================================
+
+[Unit]
+Description=НЕФТЬ · Coffee Bot (FastAPI web service)
+Documentation=https://github.com/donbazarov/coffee_bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coffee
+Group=coffee
+WorkingDirectory=/opt/coffee_bot
+
+# Все настройки и секреты — в .env. Файл лежит рядом с проектом и не в git.
+EnvironmentFile=/opt/coffee_bot/.env
+
+# Один воркер: SQLite и JSON-файл историй не рассчитаны на параллельную запись.
+ExecStart=/opt/coffee_bot/venv/bin/python run.py
+
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# --- Ограничения безопасности ------------------------------------------------
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# Приложению нужно писать в свой каталог: SQLite-база, data/stories, бэкапы.
+ReadWritePaths=/opt/coffee_bot
+
+[Install]
+WantedBy=multi-user.target
