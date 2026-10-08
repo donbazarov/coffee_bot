@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#10110f">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Подтвердите вход · НЕФТЬ</title>
+  <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
+  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/login-wait.js" defer></script>
+</head>
+<body>
+  <main class="login-screen">
+    <div class="login-grain" aria-hidden="true"></div>
+
+    <header class="brand brand-login">
+      <span class="brand-symbol">Н</span>
+      <span class="brand-name">НЕФТЬ<small>КОФЕЙНАЯ КОМАНДА</small></span>
+    </header>
+
+    <section class="login-content">
+      <p class="eyebrow">ВХОД ЧЕРЕЗ TELEGRAM</p>
+      <h1>Подтвердите вход<br>в приложении.</h1>
+
+      <p class="login-copy">
+        Мы открыли чат с ботом{% if bot_username %} <strong>@{{ bot_username }}</strong>{% endif %}.
+        Нажмите в нём <strong>Start</strong> — и эта страница войдёт автоматически.
+      </p>
+
+      <div class="wait-indicator" id="wait-indicator">
+        <span class="wait-dot" aria-hidden="true"></span>
+        <span id="wait-text">Ждём подтверждения…</span>
+      </div>
+
+      <p class="login-error" id="wait-error" hidden role="alert"></p>
+
+      <div class="wait-actions">
+        <a class="button button-primary" href="/auth/telegram/start?force=1">Открыть Telegram ещё раз</a>
+        <a class="button button-quiet" href="/">Вернуться на страницу входа</a>
+      </div>
+
+      <p class="login-hint">
+        Если приложение не открылось — откройте Telegram вручную и найдите бота{% if bot_username %} <strong>@{{ bot_username }}</strong>{% endif %},
+        затем нажмите <strong>Start</strong>.
+      </p>
+    </section>
+
+    <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span><span>01 — 24</span></footer>
+  </main>
+</body>
+</html>

@@ -1,5 +1,5 @@
 # =============================================================================
-#  НЕФТЬ · Coffee Bot — запуск веб-сервиса в Docker
+#  НЕФТЬ · Coffee Bot — сайт и бот для входа
 #
 #  Быстрый старт:
 #    docker compose up -d --build
@@ -9,9 +9,14 @@
 #    git pull && docker compose up -d --build
 #
 #  Секреты берутся из .env в этой же папке (в git не хранится).
+#
+#  ВАЖНО про права: приложение работает от uid 10001, поэтому каталог ./data
+#  должен принадлежать ему, иначе изменения не сохраняются:
+#      sudo chown -R 10001:10001 ./data
 # =============================================================================
 
 services:
+  # --- Сайт ------------------------------------------------------------------
   web:
     build: .
     image: coffee-bot:latest
@@ -20,8 +25,12 @@ services:
     env_file:
       - .env
     environment:
+      # Значения ниже важнее того, что лежит в .env — так образ ведёт себя
+      # одинаково независимо от локальных настроек.
       WEB_HOST: 0.0.0.0
       WEB_PORT: 8001
+      DATABASE_URL: sqlite:////app/data/coffee_quality.db
+      NEFT_DATA_DIR: /app/data/stories
       # За прокси (nginx на хосте) доверяем заголовкам X-Forwarded-*.
       # Безопасно, потому что порт опубликован только на 127.0.0.1.
       FORWARDED_ALLOW_IPS: "*"
@@ -29,10 +38,32 @@ services:
       # Наружу не публикуем: трафик идёт через nginx на хосте
       - "127.0.0.1:8001:8001"
     volumes:
-      # База и истории гостей лежат на хосте — не теряются при пересборке.
-      # Хост-файл coffee_quality.db должен существовать до первого запуска.
-      - ./coffee_quality.db:/app/coffee_quality.db
+      # База, истории гостей и фото — всё в одном каталоге на хосте
       - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # --- Бот для входа через Telegram ------------------------------------------
+  #  Нужен для входа с телефона: пользователь открывает t.me/<бот>?start=<токен>,
+  #  жмёт Start, и сайт получает подтверждение. Работает через приложение
+  #  Telegram, поэтому не зависит от доступности telegram.org в браузере.
+  bot:
+    build: .
+    image: coffee-bot:latest
+    container_name: coffee-bot-login
+    restart: unless-stopped
+    command: ["python", "-m", "bot.web.telegram_login_bot"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/coffee_quality.db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - web
     logging:
       driver: json-file
       options:

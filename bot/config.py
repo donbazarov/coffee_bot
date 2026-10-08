@@ -81,5 +81,8 @@ def google_service_account() -> dict | None:
 class BotConfig:
     token: str | None = _load_token()
 
-    # ИСПОЛЬЗУЕМ SQLITE вместо PostgreSQL
-    database_url: str = "sqlite:///coffee_quality.db"
+    # Путь к базе можно переопределить через DATABASE_URL.
+    # В Docker удобно держать базу рядом с остальными данными:
+    #   DATABASE_URL=sqlite:////app/data/coffee_quality.db
+    # (четыре слэша перед абсолютным путём — это синтаксис SQLAlchemy для SQLite)
+    database_url: str = os.getenv("DATABASE_URL", "sqlite:///coffee_quality.db")

@@ -470,3 +470,24 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .story-admin-thumb { width: 52px; height: 52px; }
   .story-admin-actions .button { flex: 1 1 auto; justify-content: center; }
 }
+
+/* --- Вход через приложение Telegram: кнопка и экран ожидания --------------- */
+.login-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 38px; }
+.button-login { min-height: 46px; padding-inline: 22px; }
+.login-hint { max-width: 430px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
+.login-hint strong { color: var(--text); font-weight: 600; }
+.login-alt { max-width: 430px; margin-top: 32px; padding-top: 15px; border-top: 1px solid var(--line); }
+.login-alt summary { color: var(--dim); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
+.login-alt summary:hover { color: var(--muted); }
+.login-alt[open] summary { margin-bottom: 14px; color: var(--muted); }
+
+.wait-indicator { display: flex; align-items: center; gap: 11px; margin: 36px 0 26px; color: var(--muted); font: 11px var(--mono); letter-spacing: .06em; }
+.wait-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); animation: wait-pulse 1.4s ease-in-out infinite; }
+.wait-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 26px; }
+@keyframes wait-pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50%      { opacity: 1; transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wait-dot { animation: none; opacity: 1; }
+}

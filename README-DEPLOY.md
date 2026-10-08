@@ -67,8 +67,32 @@ scp -r .env coffee_quality.db data user@ВАШ-IP:/opt/coffee_bot/
 | `coffee_quality.db` | оценки, сотрудники, графики смен |
 | `data/` | истории гостей и загруженные фотографии |
 
-> `coffee_quality.db` должна существовать **до первого запуска**: compose монтирует
-> её как файл, и если файла нет, Docker создаст на его месте каталог.
+Затем **на сервере** сложите базу рядом с остальными данными и отдайте каталог
+пользователю контейнера — иначе изменения не будут сохраняться:
+
+```bash
+cd /opt/coffee_bot
+mv coffee_quality.db data/
+chown -R 10001:10001 data
+```
+
+> Почему именно так: приложение в контейнере работает от uid **10001**, а не от root.
+> Всё, во что оно пишет — база, истории, фото — должно принадлежать ему. Каталог
+> `data/` монтируется в контейнер как `/app/data`, и база тоже лежит внутри него,
+> поэтому одного `chown` достаточно.
+
+Проверьте, что запись действительно есть:
+
+```bash
+docker compose exec web python -c "
+from bot.database.models import engine
+from sqlalchemy import text
+with engine.begin() as c:
+    c.execute(text('CREATE TABLE IF NOT EXISTS _probe (id INTEGER)'))
+    c.execute(text('DROP TABLE _probe'))
+print('БАЗА: запись работает')
+"
+```
 
 ### A4. Запустить
 
@@ -77,6 +101,9 @@ cd /opt/coffee_bot
 docker compose up -d --build
 docker compose ps
 ```
+
+Поднимаются **два контейнера**: `coffee-bot` (сайт) и `coffee-bot-login` (бот,
+подтверждающий вход). Оба должны быть в состоянии `running`.
 
 Проверка, что приложение живо:
 
@@ -87,12 +114,23 @@ curl -s http://127.0.0.1:8001/healthz     # ожидаем {"ok":true}
 Логи, если что-то не так:
 
 ```bash
-docker compose logs -f
+docker compose logs -f                # оба сервиса
+docker compose logs -f bot            # только бот входа
 ```
+
+Убедитесь, что бот видит Telegram — это обязательное условие входа:
+
+```bash
+curl -s -m 10 "https://api.telegram.org/bot$(grep TELEGRAM_BOT_TOKEN /opt/coffee_bot/.env | cut -d= -f2)/getMe"
+```
+
+Ответ должен содержать `"ok":true`. Если связи нет — вход через Telegram работать
+не будет, нужен прокси или сервер в другой стране.
 
 ### A5. nginx и HTTPS
 
-Выполните **шаги 7 и 8** ниже — они одинаковы для обоих путей.
+Выполните **шаги 7 и 8** ниже — они одинаковы для обоих путей. Порядок важен:
+сначала HTTP-конфиг, потом сертификат.
 
 ### A6. Обновление в дальнейшем
 
@@ -101,7 +139,7 @@ cd /opt/coffee_bot && ./deploy/deploy.sh
 ```
 
 Скрипт сам увидит, что проект развёрнут в Docker, пересоберёт образ, перезапустит
-контейнер и дождётся ответа `/healthz`. Вручную то же самое короче:
+оба контейнера и дождётся ответа `/healthz`. Вручную то же самое короче:
 
 ```bash
 git pull && docker compose up -d --build
@@ -110,9 +148,9 @@ git pull && docker compose up -d --build
 ### Полезное про Docker
 
 ```bash
-docker compose logs -f            # живой лог
+docker compose logs -f            # живой лог обоих контейнеров
 docker compose restart            # перезапуск без пересборки
-docker compose down               # остановить и удалить контейнер
+docker compose down               # остановить и удалить контейнеры
 docker compose up -d --build      # пересобрать после обновления кода
 docker image prune -f             # убрать старые слои образа
 ```
@@ -258,15 +296,31 @@ sudo journalctl -u coffee-bot -n 50 --no-pager
 
 ## Шаг 7. nginx
 
+**Важен порядок:** сначала ставим HTTP-конфиг, и только потом выпускаем сертификат.
+Если сразу положить конфиг со `ssl_certificate`, nginx не запустится — он читает
+файл сертификата на этапе проверки конфига, а того ещё нет.
+
 ```bash
-sudo cp /opt/coffee_bot/deploy/nginx.conf /etc/nginx/sites-available/coffee-bot
-sudo ln -s /etc/nginx/sites-available/coffee-bot /etc/nginx/sites-enabled/
+sudo mkdir -p /var/www/html
+sudo cp /opt/coffee_bot/deploy/nginx-http.conf /etc/nginx/sites-available/coffee-bot
+sudo ln -sf /etc/nginx/sites-available/coffee-bot /etc/nginx/sites-enabled/coffee-bot
 sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-На этом шаге HTTPS-блок ещё не работает — сертификата нет. Это нормально, идём дальше.
+Проверьте, что сайт уже проксируется по HTTP:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: neftcoffee.shop' http://127.0.0.1/
+```
+
+Ожидаем `200`. Если `404` или `502` — смотрите `sudo nginx -T | grep -E 'server_name|proxy_pass'`
+и убедитесь, что конфиг подхватился, а приложение слушает 8001.
+
+> Про `include /etc/nginx/sites-enabled/*;` в `/etc/nginx/nginx.conf`: он там уже есть
+> по умолчанию. **Не добавляйте его повторно** — из-за дубликата nginx разберёт
+> конфиг дважды и упадёт с `duplicate listen options`.
 
 ---
 
@@ -274,10 +328,21 @@ sudo systemctl reload nginx
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d neftcoffee.shop -d www.neftcoffee.shop
+sudo certbot certonly --webroot -w /var/www/html -d neftcoffee.shop
 ```
 
-Certbot сам поправит конфиг nginx и настроит автопродление. Проверьте его:
+Теперь, когда сертификат готов, ставим итоговый конфиг с HTTPS и редиректом:
+
+```bash
+sudo cp /opt/coffee_bot/deploy/nginx.conf /etc/nginx/sites-available/coffee-bot
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+> В `deploy/nginx.conf` HTTP/2 включается директивой `listen 443 ssl http2`.
+> Отдельная строка `http2 on;` появилась только в nginx 1.25.1, а на Ubuntu 22.04
+> стоит 1.18 — там она падает с `unknown directive "http2"`.
+
+Проверьте автопродление:
 
 ```bash
 sudo certbot renew --dry-run
@@ -289,14 +354,37 @@ sudo certbot renew --dry-run
 
 ## Шаг 9. Вход через Telegram
 
-1. Откройте [@BotFather](https://t.me/BotFather) → `/mybots` → `@NeftCoffeeBot` → **Bot Settings → Domain**.
-   Укажите домен **без** `https://` и без слэша: `neftcoffee.shop`.
-2. Откройте `https://neftcoffee.shop` — на экране входа должен появиться виджет Telegram.
-3. Войдите. Если вашего аккаунта нет в базе, заявка попадёт в раздел
-   **Команда** (панель наставника) — там её нужно одобрить и выдать роль.
+Вход устроен как **ссылка на бота**: браузер уходит на `t.me/@NeftCoffeeBot?start=<токен>`,
+открывается приложение Telegram, сотрудник жмёт **Start** — и контейнер
+`coffee-bot-login` подтверждает вход, после чего сайт выдаёт сессию.
 
-> Telegram отдаёт виджет только по HTTPS и только для домена, указанного у BotFather.
-> Пока домен не задан, кнопка входа просто не отрисуется.
+Почему не штатный виджет: он грузится с `telegram.org`, который в России
+блокируется, поэтому у сотрудников без VPN кнопка просто не появляется.
+Приложение Telegram ходит своим протоколом и работает независимо от этого.
+
+Что нужно проверить:
+
+1. Контейнер бота запущен и видит Telegram:
+
+   ```bash
+   docker compose logs bot | tail -5
+   ```
+
+   Ожидаем строку вида `Бот @NeftCoffeeBot готов принимать входы`.
+
+2. Откройте `https://neftcoffee.shop` — на экране входа кнопка **«Войти через Telegram»**.
+3. Нажмите её: откроется Telegram, нажмите **Start**. Вернитесь в браузер — вход
+   произойдёт автоматически (страница сама опрашивает статус).
+4. Если вашего аккаунта нет в базе, заявка попадёт в раздел **Команда**
+   (панель наставника) — там нужно выдать роль, после чего войти снова.
+
+**Дополнительно (по желанию):** можно указать домен у BotFather
+([@BotFather](https://t.me/BotFather) → `/mybots` → `@NeftCoffeeBot` → **Bot Settings → Domain** →
+`neftcoffee.shop`). Тогда заработает и резервный вход через виджет на десктопе —
+он спрятан в свёрнутый блок «Вход через виджет Telegram».
+
+> Виджет отдаётся только по HTTPS и только для домена из BotFather. Без домена
+> он не отрисуется — но основной вход через приложение работает и так.
 
 ---
 
@@ -326,8 +414,8 @@ https://neftcoffee.shop/stories
 cd /opt/coffee_bot && ./deploy/deploy.sh
 ```
 
-Скрипт заберёт свежий код из ветки `main`, доустановит зависимости из
-`requirements.txt`, перезапустит сервис и покажет его статус.
+Скрипт заберёт свежий код из ветки `main`, обновит зависимости, пересоберёт и
+перезапустит сервисы (Docker или systemd — определит сам) и дождётся ответа `/healthz`.
 
 Сделать команду ещё короче — один раз добавьте алиас:
 
@@ -343,6 +431,10 @@ source ~/.bashrc
 пуш в `main` он заходит по SSH на сервер и запускает `deploy/deploy.sh`.
 
 Включить — три шага:
+
+> Для развёртывания в Docker используйте пользователя `root` (он владеет
+> `/opt/coffee_bot`), и тогда **шаг 3 не нужен** — `docker compose` не требует
+> `sudo`. Шаг 3 актуален только для пути без Docker.
 
 1. Сгенерируйте отдельный ключ **на сервере** и разрешите вход по нему:
 
@@ -379,18 +471,18 @@ source ~/.bashrc
 
 ## Резервные копии
 
-Что важно сохранить: `coffee_quality.db` (оценки, сотрудники, графики) и `data/stories/`
-(истории гостей и фотографии). Всё остальное восстанавливается из GitHub.
+Что важно сохранить: `data/coffee_quality.db` (оценки, сотрудники, графики)
+и `data/stories/` (истории гостей и фотографии). Всё остальное восстанавливается из GitHub.
 
 ```bash
 cd /opt/coffee_bot && ./deploy/backup.sh
 ```
 
 Архивы складываются в `/var/backups/coffee_bot`, старше 30 дней удаляются.
-Автоматизировать — добавьте в crontab пользователя `coffee`:
+Автоматизировать — добавьте в crontab:
 
 ```bash
-sudo -u coffee crontab -e
+crontab -e
 # строка:
 0 4 * * * /opt/coffee_bot/deploy/backup.sh >> /var/log/coffee-bot-backup.log 2>&1
 ```
@@ -403,14 +495,16 @@ sudo -u coffee crontab -e
 
 ```bash
 # запускать на СВОЁМ компьютере, не на сервере
-scp coffee_quality.db coffee@ВАШ-IP:/opt/coffee_bot/coffee_quality.db
-scp -r data coffee@ВАШ-IP:/opt/coffee_bot/
+scp -r data ВАШ-ПОЛЬЗОВАТЕЛЬ@ВАШ-IP:/opt/coffee_bot/
+# база лежит внутри data/
 ```
 
-После этого перезапустите сервис:
+Затем на сервере отдайте каталог пользователю контейнера и перезапустите сервисы:
 
 ```bash
-sudo systemctl restart coffee-bot
+cd /opt/coffee_bot
+chown -R 10001:10001 data
+docker compose restart          # или: sudo systemctl restart coffee-bot
 ```
 
 ---
@@ -419,12 +513,18 @@ sudo systemctl restart coffee-bot
 
 | Симптом | Причина и решение |
 |---|---|
-| `502 Bad Gateway` | Сервис не запущен. `sudo systemctl status coffee-bot`, затем `sudo journalctl -u coffee-bot -n 50` |
-| Кнопка входа Telegram не появилась | Не задан `TELEGRAM_BOT_USERNAME` или домен не указан у BotFather в *Bot Settings → Domain* |
+| **Изменения не сохраняются** | Каталог `data/` принадлежит не контейнеру. `sudo chown -R 10001:10001 /opt/coffee_bot/data` |
+| `502 Bad Gateway` | Сервис не запущен. `docker compose ps` и `docker compose logs -f` (или `systemctl status coffee-bot`) |
+| Кнопки входа нет вообще | Не задан `TELEGRAM_BOT_USERNAME` — проверьте `docker compose exec web printenv \| grep TELEGRAM` и пересоздайте контейнер: `docker compose up -d --force-recreate` |
+| Кнопка «Войти через Telegram» есть, но вход не подтверждается | Контейнер бота не видит Telegram: `docker compose logs bot`. Проверьте `curl https://api.telegram.org/bot<токен>/getMe` |
+| Бот отвечает ошибкой 409 в логах | С тем же токеном работает старый бот (`python -m bot.main`) — остановите его |
+| Виджет Telegram не появился | Он грузится с `telegram.org`: нужен VPN или домен у BotFather. Основной вход через приложение работает и без него |
 | `auth_error=verify` после входа | `TELEGRAM_BOT_TOKEN` не совпадает с ботом, чей домен указан у BotFather |
 | Сессия сбрасывается при каждом входе | Пустой `WEB_SESSION_SECRET`. Задайте его и перезапустите сервис |
 | Фото истории не загружается | Размер больше 5 МБ либо `client_max_body_size` в nginx меньше 8 МБ |
-| `Permission denied` при записи | Владелец файлов — не `coffee`: `sudo chown -R coffee:coffee /opt/coffee_bot` |
+| `nginx: unknown directive "http2"` | Взяли конфиг для nginx 1.25+ на nginx 1.18. Используйте `deploy/nginx.conf` — там `listen 443 ssl http2` |
+| `nginx: duplicate listen options` | Дважды подключён `sites-enabled`. Проверьте `grep -n sites-enabled /etc/nginx/nginx.conf` — строка должна быть одна |
+| `nginx: cannot load certificate` | Конфиг с HTTPS поставлен до выпуска сертификата. Сначала `deploy/nginx-http.conf`, потом certbot |
 | После деплоя старый интерфейс | Браузер закешировал статику — обновите страницу с Ctrl+F5 |
 
 ---
@@ -432,10 +532,18 @@ sudo systemctl restart coffee-bot
 ## Полезные команды
 
 ```bash
-sudo systemctl status coffee-bot          # состояние сервиса
-sudo systemctl restart coffee-bot         # перезапуск
-sudo journalctl -u coffee-bot -f          # живой лог
+# Docker
+docker compose ps                         # состояние контейнеров
+docker compose logs -f                    # живой лог сайта и бота
+docker compose up -d --force-recreate     # пересоздать (перечитать .env)
+cd /opt/coffee_bot && ./deploy/deploy.sh  # обновить сайт из GitHub
+
+# systemd (путь без Docker)
+sudo systemctl status coffee-bot
+sudo systemctl restart coffee-bot
+sudo journalctl -u coffee-bot -f
+
+# общее
 sudo nginx -t && sudo systemctl reload nginx
 sudo certbot renew                        # продлить сертификат
-cd /opt/coffee_bot && ./deploy/deploy.sh  # обновить сайт из GitHub
 ```

@@ -23,15 +23,30 @@ trap 'rm -rf "$WORK"' EXIT
 
 mkdir -p "$DEST"
 
-# Базу снимаем через sqlite3 .backup: так не поймать незавершённую транзакцию.
-if command -v sqlite3 >/dev/null 2>&1 && [ -f "$APP_DIR/coffee_quality.db" ]; then
-  sqlite3 "$APP_DIR/coffee_quality.db" ".backup '$WORK/coffee_quality.db'"
-elif [ -f "$APP_DIR/coffee_quality.db" ]; then
-  cp "$APP_DIR/coffee_quality.db" "$WORK/coffee_quality.db"
-fi
+# База может лежать в data/ (Docker) или в корне проекта (systemd) —
+# ищем в обоих местах.
+DB_SOURCE=""
+for candidate in "$APP_DIR/data/coffee_quality.db" "$APP_DIR/coffee_quality.db"; do
+  if [ -f "$candidate" ]; then
+    DB_SOURCE="$candidate"
+    break
+  fi
+done
 
 # Истории гостей и загруженные фото
 [ -d "$APP_DIR/data" ] && cp -r "$APP_DIR/data" "$WORK/data"
+
+# Базу кладём поверх — через sqlite3 .backup, чтобы не поймать
+# незавершённую транзакцию. В архиве она всегда лежит в data/.
+if [ -n "$DB_SOURCE" ]; then
+  mkdir -p "$WORK/data"
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sqlite3 "$DB_SOURCE" ".backup '$WORK/data/coffee_quality.db'"
+  else
+    cp "$DB_SOURCE" "$WORK/data/coffee_quality.db"
+  fi
+  echo "База: $DB_SOURCE"
+fi
 
 tar -czf "$DEST/coffee_bot_$STAMP.tar.gz" -C "$WORK" .
 

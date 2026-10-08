@@ -24,14 +24,33 @@
       <p class="eyebrow">COFFEE QUALITY / 01</p>
       <h1>Вкус начинается<br>с внимания.</h1>
       <p class="login-copy">Пространство команды для оценки напитков и качества работы.</p>
-      {% if telegram_login_enabled %}
-      <div class="telegram-login">
-        <script async src="https://telegram.org/js/telegram-widget.js?22"
-                data-telegram-login="{{ bot_username }}" data-size="large"
-                data-radius="8" data-auth-url="{{ telegram_callback_url }}"></script>
+      {% if bot_login_enabled %}
+      <div class="login-actions">
+        <a class="button button-primary button-login" href="/auth/telegram/start">
+          Войти через Telegram
+          <span aria-hidden="true">↗</span>
+        </a>
+        <p class="login-hint">Откроется приложение Telegram — нажмите там <strong>Start</strong>.</p>
       </div>
-      {% else %}
-      <p class="setup-notice">Задайте <code>TELEGRAM_BOT_USERNAME</code> и публичный HTTPS <code>TELEGRAM_AUTH_CALLBACK_URL</code>, чтобы включить вход.</p>
+      {% endif %}
+
+      {% if telegram_login_enabled %}
+      <details class="login-alt">
+        <summary>Вход через виджет Telegram (десктоп)</summary>
+        <p class="login-hint">
+          Виджет грузится с telegram.org. Если он недоступен без VPN, кнопка не появится —
+          пользуйтесь входом через приложение выше.
+        </p>
+        <div class="telegram-login">
+          <script async src="https://telegram.org/js/telegram-widget.js?22"
+                  data-telegram-login="{{ bot_username }}" data-size="large"
+                  data-radius="8" data-auth-url="{{ telegram_callback_url }}"></script>
+        </div>
+      </details>
+      {% endif %}
+
+      {% if not bot_login_enabled and not telegram_login_enabled %}
+      <p class="setup-notice">Задайте <code>TELEGRAM_BOT_USERNAME</code>, чтобы включить вход через Telegram.</p>
       {% endif %}
       {% if auth_error %}<p class="login-error" role="alert">{{ auth_error }}</p>{% endif %}
     </section>

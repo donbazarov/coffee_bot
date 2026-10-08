@@ -142,7 +142,13 @@ class ChecklistLog(Base):
 
 
 # Инициализация БД - используем SQLite
-engine = create_engine(BotConfig.database_url, connect_args={"check_same_thread": False} if "sqlite" in BotConfig.database_url else {})
+# timeout=15 — ждать освобождения блокировки, а не падать сразу:
+# в проде с одной и той же базой работают два процесса (сайт и бот для входа).
+if "sqlite" in BotConfig.database_url:
+    _connect_args = {"check_same_thread": False, "timeout": 15}
+else:
+    _connect_args = {}
+engine = create_engine(BotConfig.database_url, connect_args=_connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():

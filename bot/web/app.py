@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import engine
-from bot.web import stories_service
+from bot.web import stories_service, telegram_login
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
@@ -53,11 +53,12 @@ async def stories_error_handler(_request: Request, error: stories_service.Storie
     return JSONResponse({"error": error.message}, status_code=error.status)
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD"])
 def healthz():
     """Проверка живости для Docker, systemd и мониторинга.
 
-    Без авторизации и без обращения к базе: отвечает, пока жив HTTP-стек.
+    Отвечает и на GET, и на HEAD; без авторизации и без обращения к базе —
+    подтверждает только то, что жив HTTP-стек.
     """
     return {"ok": True}
 
@@ -112,6 +113,7 @@ def require_csrf(request: Request, user: dict[str, Any] = Depends(require_user))
 def migrate_database():
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
+    telegram_login.initialize_login_schema(engine)
     stories_migration = stories_service.migrate_from_prototype()
     if stories_migration["photos"] or stories_migration["removed_key"]:
         logging.getLogger("bot.web").info(
@@ -167,7 +169,21 @@ async def _read_json_object(request: Request) -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     user, csrf_token = _session_user(request)
-    bot_username = os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+
+    # Сотрудник вернулся на сайт после подтверждения в Telegram — входим сразу,
+    # без повторного нажатия кнопки.
+    if user is None:
+        entry = telegram_login.get_login_request(engine, request.cookies.get(TG_LOGIN_COOKIE))
+        if entry and entry["status"] == telegram_login.STATUS_APPROVED:
+            done = _complete_telegram_login(entry)
+            if done is not None:
+                cookie_value, next_path = done
+                response = RedirectResponse(next_path, status_code=303)
+                _set_session_cookie(response, cookie_value)
+                response.delete_cookie(TG_LOGIN_COOKIE, path="/")
+                return response
+
+    bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
     return templates.TemplateResponse(
         request=request,
@@ -178,12 +194,17 @@ def home(request: Request):
             "bot_username": bot_username,
             "telegram_callback_url": telegram_callback_url,
             "telegram_login_enabled": bool(bot_username and telegram_callback_url.startswith("https://")),
+            # Вход через бота работает и там, где telegram.org недоступен
+            "bot_login_enabled": bool(bot_username),
             "auth_error": {
                 "verify": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз.",
                 "account": "Ваш Telegram не привязан к активной учётной записи команды.",
                 "pending": "Запрос на доступ сохранён. Ожидайте, пока администратор назначит вам роль.",
                 "conflict": "Не удалось однозначно сопоставить аккаунт. Обратитесь к администратору.",
                 "disabled": "Доступ к аккаунту отключён. Обратитесь к администратору.",
+                "setup": "Не задан TELEGRAM_BOT_USERNAME — вход через Telegram недоступен.",
+                "unknown": telegram_login.reason_message("unknown"),
+                "expired": telegram_login.reason_message("expired"),
             }.get(request.query_params.get("auth_error"), ""),
             "role_names": ROLE_NAMES,
         },
@@ -211,6 +232,139 @@ def telegram_callback(request: Request):
         path="/",
     )
     return response
+
+
+# --------------------------------------------------------------------------- #
+# Вход через Telegram по ссылке на бота
+#
+# Нужен для телефона и для регионов, где telegram.org недоступен: виджет
+# грузится именно с telegram.org и без него просто не появляется. Здесь
+# браузер уходит на t.me/<бот>?start=<токен>, открывается ПРИЛОЖЕНИЕ Telegram,
+# сотрудник жмёт «Start», и процесс bot/web/telegram_login_bot.py помечает
+# вход подтверждённым. Приложение ходит своим протоколом, поэтому блокировка
+# сайта Telegram этому не мешает.
+# --------------------------------------------------------------------------- #
+
+TG_LOGIN_COOKIE = "tg_login"
+
+
+def _bot_username() -> str:
+    return os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+
+
+def _cookie_secure() -> bool:
+    return os.getenv("WEB_COOKIE_SECURE", "0") == "1"
+
+
+def _set_session_cookie(response: Response, cookie_value: str) -> None:
+    response.set_cookie(
+        COOKIE_NAME,
+        cookie_value,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+
+
+def _complete_telegram_login(entry: dict[str, Any]) -> tuple[str, str] | None:
+    """Выдаёт сессию по подтверждённой заявке. Возвращает (cookie, куда вернуться)."""
+    user_id = entry.get("user_id")
+    if not user_id:
+        return None
+    cookie_value, _ = create_session(int(user_id))
+    telegram_login.consume_login_request(engine, entry["token"])
+    return cookie_value, entry.get("next_path") or "/"
+
+
+@app.get("/auth/telegram/start")
+def telegram_start(request: Request, next: str = "/", force: int = 0):
+    """Создаёт заявку на вход и отправляет браузер в приложение Telegram."""
+    username = _bot_username()
+    if not username:
+        return RedirectResponse("/?auth_error=setup", status_code=303)
+
+    # Если сотрудник вернулся кнопкой «назад», не отправляем его в Telegram
+    # повторно — показываем экран ожидания с опросом статуса.
+    existing = telegram_login.get_login_request(engine, request.cookies.get(TG_LOGIN_COOKIE))
+    if not force and existing and existing["status"] == telegram_login.STATUS_PENDING:
+        return templates.TemplateResponse(
+            request=request,
+            name="login-wait.html",
+            context={"bot_username": username, "next_path": existing["next_path"]},
+        )
+
+    token = telegram_login.create_login_request(engine, next)
+    response = RedirectResponse(f"https://t.me/{username}?start={token}", status_code=303)
+    response.set_cookie(
+        TG_LOGIN_COOKIE,
+        token,
+        max_age=int(telegram_login.LOGIN_REQUEST_TTL.total_seconds()),
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/telegram/wait", response_class=HTMLResponse)
+def telegram_wait(request: Request):
+    """Экран ожидания: сотрудник подтверждает вход в приложении Telegram."""
+    entry = telegram_login.get_login_request(engine, request.cookies.get(TG_LOGIN_COOKIE))
+
+    if entry is None:
+        return RedirectResponse("/?auth_error=unknown", status_code=303)
+
+    if entry["status"] == telegram_login.STATUS_APPROVED:
+        done = _complete_telegram_login(entry)
+        if done is not None:
+            cookie_value, next_path = done
+            response = RedirectResponse(next_path, status_code=303)
+            _set_session_cookie(response, cookie_value)
+            response.delete_cookie(TG_LOGIN_COOKIE, path="/")
+            return response
+
+    if entry["status"] == telegram_login.STATUS_DENIED:
+        response = RedirectResponse(f"/?auth_error={entry.get('reason') or 'unknown'}", status_code=303)
+        response.delete_cookie(TG_LOGIN_COOKIE, path="/")
+        return response
+
+    return templates.TemplateResponse(
+        request=request,
+        name="login-wait.html",
+        context={"bot_username": _bot_username(), "next_path": entry.get("next_path") or "/"},
+    )
+
+
+@app.get("/api/auth/telegram/status")
+def telegram_status(request: Request):
+    """Опрос статуса заявки со страницы ожидания. Ставит сессию при успехе."""
+    entry = telegram_login.get_login_request(engine, request.cookies.get(TG_LOGIN_COOKIE))
+
+    if entry is None:
+        return JSONResponse({"status": "unknown", "message": telegram_login.reason_message("unknown")})
+
+    if entry["status"] == telegram_login.STATUS_APPROVED:
+        done = _complete_telegram_login(entry)
+        if done is None:
+            return JSONResponse({"status": "unknown", "message": telegram_login.reason_message("unknown")})
+        cookie_value, next_path = done
+        response = JSONResponse({"status": "approved", "next": next_path})
+        _set_session_cookie(response, cookie_value)
+        response.delete_cookie(TG_LOGIN_COOKIE, path="/")
+        return response
+
+    if entry["status"] == telegram_login.STATUS_DENIED:
+        response = JSONResponse({
+            "status": "denied",
+            "message": telegram_login.reason_message(entry.get("reason")),
+        })
+        response.delete_cookie(TG_LOGIN_COOKIE, path="/")
+        return response
+
+    return JSONResponse({"status": "pending"})
 
 
 @app.get("/api/calendar")

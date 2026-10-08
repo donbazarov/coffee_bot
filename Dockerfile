@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # =============================================================================
-#  НЕФТЬ · Coffee Bot — образ веб-сервиса
+#  НЕФТЬ · Coffee Bot — образ веб-сервиса и бота входа
 #
 #  Лёгкий: slim-база, только runtime-зависимости сайта, без компиляторов.
 #  Секреты (.env, credentials.json) в образ НЕ копируются — передаются
@@ -9,7 +9,10 @@
 #
 #  Сборка:  docker build -t coffee-bot .
 #  Запуск:  docker run -d --name coffee-bot --env-file .env -p 127.0.0.1:8001:8001 \
-#                    -v "$PWD/data:/app/data" -v "$PWD/coffee_quality.db:/app/coffee_quality.db" coffee-bot
+#                    -v "$PWD/data:/app/data" coffee-bot
+#
+#  База и истории лежат в /app/data (том), поэтому процесс может писать
+#  от непривилегированного пользователя: каталог принадлежит ему.
 # =============================================================================
 FROM python:3.12-slim
 
@@ -21,6 +24,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Europe/Moscow \
     WEB_HOST=0.0.0.0 \
     WEB_PORT=8001 \
+    DATABASE_URL=sqlite:////app/data/coffee_quality.db \
     NEFT_DATA_DIR=/app/data/stories
 
 WORKDIR /app
