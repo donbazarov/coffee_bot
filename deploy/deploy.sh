@@ -32,7 +32,17 @@ cd "$APP_DIR"
 echo "==> Обновляю код из origin/$BRANCH"
 git fetch --prune origin
 git checkout "$BRANCH"
-git pull --ff-only "origin/$BRANCH"
+
+# Важно: именно `merge origin/main`, а не `pull origin/main`.
+# У `git pull` первый аргумент — имя удалённого репозитория, поэтому
+# `git pull origin/main` ищет remote с таким названием и падает с
+# "does not appear to be a git repository".
+if ! git merge --ff-only "origin/$BRANCH"; then
+  echo "!! Не удалось обновить код: скорее всего на сервере есть локальные правки."
+  echo "   Посмотреть: git status"
+  echo "   Сбросить:   git checkout -- ."
+  exit 1
+fi
 
 # --- 2. Режим запуска --------------------------------------------------------
 detect_mode() {

@@ -430,42 +430,74 @@ source ~/.bashrc
 В репозитории лежит готовый workflow `.github/workflows/deploy.yml`: на каждый
 пуш в `main` он заходит по SSH на сервер и запускает `deploy/deploy.sh`.
 
-Включить — три шага:
+> **Пока секреты не заданы, workflow будет падать.** Это нормально — он выводит
+> понятную подсказку, чего не хватает. Если автодеплой не нужен вовсе, удалите
+> файл `.github/workflows/deploy.yml` или оставьте в нём только триггер
+> `workflow_dispatch:` — тогда он запускается лишь вручную, а пуши ничего не ломают.
 
-> Для развёртывания в Docker используйте пользователя `root` (он владеет
-> `/opt/coffee_bot`), и тогда **шаг 3 не нужен** — `docker compose` не требует
-> `sudo`. Шаг 3 актуален только для пути без Docker.
+**Шаг 1. Создать ключ.** На сервере (для Docker-развёртывания — от `root`,
+он владеет `/opt/coffee_bot`):
 
-1. Сгенерируйте отдельный ключ **на сервере** и разрешите вход по нему:
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/github_deploy -N ""
+cat /root/.ssh/github_deploy.pub >> /root/.ssh/authorized_keys
+cat /root/.ssh/github_deploy
+```
 
-   ```bash
-   sudo -u coffee ssh-keygen -t ed25519 -f /home/coffee/.ssh/github_deploy -N ""
-   sudo -u coffee sh -c 'cat /home/coffee/.ssh/github_deploy.pub >> /home/coffee/.ssh/authorized_keys'
-   sudo -u coffee cat /home/coffee/.ssh/github_deploy       # приватный ключ — целиком, с BEGIN и END
-   ```
+Последняя команда печатает **приватный** ключ — он понадобится целиком,
+вместе со строками `-----BEGIN` и `-----END`.
 
-2. В GitHub → репозиторий → *Settings → Secrets and variables → Actions* добавьте:
+Проверьте, что вход по нему работает:
 
-   | Secret | Значение |
-   |---|---|
-   | `SSH_HOST` | IP или домен сервера |
-   | `SSH_USER` | `coffee` |
-   | `SSH_KEY` | приватный ключ из шага 1 целиком |
+```bash
+ssh -i /root/.ssh/github_deploy -o IdentitiesOnly=yes root@ВАШ-IP 'echo вход работает'
+```
 
-3. Разрешите пользователю `coffee` перезапускать сервис без пароля:
+**Шаг 2. Добавить секреты.** GitHub → репозиторий → *Settings → Secrets and
+variables → Actions* → **New repository secret**:
 
-   ```bash
-   echo "coffee ALL=(ALL) NOPASSWD: /bin/systemctl restart coffee-bot, /bin/systemctl is-active coffee-bot, /bin/systemctl status coffee-bot" | sudo tee /etc/sudoers.d/coffee-bot
-   sudo chmod 440 /etc/sudoers.d/coffee-bot
-   ```
+| Secret | Значение | Обязателен |
+|---|---|---|
+| `SSH_HOST` | IP или домен сервера | да |
+| `SSH_USER` | `root` для Docker | да |
+| `SSH_KEY` | приватный ключ из шага 1 целиком | да |
+| `SSH_PORT` | порт SSH, если не 22 | нет |
 
-   Этот же файл нужен и для ручного `./deploy/deploy.sh` — без него скрипт
-   спросит пароль и не сможет работать из Actions.
+> `SSH_KEY` вставляйте вместе с завершающим переводом строки. Если ключ
+> «съелся» при копировании, вход упадёт с `invalid format`.
+
+**Шаг 3 (только для пути без Docker).** Если сервис работает под systemd от
+пользователя `coffee`, разрешите ему перезапуск без пароля:
+
+```bash
+echo "coffee ALL=(ALL) NOPASSWD: /bin/systemctl restart coffee-bot, /bin/systemctl is-active coffee-bot, /bin/systemctl status coffee-bot" | sudo tee /etc/sudoers.d/coffee-bot
+sudo chmod 440 /etc/sudoers.d/coffee-bot
+```
+
+Этот же файл нужен и для ручного `./deploy/deploy.sh` в режиме systemd — без него
+скрипт спросит пароль и не сможет работать из Actions.
 
 После этого любой пуш в `main` сам обновляет сайт. Проверить можно на вкладке
 **Actions** в репозитории.
 
 Ручной запуск всё равно остаётся: `cd /opt/coffee_bot && ./deploy/deploy.sh`.
+
+**Если workflow недоступен, а деплой нужен срочно** — выполните вручную то же
+самое: зайдите по SSH и запустите `./deploy/deploy.sh`.
+
+---
+
+## Скрипты должны быть исполняемыми
+
+`.sh`-файлы в репозитории лежат с битом `755`. Если при клонировании он потерялся
+(на Windows git по умолчанию не хранит этот бит), скрипт не запустится и скажет
+`Permission denied`. Лечится одной командой на сервере:
+
+```bash
+chmod +x /opt/coffee_bot/deploy/*.sh
+```
+
+Либо просто передайте скрипт интерпретатору: `bash deploy/deploy.sh`.
 
 ---
 

@@ -1,12 +1,17 @@
 # Автодеплой на VDS при пуше в main.
 #
 # Что делает: заходит по SSH на сервер и запускает deploy/deploy.sh,
-# то есть «git pull → обновить зависимости → перезапустить сервис».
+# то есть «обновить код → пересобрать → перезапустить».
 #
 # Требуемые секреты репозитория (Settings → Secrets and variables → Actions):
-#   SSH_HOST — IP или домен сервера
-#   SSH_USER — пользователь приложения, например coffee
-#   SSH_KEY  — приватный ключ для входа на сервер
+#   SSH_HOST — IP или домен сервера            (обязательно)
+#   SSH_USER — пользователь для входа          (обязательно; root для Docker)
+#   SSH_KEY  — приватный ключ целиком          (обязательно)
+#   SSH_PORT — порт SSH, по умолчанию 22       (необязательно)
+#
+# Пока секреты не заданы, workflow будет завершаться ошибкой с подсказкой.
+# Если автодеплой не нужен — просто удалите этот файл или замените триггер на
+# только `workflow_dispatch:` (тогда он запускается лишь вручную).
 #
 # Подробности — в README-DEPLOY.md, раздел «Автодеплой при пуше в GitHub».
 
@@ -28,28 +33,70 @@ jobs:
     timeout-minutes: 10
 
     steps:
+      # --- 0. Понятная ошибка вместо загадочного "exit code 1" ----------------
+      - name: Проверка секретов
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          missing=""
+          if [ -z "$SSH_HOST" ]; then missing="$missing SSH_HOST"; fi
+          if [ -z "$SSH_USER" ]; then missing="$missing SSH_USER"; fi
+          if [ -z "$SSH_KEY" ]; then missing="$missing SSH_KEY"; fi
+
+          if [ -n "$missing" ]; then
+            echo "::error title=Не заданы секреты::В репозитории нет секретов:$missing"
+            echo ""
+            echo "Добавьте их: Settings → Secrets and variables → Actions → New repository secret"
+            echo "  SSH_HOST — IP или домен сервера"
+            echo "  SSH_USER — пользователь для входа по SSH (root для Docker-развёртывания)"
+            echo "  SSH_KEY  — приватный ключ целиком, вместе со строками BEGIN и END"
+            echo ""
+            echo "Подробности — в README-DEPLOY.md, раздел «Автодеплой при пуше в GitHub»."
+            exit 1
+          fi
+          echo "Секреты на месте: $SSH_USER@$SSH_HOST"
+
+      # --- 1. Ключ и known_hosts --------------------------------------------
       - name: Подготовка SSH-ключа
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Ключ хоста сервера, чтобы не спрашивало подтверждение
-          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error title=Сервер недоступен::ssh-keyscan не получил ключ хоста $SSH_HOST. Сервер отвечает по SSH?"
+            exit 1
+          fi
+
+      # --- 2. Деплой ---------------------------------------------------------
       - name: Запуск deploy.sh на сервере
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
         run: |
           ssh -i ~/.ssh/deploy_key \
+              -p "$SSH_PORT" \
               -o IdentitiesOnly=yes \
+              -o BatchMode=yes \
               -o StrictHostKeyChecking=accept-new \
-              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              -o ConnectTimeout=15 \
+              "$SSH_USER@$SSH_HOST" \
               'cd /opt/coffee_bot && ./deploy/deploy.sh'
 
+      # --- 3. Проверка, что сайт жив ----------------------------------------
       - name: Проверка, что сайт отвечает
         env:
           APP_URL: https://neftcoffee.shop
         run: |
           for attempt in 1 2 3 4 5; do
-            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$APP_URL/" || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$APP_URL/healthz" || true)
             echo "Попытка $attempt: HTTP $code"
             if [ "$code" = "200" ]; then
               echo "Сайт отвечает."
@@ -57,5 +104,5 @@ jobs:
             fi
             sleep 5
           done
-          echo "Сайт не ответил 200 — проверьте: journalctl -u coffee-bot -n 50"
+          echo "::error title=Сайт не ответил::Проверьте на сервере: docker compose logs --tail=50"
           exit 1

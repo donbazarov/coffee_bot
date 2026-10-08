@@ -1,0 +1,16 @@
+# Shell-скрипты: только LF, независимо от настроек машины
+*.sh text eol=lf
+
+# Файлы, которым CRLF нужен по-настоящему
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Бинарное — git не должен трогать
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.xlsx binary
