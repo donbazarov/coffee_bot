@@ -2,6 +2,8 @@ from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
+from pathlib import Path
+
 from bot.config import BotConfig
 
 Base = declarative_base()
@@ -152,4 +154,13 @@ engine = create_engine(BotConfig.database_url, connect_args=_connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def init_db():
+    """Создаёт недостающие таблицы.
+
+    Для SQLite заодно создаёт каталог и сам файл базы. Вызывается на старте
+    веб-приложения: миграции читают таблицу `users`, поэтому на пустой базе
+    схема должна существовать заранее, иначе старт падает с
+    "no such table: users".
+    """
+    if engine.dialect.name == "sqlite" and engine.url.database:
+        Path(engine.url.database).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)

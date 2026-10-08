@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 
 from bot.config import BotConfig, load_env_file
-from bot.database.models import engine
+from bot.database.models import engine, init_db
 from bot.web import telegram_login
 from bot.web.auth import register_or_find_telegram_user
 
@@ -102,6 +102,10 @@ def main() -> int:
         logger.error("Не задан TELEGRAM_BOT_TOKEN — боту нечем работать.")
         return 1
 
+    # Оба контейнера ходят в одну базу, и каждый должен уметь подняться
+    # первым: init_db() создаёт общие таблицы (users и прочие), а
+    # initialize_login_schema() — только таблицу заявок на вход.
+    init_db()
     telegram_login.initialize_login_schema(engine)
 
     try:

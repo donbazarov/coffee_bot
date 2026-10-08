@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from bot.database.models import engine
+from bot.database.models import engine, init_db
 from bot.web import stories_service, telegram_login
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
@@ -111,6 +111,10 @@ def require_csrf(request: Request, user: dict[str, Any] = Depends(require_user))
 
 @app.on_event("startup")
 def migrate_database():
+    # Сначала создаём недостающие таблицы. Приложение обязано подниматься на
+    # пустой базе: без этого шага старт падал с "no such table: users", потому
+    # что миграции читают users раньше, чем схема вообще создана.
+    init_db()
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
     telegram_login.initialize_login_schema(engine)

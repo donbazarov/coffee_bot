@@ -94,6 +94,21 @@ print('БАЗА: запись работает')
 "
 ```
 
+Тем же способом убедитесь, что данные **на месте** — файл может существовать,
+но быть пустым:
+
+```bash
+docker compose exec web python -c "
+import sqlite3
+c = sqlite3.connect('/app/data/coffee_quality.db')
+print('таблиц:', c.execute(\"select count(*) from sqlite_master where type='table'\").fetchone()[0])
+print('сотрудников:', c.execute('select count(*) from users').fetchone()[0])
+"
+```
+
+Ожидаем больше нуля в обеих строках. Если таблиц `0` — база не доехала,
+смотрите раздел «База пустая» в конце файла.
+
 ### A4. Запустить
 
 ```bash
@@ -253,7 +268,7 @@ sudo -u coffee nano /opt/coffee_bot/.env
 | `TELEGRAM_BOT_TOKEN` | токен бота. Если пусто — берётся `bot_token` из `credentials.json` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | сервисный аккаунт Google одной строкой JSON. Нужен только старому боту, сайту не требуется |
 | `WEB_COOKIE_SECURE` | `1` — обязательно, сайт работает по HTTPS |
-| `NEFT_DATA_DIR` | `/opt/coffee_bot/data/stories` (или оставьте пустым — путь по умолчанию совпадает) |
+| `NEFT_DATA_DIR` | оставьте пустым — путь по умолчанию подходит и в Docker, и без него. В Docker нужное значение уже задаёт `docker-compose.yml` |
 
 `.env` не хранится в git, поэтому переживает любые обновления — заполняется один раз.
 Значения из `.env` имеют приоритет над переменными окружения, так что устаревшая
@@ -525,6 +540,49 @@ crontab -e
 
 ---
 
+## База пустая
+
+Симптом: сайт отдаёт `502`, а в логах `sqlite3.OperationalError: no such table: users`.
+
+Приложение подключилось к файлу, в котором нет данных. Читать это надо так:
+**база не доехала до сервера**, а не «база сломалась».
+
+Найдите рабочую копию:
+
+```bash
+cd /opt/coffee_bot
+ls -la data/
+ls -la *.db 2>/dev/null
+find / -name 'coffee_quality.db' -not -path '*/proc/*' 2>/dev/null
+```
+
+Если файл лежит в корне проекта — `scp` положил его рядом, а не в `data/` —
+перенесите его и отдайте каталог контейнеру:
+
+```bash
+cd /opt/coffee_bot
+mv -f coffee_quality.db data/coffee_quality.db
+chown -R 10001:10001 data
+docker compose up -d --force-recreate
+```
+
+Проверьте тем же способом, что в шаге A3: таблиц и сотрудников должно быть
+больше нуля.
+
+Если рабочей копии нет нигде — база пустая по-настоящему. Сайт запустится
+(схема создаётся автоматически), но войти будет некому: список сотрудников пуст.
+Перенесите базу с компьютера, где уже велись оценки:
+
+```bash
+# запускать на СВОЁМ компьютере
+scp data/coffee_quality.db ВАШ-ПОЛЬЗОВАТЕЛЬ@ВАШ-IP:/opt/coffee_bot/data/
+```
+
+> Пустой `data/coffee_quality.db` можно смело перезаписывать — это заготовка,
+> созданная при неудачном запуске, а не данные.
+
+---
+
 ## Как перенести данные с локальной машины
 
 Если на компьютере уже есть рабочие данные, скопируйте их на сервер:
@@ -550,6 +608,8 @@ docker compose restart          # или: sudo systemctl restart coffee-bot
 | Симптом | Причина и решение |
 |---|---|
 | `fatal: 'origin/main' does not appear to be a git repository` | Сервер запускает **старую** версию `deploy.sh`, а она сама себя обновить не может. Обновите код один раз вручную: `cd /opt/coffee_bot && git fetch origin && git merge --ff-only origin/main`. Дальше `./deploy/deploy.sh` заработает как обычно |
+| `sqlite3.OperationalError: no such table: users` на старте | Приложение поднялось на **пустой** базе: файл есть, данных в нём нет. Смотрите раздел «База пустая» ниже |
+| Истории не сохраняются либо фото отдаёт 404 (в Docker) | В `.env` прописан `NEFT_DATA_DIR` с путём хоста. Внутри контейнера каталог другой — уберите строку из `.env`, нужное значение уже задано в `docker-compose.yml` |
 | **Изменения не сохраняются** | Каталог `data/` принадлежит не контейнеру. `sudo chown -R 10001:10001 /opt/coffee_bot/data` |
 | `502 Bad Gateway` | Сервис не запущен. `docker compose ps` и `docker compose logs -f` (или `systemctl status coffee-bot`) |
 | Кнопки входа нет вообще | Не задан `TELEGRAM_BOT_USERNAME` — проверьте `docker compose exec web printenv \| grep TELEGRAM` и пересоздайте контейнер: `docker compose up -d --force-recreate` |
