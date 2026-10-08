@@ -11,7 +11,7 @@
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png" />
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png" />
   <link rel="manifest" href="/site.webmanifest" />
-  <link rel="stylesheet" href="/static/stories/styles.css" />
+  <link rel="stylesheet" href="/static/stories/styles.css?v={{ static_version }}" />
 </head>
 <body>
   <!-- Фон: медленные разноцветные кривые Безье (радужные масляные разводы) -->
@@ -160,6 +160,6 @@
     </article>
   </template>
 
-  <script src="/static/stories/app.js" defer></script>
+  <script src="/static/stories/app.js?v={{ static_version }}" defer></script>
 </body>
 </html>

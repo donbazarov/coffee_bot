@@ -9,8 +9,8 @@
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/site.webmanifest">
-  <link rel="stylesheet" href="/static/app.css">
-  <script src="/static/app.js" defer></script>
+  <link rel="stylesheet" href="/static/app.css?v={{ static_version }}">
+  <script src="/static/app.js?v={{ static_version }}" defer></script>
 </head>
 <body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}">
   {% if not user %}

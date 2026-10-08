@@ -1,5 +1,6 @@
 import os
 import hmac
+import hashlib
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -52,6 +53,27 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
 
+def _static_version() -> str:
+    """Отпечаток статики: меняется при правке css/js и сбрасывает кеш браузера.
+
+    Без этого статика без Cache-Control кешируется браузером эвристически,
+    и после деплоя новый HTML работает со старыми app.css/app.js.
+    """
+    digest = hashlib.sha1()
+    for name in ("app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+        try:
+            stat = (BASE_DIR / "static" / name).stat()
+        except OSError:
+            continue
+        digest.update(f"{name}:{stat.st_mtime_ns}:{stat.st_size}".encode())
+    return digest.hexdigest()[:12]
+
+
+# Пересчитывается при рестарте сервиса — деплой меняет mtime файлов.
+STATIC_VERSION = _static_version()
+templates.env.globals["static_version"] = STATIC_VERSION
+
+
 @app.exception_handler(stories_service.StoriesError)
 async def stories_error_handler(_request: Request, error: stories_service.StoriesError) -> JSONResponse:
     """Истории отвечают форматом {"error": ...} — именно его ждёт клиент гостевой страницы."""
@@ -80,6 +102,11 @@ async def add_security_headers(request: Request, call_next):
         "img-src 'self' data: https://t.me https://*.telegram.org; connect-src 'self'; "
         "frame-src https://oauth.telegram.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
+    # Статика и HTML перепроверяются при каждой загрузке — иначе после деплоя
+    # браузер отдаёт старый интерфейс (у StaticFiles нет Cache-Control).
+    content_type = response.headers.get("content-type", "")
+    if request.url.path.startswith("/static/") or content_type.startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
