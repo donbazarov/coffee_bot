@@ -7,11 +7,15 @@
 #
 #  Что делает:
 #    1. забирает свежий код из ветки main (fast-forward, без конфликтов);
-#    2. доустанавливает зависимости из requirements.txt;
-#    3. перезапускает systemd-сервис;
-#    4. показывает статус, а при падении — последние строки лога.
+#    2. пересобирает и перезапускает сервис — в Docker или через systemd,
+#       смотря как сайт развёрнут (режим определяется автоматически);
+#    3. дожидается ответа приложения и показывает логи, если оно не поднялось.
 #
-#  База и фото историй не трогаются: они лежат в data/ и не отслеживаются git.
+#  Принудительно выбрать режим:
+#      MODE=docker  ./deploy/deploy.sh
+#      MODE=systemd ./deploy/deploy.sh
+#
+#  Данные не трогаются: база и истории лежат в coffee_quality.db и data/.
 # =============================================================================
 
 set -euo pipefail
@@ -20,30 +24,59 @@ APP_DIR="${APP_DIR:-/opt/coffee_bot}"
 SERVICE="${SERVICE:-coffee-bot}"
 BRANCH="${BRANCH:-main}"
 VENV="${VENV:-$APP_DIR/venv}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/healthz}"
 
 cd "$APP_DIR"
 
+# --- 1. Код ------------------------------------------------------------------
 echo "==> Обновляю код из origin/$BRANCH"
 git fetch --prune origin
 git checkout "$BRANCH"
 git pull --ff-only "origin/$BRANCH"
 
-echo "==> Обновляю зависимости"
-"$VENV/bin/pip" install --upgrade pip --quiet
-"$VENV/bin/pip" install -r requirements.txt --quiet
+# --- 2. Режим запуска --------------------------------------------------------
+detect_mode() {
+  if [ -n "${MODE:-}" ]; then echo "$MODE"; return; fi
+  if [ -f "$APP_DIR/docker-compose.yml" ] && command -v docker >/dev/null 2>&1 \
+     && docker compose version >/dev/null 2>&1; then
+    echo "docker"
+  else
+    echo "systemd"
+  fi
+}
 
-echo "==> Проверяю, что код компилируется"
-"$VENV/bin/python" -m compileall -q bot run.py
+MODE="$(detect_mode)"
+echo "==> Режим запуска: $MODE"
 
-echo "==> Перезапускаю сервис $SERVICE"
-sudo systemctl restart "$SERVICE"
-
-sleep 3
-if sudo systemctl is-active --quiet "$SERVICE"; then
-  echo "==> Готово: $SERVICE работает"
-  sudo systemctl status "$SERVICE" --no-pager --lines=5
+if [ "$MODE" = "docker" ]; then
+  echo "==> Пересобираю образ и перезапускаю контейнер"
+  docker compose up -d --build --remove-orphans
 else
-  echo "!! Сервис не поднялся, последние строки лога:"
-  sudo journalctl -u "$SERVICE" -n 40 --no-pager
-  exit 1
+  echo "==> Обновляю зависимости (только веб-сервис)"
+  "$VENV/bin/pip" install --upgrade pip --quiet
+  "$VENV/bin/pip" install -r requirements-web.txt --quiet
+
+  echo "==> Проверяю, что код компилируется"
+  "$VENV/bin/python" -m compileall -q bot run.py
+
+  echo "==> Перезапускаю сервис $SERVICE"
+  sudo systemctl restart "$SERVICE"
 fi
+
+# --- 3. Проверка, что приложение ожило ---------------------------------------
+echo "==> Жду ответа приложения на $HEALTH_URL"
+for _ in $(seq 1 10); do
+  if curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
+    echo "==> Готово: сайт работает"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "!! Приложение не ответило за 20 секунд. Последние логи:"
+if [ "$MODE" = "docker" ]; then
+  docker compose logs --tail=50 || true
+else
+  sudo journalctl -u "$SERVICE" -n 50 --no-pager || true
+fi
+exit 1

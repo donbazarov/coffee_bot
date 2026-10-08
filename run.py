@@ -21,7 +21,8 @@ if __name__ == "__main__":
         # Один воркер осознанно: SQLite и JSON-файл историй не любят
         # параллельную запись из нескольких процессов.
         workers=1,
-        # За nginx доверяем заголовкам X-Forwarded-* только от localhost.
+        # За прокси (nginx, Docker) доверяем заголовкам X-Forwarded-*.
+        # По умолчанию только от localhost; в контейнере задаётся FORWARDED_ALLOW_IPS.
         proxy_headers=True,
-        forwarded_allow_ips="127.0.0.1",
+        forwarded_allow_ips=os.getenv("FORWARDED_ALLOW_IPS", "127.0.0.1"),
     )

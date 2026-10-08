@@ -53,6 +53,15 @@ async def stories_error_handler(_request: Request, error: stories_service.Storie
     return JSONResponse({"error": error.message}, status_code=error.status)
 
 
+@app.get("/healthz")
+def healthz():
+    """Проверка живости для Docker, systemd и мониторинга.
+
+    Без авторизации и без обращения к базе: отвечает, пока жив HTTP-стек.
+    """
+    return {"ok": True}
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)

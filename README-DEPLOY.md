@@ -22,6 +22,109 @@
 
 ---
 
+**Два пути.** Путь А (Docker) короче: пять шагов, и на сервере не нужны ни `venv`,
+ни подходящая версия Python. Путь Б (systemd) подробнее, зато без Docker.
+Шаги с nginx и сертификатом у путей общие.
+
+---
+
+## Путь А. Docker (рекомендуется)
+
+### A1. Установить Docker
+
+```bash
+sudo apt update && sudo apt install -y ca-certificates curl git
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"
+```
+
+Выйдите из SSH и зайдите снова — иначе команды `docker` будут требовать `sudo`.
+
+### A2. Забрать код
+
+```bash
+sudo mkdir -p /opt/coffee_bot
+sudo chown "$USER":"$USER" /opt/coffee_bot
+git clone https://github.com/donbazarov/coffee_bot.git /opt/coffee_bot
+cd /opt/coffee_bot
+```
+
+Для приватного репозитория сначала настройте SSH-ключ — см. шаг 3 в пути Б.
+
+### A3. Перенести настройки и данные
+
+Выполняйте **на своём компьютере**, не на сервере:
+
+```bash
+scp -r .env coffee_quality.db data user@ВАШ-IP:/opt/coffee_bot/
+```
+
+Что переносится:
+
+| Файл | Зачем |
+|---|---|
+| `.env` | все секреты: токен бота, ключ сессий, домен |
+| `coffee_quality.db` | оценки, сотрудники, графики смен |
+| `data/` | истории гостей и загруженные фотографии |
+
+> `coffee_quality.db` должна существовать **до первого запуска**: compose монтирует
+> её как файл, и если файла нет, Docker создаст на его месте каталог.
+
+### A4. Запустить
+
+```bash
+cd /opt/coffee_bot
+docker compose up -d --build
+docker compose ps
+```
+
+Проверка, что приложение живо:
+
+```bash
+curl -s http://127.0.0.1:8001/healthz     # ожидаем {"ok":true}
+```
+
+Логи, если что-то не так:
+
+```bash
+docker compose logs -f
+```
+
+### A5. nginx и HTTPS
+
+Выполните **шаги 7 и 8** ниже — они одинаковы для обоих путей.
+
+### A6. Обновление в дальнейшем
+
+```bash
+cd /opt/coffee_bot && ./deploy/deploy.sh
+```
+
+Скрипт сам увидит, что проект развёрнут в Docker, пересоберёт образ, перезапустит
+контейнер и дождётся ответа `/healthz`. Вручную то же самое короче:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+### Полезное про Docker
+
+```bash
+docker compose logs -f            # живой лог
+docker compose restart            # перезапуск без пересборки
+docker compose down               # остановить и удалить контейнер
+docker compose up -d --build      # пересобрать после обновления кода
+docker image prune -f             # убрать старые слои образа
+```
+
+---
+
+## Путь Б. Без Docker (systemd)
+
+Шаги 1–9 ниже. Сервису нужен Python 3.10 или новее.
+
+---
+
 ## Шаг 1. Подготовка сервера
 
 Подключитесь по SSH и поставьте нужные пакеты:

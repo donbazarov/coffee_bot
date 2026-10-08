@@ -1,0 +1,40 @@
+# =============================================================================
+#  НЕФТЬ · Coffee Bot — запуск веб-сервиса в Docker
+#
+#  Быстрый старт:
+#    docker compose up -d --build
+#    docker compose logs -f
+#
+#  Обновление после пуша в GitHub:
+#    git pull && docker compose up -d --build
+#
+#  Секреты берутся из .env в этой же папке (в git не хранится).
+# =============================================================================
+
+services:
+  web:
+    build: .
+    image: coffee-bot:latest
+    container_name: coffee-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      WEB_HOST: 0.0.0.0
+      WEB_PORT: 8001
+      # За прокси (nginx на хосте) доверяем заголовкам X-Forwarded-*.
+      # Безопасно, потому что порт опубликован только на 127.0.0.1.
+      FORWARDED_ALLOW_IPS: "*"
+    ports:
+      # Наружу не публикуем: трафик идёт через nginx на хосте
+      - "127.0.0.1:8001:8001"
+    volumes:
+      # База и истории гостей лежат на хосте — не теряются при пересборке.
+      # Хост-файл coffee_quality.db должен существовать до первого запуска.
+      - ./coffee_quality.db:/app/coffee_quality.db
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
