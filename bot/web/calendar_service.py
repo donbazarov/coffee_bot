@@ -200,6 +200,30 @@ def delete_shift_template(engine: Engine, user_id: int, template_id: int) -> boo
         return result.rowcount > 0
 
 
+def reorder_shift_templates(engine: Engine, user_id: int, ordered_ids: Any) -> list[dict[str, Any]]:
+    """Сохраняет новый порядок личных шаблонов (порядок задаёт клиент drag-and-drop)."""
+    if not isinstance(ordered_ids, list) or not ordered_ids:
+        raise ValueError("Ожидался непустой список шаблонов")
+    try:
+        ids = [int(item) for item in ordered_ids]
+    except (TypeError, ValueError) as error:
+        raise ValueError("Идентификаторы шаблонов должны быть числами") from error
+    if len(set(ids)) != len(ids):
+        raise ValueError("Идентификаторы шаблонов повторяются")
+    with engine.begin() as connection:
+        owned = [row[0] for row in connection.execute(text(
+            "SELECT id FROM web_shift_templates WHERE user_id = :user_id"
+        ), {"user_id": user_id})]
+        if set(ids) != set(owned):
+            raise ValueError("Список шаблонов не совпадает с сохранёнными")
+        for index, template_id in enumerate(ids):
+            connection.execute(text("""
+                UPDATE web_shift_templates SET order_index = :index, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND user_id = :user_id
+            """), {"index": index, "id": template_id, "user_id": user_id})
+    return list_shift_templates(engine, user_id)
+
+
 def _time_text(value: Any) -> str:
     return str(value or "")[:5]
 
@@ -541,14 +565,28 @@ def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -
               AND role IN ('barista','senior','mentor')
         """), {"user_id": user_id}).mappings().first()
         if not user or user["iiko_id"] is None:
-            return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Coffee Quality//Shift Calendar//RU\r\nEND:VCALENDAR\r\n"
+            return "\r\n".join([
+                "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Coffee Quality//Shift Calendar//RU",
+                "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+                "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+                "X-PUBLISHED-TTL:PT1H",
+                "END:VCALENDAR",
+            ]) + "\r\n"
         shifts = connection.execute(text("""
             SELECT s.shift_id, s.shift_date, st.start_time, st.end_time, st.point
             FROM schedule s JOIN shift_types st ON st.id = s.shift_type_id
             WHERE s.iiko_id = :iiko_id AND COALESCE(s.is_active,1) = 1
             ORDER BY s.shift_date, st.start_time
         """), {"iiko_id": str(user["iiko_id"])}).mappings().all()
-    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Coffee Quality//Shift Calendar//RU", "CALSCALE:GREGORIAN", "METHOD:PUBLISH", f"X-WR-CALNAME:Смены — {user['name']}"]
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Coffee Quality//Shift Calendar//RU",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+        # Подсказка клиенту, как часто перечитывать фид (RFC 7986 + X-PUBLISHED-TTL).
+        # Отдельная синхронизация не нужна: фид собирается из БД на каждый запрос.
+        "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+        "X-PUBLISHED-TTL:PT1H",
+        f"X-WR-CALNAME:Смены — {user['name']}",
+    ]
     now = datetime.now(user_timezone).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for shift in shifts:
         start, end = _shift_bounds(shift["shift_date"], shift["start_time"], shift["end_time"], user_timezone)

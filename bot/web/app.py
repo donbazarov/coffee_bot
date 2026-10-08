@@ -28,6 +28,7 @@ from bot.web.calendar_service import (
     get_user_preferences,
     initialize_calendar_schema,
     list_shift_templates,
+    reorder_shift_templates,
     save_user_preferences,
     update_shift_template,
 )
@@ -474,6 +475,15 @@ def delete_shift_template_route(template_id: int, user: dict[str, Any] = Depends
     if not delete_shift_template(engine, user["id"], template_id):
         raise HTTPException(status_code=404, detail="Шаблон не найден")
     return {"ok": True}
+
+
+@app.post("/api/shift-templates/reorder")
+async def reorder_shift_templates_route(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    try:
+        return reorder_shift_templates(engine, user["id"], payload.get("order"))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/api/shifts/save")

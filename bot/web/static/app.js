@@ -25,6 +25,8 @@ const MATRIX_MIN_DAY = 18;
 const MATRIX_MAX_DAY = 92;
 const MATRIX_COMPACT = 46;
 const MATRIX_ZOOM_STORAGE = 'matrix-day-width';
+// Встроенный шаблон: снимает смену (soft delete). В БД не хранится и не удаляется.
+const DAY_OFF_TEMPLATE = { id: 'dayoff', name: 'Выходной', builtin: true };
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -150,9 +152,12 @@ function renderUpcoming(shifts) {
 function updateEditControls() {
   if (!editMode) activeTemplate = null;
   document.body.classList.toggle('calendar-editing', editMode);
-  document.querySelector('#edit-calendar-toggle')?.setAttribute('aria-pressed', String(editMode));
   const toggle = document.querySelector('#edit-calendar-toggle');
-  if (toggle) toggle.textContent = editMode ? 'Завершить правки' : 'Править график';
+  if (toggle) {
+    // Выход из правок — только «Отменить» или «Сохранить изменения».
+    toggle.hidden = editMode;
+    toggle.textContent = 'Править график';
+  }
   const tools = document.querySelector('.matrix-edit-tools');
   if (tools) tools.hidden = !editMode;
   const saveButton = document.querySelector('#matrix-save');
@@ -160,7 +165,7 @@ function updateEditControls() {
   const summary = document.querySelector('#matrix-status');
   if (summary && !editMode) summary.textContent = 'Режим просмотра';
   const templates = document.querySelector('#matrix-templates');
-  if (templates) templates.hidden = !editMode || !managerRole;
+  if (templates) templates.hidden = !editMode || !managerRole || baristaPreview;
   renderChangeTypeSwitch();
   renderTemplateBar();
 }
@@ -270,7 +275,9 @@ function applyBaristaPreview(enabled) {
   const roleLabel = document.querySelector('.account-copy span');
   if (roleLabel) roleLabel.textContent = enabled ? 'Бариста · предпросмотр' : document.body.dataset.roleLabel;
   if (enabled && document.querySelector('#team-view')?.classList.contains('is-visible')) setView('overview');
-  if (enabled && editMode) discardScheduleChanges();
+  // Черновик не сбрасываем: бариста тоже может делать «Замену». Но у него нет
+  // инструментов наставника (шаблоны и тип правки) — обновляем панель.
+  updateEditControls();
 }
 
 async function loadPreferences() {
@@ -366,36 +373,93 @@ function templateLabel(template) {
   return `${template.name} · ${template.start}–${template.end} ${template.point}`;
 }
 
+function calendarEmployees() {
+  return (calendarState?.employees || []).filter((person) => person.iiko_id !== null && person.iiko_id !== undefined);
+}
+
+function cellDateFromColumn(column) {
+  if (!calendarState) return null;
+  const day = column + 1;
+  if (day < 1 || day > calendarState.days_in_month) return null;
+  return `${calendarState.year}-${String(calendarState.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function stageTemplate(template, employeeId, date, redraw = true) {
+  if (template.builtin) { setDraftCell(employeeId, date, null, redraw); return; }
+  setDraftCell(employeeId, date, { start_time: template.start, end_time: template.end, point: template.point }, redraw);
+}
+
+function applyActiveTemplateToSelection() {
+  if (!activeTemplate) return 0;
+  const bounds = matrixSelectionBounds();
+  if (!bounds || !calendarState) return 0;
+  const employees = calendarEmployees();
+  let staged = 0;
+  for (let row = bounds.top; row <= bounds.bottom; row += 1) {
+    const employee = employees[row];
+    if (!employee) continue;
+    for (let col = bounds.left; col <= bounds.right; col += 1) {
+      const date = cellDateFromColumn(col);
+      if (!date) continue;
+      stageTemplate(activeTemplate, employee.id, date, false);
+      staged += 1;
+    }
+  }
+  if (staged) { renderCalendar(calendarState); updateEditControls(); }
+  return staged;
+}
+
+function templateClass(template, active) {
+  if (template.builtin) return `matrix-template is-dayoff ${active ? 'is-active' : ''}`;
+  const point = template.point === 'УЯ' ? 'point-uy' : 'point-de';
+  return `matrix-template ${point} ${active ? 'is-active' : ''}`;
+}
+
 function renderTemplateBar() {
   const bar = document.querySelector('#matrix-templates');
   if (!bar) return;
-  if (!editMode || !managerRole) { bar.hidden = true; bar.innerHTML = ''; return; }
+  if (!editMode || !managerRole || baristaPreview) { bar.hidden = true; bar.innerHTML = ''; return; }
   bar.hidden = false;
-  if (!shiftTemplates.length) {
-    bar.innerHTML = '<span class="matrix-templates-label">ШАБЛОНЫ</span><span class="matrix-template-empty">Добавьте шаблоны в личном кабинете</span>';
+  const templates = [DAY_OFF_TEMPLATE, ...shiftTemplates];
+  const buttons = templates.map((template) => {
+    const active = activeTemplate && activeTemplate.id === template.id;
+    const title = template.builtin ? 'Выходной: снять смену' : templateLabel(template);
+    return `<button type="button" class="${templateClass(template, active)}" data-template-id="${template.id}" title="${escapeHtml(title)}">${escapeHtml(template.name)}</button>`;
+  }).join('');
+  const hint = shiftTemplates.length ? '' : '<span class="matrix-template-empty">свои шаблоны — в личном кабинете</span>';
+  bar.innerHTML = `<span class="matrix-templates-label">ШАБЛОНЫ</span>${buttons}${hint}`;
+  bar.querySelectorAll('[data-template-id]').forEach((button) => {
+    button.addEventListener('click', () => onTemplateButton(button.dataset.templateId));
+  });
+}
+
+function onTemplateButton(templateId) {
+  const template = templateId === DAY_OFF_TEMPLATE.id
+    ? DAY_OFF_TEMPLATE
+    : shiftTemplates.find((item) => String(item.id) === templateId);
+  if (!template) return;
+  const status = document.querySelector('#matrix-status');
+  if (activeTemplate && activeTemplate.id === template.id) {
+    activeTemplate = null;
+    renderTemplateBar();
+    if (status) status.textContent = 'Шаблон снят';
     return;
   }
-  const buttons = shiftTemplates.map((template) => {
-    const active = activeTemplate && activeTemplate.id === template.id;
-    return `<button type="button" class="matrix-template ${active ? 'is-active' : ''}" data-template-id="${template.id}" title="${escapeHtml(templateLabel(template))}">${escapeHtml(template.name)}</button>`;
-  }).join('');
-  bar.innerHTML = `<span class="matrix-templates-label">ШАБЛОНЫ</span>${buttons}`;
-  bar.querySelectorAll('[data-template-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const template = shiftTemplates.find((item) => String(item.id) === button.dataset.templateId);
-      if (!template) return;
-      activeTemplate = activeTemplate && activeTemplate.id === template.id ? null : template;
-      renderTemplateBar();
-      const status = document.querySelector('#matrix-status');
-      if (status) status.textContent = activeTemplate ? `Шаблон «${activeTemplate.name}»: нажмите по ячейке` : 'Шаблон снят';
-    });
-  });
+  activeTemplate = template;
+  // В режиме «Диапазон» с выделением — сразу заполняем выделенные ячейки.
+  const filled = matrixMode === 'select' ? applyActiveTemplateToSelection() : 0;
+  renderTemplateBar();
+  if (status) {
+    status.textContent = filled
+      ? `Шаблон «${template.name}»: заполнено ячеек — ${filled}`
+      : `Шаблон «${template.name}»: нажмите по ячейке или выделите диапазон`;
+  }
 }
 
 function renderChangeTypeSwitch() {
   const box = document.querySelector('#matrix-change-type');
   if (!box) return;
-  if (!editMode || !isMentor) { box.hidden = true; box.innerHTML = ''; return; }
+  if (!editMode || !isMentor || baristaPreview) { box.hidden = true; box.innerHTML = ''; return; }
   box.hidden = false;
   box.innerHTML = `
     <button type="button" data-change-type="swap" class="${matrixChangeType === 'swap' ? 'is-selected' : ''}">Замена</button>
@@ -429,12 +493,13 @@ function renderTemplateSettings() {
   const list = document.querySelector('#template-list');
   if (!list) return;
   if (!shiftTemplates.length) {
-    list.innerHTML = '<p class="empty-state">Шаблонов пока нет</p>';
+    list.innerHTML = '<p class="empty-state">Шаблонов пока нет. Встроенный «Выходной» уже доступен в режиме правок.</p>';
     return;
   }
   list.innerHTML = shiftTemplates.map((template) => `
-    <div class="template-row" data-template-row="${template.id}">
-      <span class="template-row-name">${escapeHtml(template.name)}</span>
+    <div class="template-row" data-template-row="${template.id}" draggable="true">
+      <span class="template-drag" title="Перетащите, чтобы изменить порядок" aria-hidden="true">⠿</span>
+      <span class="template-row-name"><i class="point-swatch ${template.point === 'УЯ' ? 'point-uy' : 'point-de'}"></i>${escapeHtml(template.name)}</span>
       <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}</span>
       <span class="template-row-actions">
         <button class="button button-quiet" type="button" data-template-edit="${template.id}">Изменить</button>
@@ -517,6 +582,58 @@ function setupShiftTemplates() {
       showToast('Шаблон удалён');
     } catch (requestError) { showToast(requestError.message); }
   });
+  setupTemplateDragAndDrop();
+}
+
+/* --- Порядок шаблонов: drag-and-drop ---------------------------------- */
+
+function setupTemplateDragAndDrop() {
+  const list = document.querySelector('#template-list');
+  if (!list) return;
+  let dragged = null;
+  list.addEventListener('dragstart', (event) => {
+    const row = event.target.closest('[data-template-row]');
+    if (!row) return;
+    dragged = row;
+    row.classList.add('is-dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    try { event.dataTransfer.setData('text/plain', row.dataset.templateRow); } catch (error) { /* Safari */ }
+  });
+  list.addEventListener('dragover', (event) => {
+    if (!dragged) return;
+    event.preventDefault();
+    list.querySelectorAll('.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'));
+    const row = event.target.closest('[data-template-row]');
+    if (row && row !== dragged) row.classList.add('is-drop-target');
+  });
+  list.addEventListener('drop', async (event) => {
+    if (!dragged) return;
+    event.preventDefault();
+    const target = event.target.closest('[data-template-row]');
+    if (target && target !== dragged) {
+      const rect = target.getBoundingClientRect();
+      const insertAfter = event.clientY > rect.top + rect.height / 2;
+      list.insertBefore(dragged, insertAfter ? target.nextSibling : target);
+      await persistTemplateOrder();
+    }
+  });
+  list.addEventListener('dragend', () => {
+    if (dragged) dragged.classList.remove('is-dragging');
+    list.querySelectorAll('.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'));
+    dragged = null;
+  });
+}
+
+async function persistTemplateOrder() {
+  const list = document.querySelector('#template-list');
+  if (!list) return;
+  const order = [...list.querySelectorAll('[data-template-row]')].map((row) => Number(row.dataset.templateRow));
+  try {
+    shiftTemplates = await api('/api/shift-templates/reorder', { method: 'POST', body: JSON.stringify({ order }) });
+    renderTemplateSettings();
+    renderTemplateBar();
+    showToast('Порядок шаблонов сохранён');
+  } catch (error) { showToast(error.message); }
 }
 
 function renderCalendar(data) {
@@ -1014,19 +1131,15 @@ function setupDashboard() {
     loadCalendar();
   });
   document.querySelector('#edit-calendar-toggle')?.addEventListener('click', () => {
-    if (editMode && matrixChanges.size) {
-      const status = document.querySelector('#matrix-status');
-      if (status) status.textContent = 'Сохраните или отмените черновик';
-      return;
-    }
-    editMode = !editMode;
+    if (editMode) return; // выход из правок — только «Отменить» или «Сохранить изменения»
+    editMode = true;
     matrixAnchor = null; matrixExtent = null;
     matrixMode = 'edit';
     document.querySelectorAll('[data-matrix-mode]').forEach((button) => button.classList.toggle('is-selected', button.dataset.matrixMode === matrixMode));
     renderCalendar(calendarState);
     updateEditControls();
     const status = document.querySelector('#matrix-status');
-    if (status) status.textContent = editMode ? 'Изменения пока не сохранены' : 'Режим просмотра';
+    if (status) status.textContent = 'Изменения пока не сохранены';
   });
   document.querySelector('#matrix-save')?.addEventListener('click', saveScheduleChanges);
   document.querySelector('#matrix-discard')?.addEventListener('click', discardScheduleChanges);
@@ -1052,21 +1165,25 @@ function setupDashboard() {
   document.addEventListener('pointerup', () => { matrixPointerDown = false; });
   matrix?.addEventListener('click', (event) => {
     if (!editMode) return;
+    const status = document.querySelector('#matrix-status');
     const cell = event.target.closest('[data-cell-date]');
     if (!cell) {
       // Клик по пустому месту матрицы снимает активный шаблон.
       if (activeTemplate) { activeTemplate = null; renderTemplateBar(); }
       return;
     }
-    if (matrixMode === 'select') return;
     if (activeTemplate) {
-      setDraftCell(Number(cell.dataset.employeeId), cell.dataset.cellDate, {
-        start_time: activeTemplate.start, end_time: activeTemplate.end, point: activeTemplate.point,
-      });
-      const status = document.querySelector('#matrix-status');
+      // В режиме «Диапазон» с выделением шаблон ложится на все выделенные ячейки.
+      if (matrixMode === 'select' && matrixSelectionBounds()) {
+        const filled = applyActiveTemplateToSelection();
+        if (status) status.textContent = `Шаблон «${activeTemplate.name}»: заполнено ячеек — ${filled}`;
+        return;
+      }
+      stageTemplate(activeTemplate, Number(cell.dataset.employeeId), cell.dataset.cellDate);
       if (status) status.textContent = `Шаблон «${activeTemplate.name}» · нажмите другую ячейку или Esc`;
       return;
     }
+    if (matrixMode === 'select') return;
     const shift = getEffectiveShift(Number(cell.dataset.employeeId), cell.dataset.cellDate);
     openShiftDialog(cell.dataset.cellDate, shift || null, Number(cell.dataset.employeeId));
   });
@@ -1075,7 +1192,9 @@ function setupDashboard() {
     document.querySelectorAll('[data-matrix-mode]').forEach((item) => item.classList.toggle('is-selected', item === button));
     matrixAnchor = null; matrixExtent = null; updateMatrixSelection();
     const status = document.querySelector('#matrix-status');
-    if (status) status.textContent = matrixMode === 'select' ? 'Выберите ячейки мышью или Shift-click' : 'Нажмите ячейку, чтобы изменить смену';
+    if (status) status.textContent = matrixMode === 'select'
+      ? 'Выделите диапазон, затем нажмите шаблон или ячейку'
+      : 'Нажмите ячейку, чтобы изменить смену';
   }));
   document.querySelector('#matrix-copy')?.addEventListener('click', copyMatrixSelection);
   document.querySelector('#matrix-paste')?.addEventListener('click', pasteMatrixSelection);
