@@ -11,19 +11,24 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine, init_db
-from bot.web import stories_service, telegram_login
+from bot.web import schedule_snapshot, stories_service, telegram_login
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
     apply_schedule_changes,
     build_calendar_feed,
+    create_shift_template,
+    delete_shift_template,
     get_month_calendar,
     get_shift_history,
     get_user_preferences,
     initialize_calendar_schema,
+    list_shift_templates,
     save_user_preferences,
+    update_shift_template,
 )
 from bot.web.migrations import migrate_legacy_telegram_ids
 
@@ -118,6 +123,8 @@ def migrate_database():
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
     telegram_login.initialize_login_schema(engine)
+    # Раз в месяц (т.е. при ближайшем рестарте после рубежа) чистим старые снимки.
+    schedule_snapshot.prune_snapshots(engine)
     stories_migration = stories_service.migrate_from_prototype()
     if stories_migration["photos"] or stories_migration["removed_key"]:
         logging.getLogger("bot.web").info(
@@ -397,14 +404,68 @@ def calendar_feed(token: str):
     return Response(content, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "private, no-cache"})
 
 
+# --------------------------------------------------------------------------- #
+# Снимки графика («Расписание») и личные шаблоны смен
+# --------------------------------------------------------------------------- #
+
+@app.get("/calendar/snapshots/{filename}")
+def calendar_snapshot(filename: str, _: dict[str, Any] = Depends(require_user)):
+    """Снимок графика доступен любому авторизованному сотруднику (для истории правок)."""
+    found = schedule_snapshot.read_snapshot(filename)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Снимок не найден")
+    return FileResponse(found, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.get("/api/shift-templates")
+def shift_templates(user: dict[str, Any] = Depends(require_user)):
+    return list_shift_templates(engine, user["id"])
+
+
+@app.post("/api/shift-templates")
+async def create_shift_template_route(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    try:
+        return create_shift_template(engine, user["id"], payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.patch("/api/shift-templates/{template_id}")
+async def update_shift_template_route(template_id: int, request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    try:
+        return update_shift_template(engine, user["id"], template_id, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.delete("/api/shift-templates/{template_id}")
+def delete_shift_template_route(template_id: int, user: dict[str, Any] = Depends(require_manager_csrf)):
+    if not delete_shift_template(engine, user["id"], template_id):
+        raise HTTPException(status_code=404, detail="Шаблон не найден")
+    return {"ok": True}
+
+
 @app.post("/api/shifts/save")
 async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     payload = await _read_json_object(request)
     operations = payload.get("operations")
     if not isinstance(operations, list) or any(not isinstance(item, dict) for item in operations):
         raise HTTPException(status_code=422, detail="Ожидался список ячеек")
+    change_type = payload.get("change_type", "swap")
+    if change_type not in {"swap", "schedule"}:
+        raise HTTPException(status_code=422, detail="Неизвестный тип правки")
+    # Тип «Расписание» — только наставник. Проверка на сервере, не только в UI.
+    if change_type == "schedule" and user["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Тип «Расписание» доступен только наставникам")
     try:
-        return apply_schedule_changes(engine, user["id"], operations)
+        # apply_schedule_changes синхронная и с генерацией картинки — уводим из event loop.
+        return await run_in_threadpool(apply_schedule_changes, engine, user["id"], operations, change_type)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
     except (KeyError, TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except FileExistsError as error:

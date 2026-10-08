@@ -12,7 +12,19 @@ let matrixChanges = new Map();
 let editMode = false;
 let modulePreferences = { quality_enabled: true, calendar_enabled: true };
 const managerRole = document.body.dataset.manager === 'true';
+const userRole = document.body.dataset.role || '';
+const isMentor = userRole === 'mentor';
 let baristaPreview = false;
+let matrixDayWidth = null;
+let matrixChangeType = 'swap';
+let activeTemplate = null;
+let shiftTemplates = [];
+let calendarAutoScroll = false;
+let matrixAutoMonth = null;
+const MATRIX_MIN_DAY = 18;
+const MATRIX_MAX_DAY = 92;
+const MATRIX_COMPACT = 46;
+const MATRIX_ZOOM_STORAGE = 'matrix-day-width';
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({
@@ -136,6 +148,7 @@ function renderUpcoming(shifts) {
 }
 
 function updateEditControls() {
+  if (!editMode) activeTemplate = null;
   document.body.classList.toggle('calendar-editing', editMode);
   document.querySelector('#edit-calendar-toggle')?.setAttribute('aria-pressed', String(editMode));
   const toggle = document.querySelector('#edit-calendar-toggle');
@@ -146,6 +159,10 @@ function updateEditControls() {
   if (saveButton) saveButton.disabled = !editMode || matrixChanges.size === 0;
   const summary = document.querySelector('#matrix-status');
   if (summary && !editMode) summary.textContent = 'Режим просмотра';
+  const templates = document.querySelector('#matrix-templates');
+  if (templates) templates.hidden = !editMode || !managerRole;
+  renderChangeTypeSwitch();
+  renderTemplateBar();
 }
 
 function cellChangeKey(userId, date) {
@@ -184,11 +201,24 @@ async function loadShiftHistory() {
   try {
     const entries = await api(`/api/shift-history?year=${calendarState.year}&month=${calendarState.month}`);
     document.querySelector('#history-count').textContent = entries.length;
-    list.innerHTML = entries.length ? entries.map((row) => `
-      <article class="history-row"><span class="history-change">${escapeHtml(describeChange(row))}</span>
-      <span class="history-actor">${escapeHtml(row.actor_name)} · ${escapeHtml(String(row.created_at).slice(0, 16))}</span></article>`).join('')
+    list.innerHTML = entries.length ? entries.map(historyEntryHtml).join('')
       : '<p class="empty-state">Изменений в этом месяце пока нет</p>';
   } catch (error) { showToast(error.message); }
+}
+
+function historyEntryHtml(row) {
+  const actor = `${escapeHtml(row.actor_name)} · ${escapeHtml(String(row.created_at).slice(0, 16))}`;
+  if (row.action === 'published' || row.change_type === 'schedule') {
+    const period = row.period_start && row.period_end
+      ? `${displayDate(row.period_start)} – ${displayDate(row.period_end, true)}`
+      : displayDate(row.shift_date, true);
+    const count = row.changes_count ?? 0;
+    const shot = row.snapshot_path
+      ? `<a class="history-shot" href="${escapeHtml(row.snapshot_path)}" target="_blank" rel="noopener"><img src="${escapeHtml(row.snapshot_path)}" alt="Снимок расписания" loading="lazy"></a>`
+      : '<span class="history-shot-missing">снимок удалён по сроку хранения</span>';
+    return `<article class="history-row is-schedule"><span class="history-change">Расписание · ${escapeHtml(period)} · правок: ${count}</span><span class="history-actor">${actor}</span>${shot}</article>`;
+  }
+  return `<article class="history-row"><span class="history-change">${escapeHtml(describeChange(row))}</span><span class="history-actor">${actor}</span></article>`;
 }
 
 async function saveScheduleChanges() {
@@ -198,16 +228,18 @@ async function saveScheduleChanges() {
     return value ? { user_id: Number(userId), date, ...value } : { user_id: Number(userId), date, delete: true };
   });
   try {
-    const result = await api('/api/shifts/save', { method: 'POST', body: JSON.stringify({ operations }) });
+    const result = await api('/api/shifts/save', { method: 'POST', body: JSON.stringify({ operations, change_type: matrixChangeType }) });
     matrixChanges.clear();
     editMode = false;
     matrixAnchor = null;
     matrixExtent = null;
+    activeTemplate = null;
     updateEditControls();
     await loadCalendar();
     const status = document.querySelector('#matrix-status');
-    if (status) status.textContent = `Сохранено ${result.logged} правок`;
-    showToast(`Сохранено изменений: ${result.logged}`);
+    const savedText = result.change_type === 'schedule' ? 'Расписание опубликовано' : `Сохранено ${result.logged} правок`;
+    if (status) status.textContent = savedText;
+    showToast(savedText);
   } catch (error) { showToast(error.message); }
 }
 
@@ -251,9 +283,247 @@ async function loadPreferences() {
   applyBaristaPreview(managerRole && localStorage.getItem('barista-preview') === 'true');
 }
 
+/* --- Масштаб матрицы ---------------------------------------------------
+   Зум управляет плотностью: шириной колонки-дня и высотой строки. Шапка
+   (день недели, число) и колонка имён остаются фиксированного размера —
+   именно это даёт «весь месяц на экране, но подписи читаемы». */
+
+function nameColumnWidth() {
+  return window.matchMedia('(max-width: 760px)').matches ? 118 : 158;
+}
+
+function matrixScroll() {
+  return document.querySelector('.matrix-scroll');
+}
+
+function employeeRowCount() {
+  return (calendarState?.employees || []).filter((person) => person.iiko_id !== null && person.iiko_id !== undefined).length || 1;
+}
+
+function clampDayWidth(value) {
+  return Math.min(MATRIX_MAX_DAY, Math.max(MATRIX_MIN_DAY, Math.round(value)));
+}
+
+function defaultDayWidth() {
+  const scroll = matrixScroll();
+  const available = Math.max(120, (scroll?.clientWidth || 0) - nameColumnWidth() - 4);
+  return clampDayWidth(Math.min(62, available / 5));
+}
+
+function currentDayWidth() {
+  return matrixDayWidth ?? defaultDayWidth();
+}
+
+function applyMatrixZoom() {
+  const scroll = matrixScroll();
+  if (!scroll) return;
+  const dayWidth = clampDayWidth(currentDayWidth());
+  const rows = employeeRowCount();
+  const budget = scroll.clientHeight - 45;
+  const fitRow = budget > 0 ? Math.floor(budget / rows) : 53;
+  const rowHeight = Math.max(30, Math.min(53, Math.floor(Math.min(dayWidth * 0.85, fitRow))));
+  scroll.style.setProperty('--day-w', `${dayWidth}px`);
+  scroll.style.setProperty('--row-h', `${rowHeight}px`);
+  scroll.classList.toggle('is-compact', dayWidth < MATRIX_COMPACT);
+}
+
+function setMatrixZoom(dayWidth, persist = true) {
+  matrixDayWidth = clampDayWidth(dayWidth);
+  applyMatrixZoom();
+  if (persist) {
+    try { localStorage.setItem(MATRIX_ZOOM_STORAGE, String(matrixDayWidth)); } catch (error) { /* приватный режим */ }
+  }
+}
+
+function fitMatrixMonth() {
+  const days = calendarState?.days_in_month || 31;
+  const scroll = matrixScroll();
+  const available = Math.max(120, (scroll?.clientWidth || 0) - nameColumnWidth() - 4);
+  setMatrixZoom(available / days);
+}
+
+function scrollMatrixToToday() {
+  const scroll = matrixScroll();
+  if (!scroll) return;
+  const cell = scroll.querySelector('.matrix-cell-wrap.is-today');
+  // Если «сегодня» в отображаемом месяце нет — показываем начало месяца.
+  scroll.scrollLeft = cell ? Math.max(0, cell.offsetLeft - nameColumnWidth()) : 0;
+}
+
+function compactHour(value) {
+  return String(value || '').replace(/^0/, '').slice(0, 5);
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy) || 1;
+}
+
+/* --- Шаблоны смен и тип правки ---------------------------------------- */
+
+function templateLabel(template) {
+  return `${template.name} · ${template.start}–${template.end} ${template.point}`;
+}
+
+function renderTemplateBar() {
+  const bar = document.querySelector('#matrix-templates');
+  if (!bar) return;
+  if (!editMode || !managerRole) { bar.hidden = true; bar.innerHTML = ''; return; }
+  bar.hidden = false;
+  if (!shiftTemplates.length) {
+    bar.innerHTML = '<span class="matrix-templates-label">ШАБЛОНЫ</span><span class="matrix-template-empty">Добавьте шаблоны в личном кабинете</span>';
+    return;
+  }
+  const buttons = shiftTemplates.map((template) => {
+    const active = activeTemplate && activeTemplate.id === template.id;
+    return `<button type="button" class="matrix-template ${active ? 'is-active' : ''}" data-template-id="${template.id}" title="${escapeHtml(templateLabel(template))}">${escapeHtml(template.name)}</button>`;
+  }).join('');
+  bar.innerHTML = `<span class="matrix-templates-label">ШАБЛОНЫ</span>${buttons}`;
+  bar.querySelectorAll('[data-template-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = shiftTemplates.find((item) => String(item.id) === button.dataset.templateId);
+      if (!template) return;
+      activeTemplate = activeTemplate && activeTemplate.id === template.id ? null : template;
+      renderTemplateBar();
+      const status = document.querySelector('#matrix-status');
+      if (status) status.textContent = activeTemplate ? `Шаблон «${activeTemplate.name}»: нажмите по ячейке` : 'Шаблон снят';
+    });
+  });
+}
+
+function renderChangeTypeSwitch() {
+  const box = document.querySelector('#matrix-change-type');
+  if (!box) return;
+  if (!editMode || !isMentor) { box.hidden = true; box.innerHTML = ''; return; }
+  box.hidden = false;
+  box.innerHTML = `
+    <button type="button" data-change-type="swap" class="${matrixChangeType === 'swap' ? 'is-selected' : ''}">Замена</button>
+    <button type="button" data-change-type="schedule" class="is-schedule ${matrixChangeType === 'schedule' ? 'is-selected' : ''}">Расписание</button>`;
+  box.querySelectorAll('[data-change-type]').forEach((button) => {
+    button.addEventListener('click', () => {
+      matrixChangeType = button.dataset.changeType;
+      renderChangeTypeSwitch();
+      const status = document.querySelector('#matrix-status');
+      if (status) status.textContent = matrixChangeType === 'schedule'
+        ? 'Публикация создаст один снимок графика'
+        : 'Замена: лог правок построчно';
+    });
+  });
+}
+
+async function loadShiftTemplates() {
+  if (!managerRole) return;
+  try {
+    shiftTemplates = await api('/api/shift-templates');
+  } catch (error) {
+    shiftTemplates = [];
+  }
+  renderTemplateBar();
+  renderTemplateSettings();
+}
+
+/* --- Настройка шаблонов в личном кабинете ----------------------------- */
+
+function renderTemplateSettings() {
+  const list = document.querySelector('#template-list');
+  if (!list) return;
+  if (!shiftTemplates.length) {
+    list.innerHTML = '<p class="empty-state">Шаблонов пока нет</p>';
+    return;
+  }
+  list.innerHTML = shiftTemplates.map((template) => `
+    <div class="template-row" data-template-row="${template.id}">
+      <span class="template-row-name">${escapeHtml(template.name)}</span>
+      <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}</span>
+      <span class="template-row-actions">
+        <button class="button button-quiet" type="button" data-template-edit="${template.id}">Изменить</button>
+        <button class="button button-quiet" type="button" data-template-delete="${template.id}">Удалить</button>
+      </span>
+    </div>`).join('');
+}
+
+function resetTemplateForm() {
+  const form = document.querySelector('#template-form');
+  if (!form) return;
+  form.reset();
+  form.elements.template_id.value = '';
+  form.elements.point.value = 'УЯ';
+  const error = document.querySelector('#template-form-error');
+  if (error) { error.textContent = ''; error.hidden = true; }
+  const submit = document.querySelector('#template-submit');
+  if (submit) submit.textContent = 'Добавить шаблон';
+  const cancel = document.querySelector('#template-cancel');
+  if (cancel) cancel.hidden = true;
+}
+
+function editTemplate(template) {
+  const form = document.querySelector('#template-form');
+  if (!form) return;
+  form.elements.template_id.value = String(template.id);
+  form.elements.name.value = template.name;
+  form.elements.start_time.value = template.start;
+  form.elements.end_time.value = template.end;
+  form.elements.point.value = template.point;
+  const submit = document.querySelector('#template-submit');
+  if (submit) submit.textContent = 'Сохранить шаблон';
+  const cancel = document.querySelector('#template-cancel');
+  if (cancel) cancel.hidden = false;
+  form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  form.elements.name.focus();
+}
+
+function setupShiftTemplates() {
+  const form = document.querySelector('#template-form');
+  if (!form || !managerRole) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = document.querySelector('#template-form-error');
+    const showError = (message) => { if (error) { error.textContent = message; error.hidden = !message; } };
+    const templateId = form.elements.template_id.value;
+    const payload = {
+      name: form.elements.name.value.trim(),
+      start_time: form.elements.start_time.value,
+      end_time: form.elements.end_time.value,
+      point: form.elements.point.value,
+    };
+    if (!payload.name) { showError('Укажите название'); return; }
+    if (!payload.start_time || !payload.end_time) { showError('Укажите время'); return; }
+    try {
+      await api(templateId ? `/api/shift-templates/${templateId}` : '/api/shift-templates', {
+        method: templateId ? 'PATCH' : 'POST', body: JSON.stringify(payload),
+      });
+      resetTemplateForm();
+      await loadShiftTemplates();
+      showToast(templateId ? 'Шаблон обновлён' : 'Шаблон добавлен');
+    } catch (requestError) { showError(requestError.message); }
+  });
+  document.querySelector('#template-cancel')?.addEventListener('click', resetTemplateForm);
+  document.querySelector('#template-list')?.addEventListener('click', async (event) => {
+    const editButton = event.target.closest('[data-template-edit]');
+    if (editButton) {
+      const template = shiftTemplates.find((item) => String(item.id) === editButton.dataset.templateEdit);
+      if (template) editTemplate(template);
+      return;
+    }
+    const deleteButton = event.target.closest('[data-template-delete]');
+    if (!deleteButton) return;
+    const template = shiftTemplates.find((item) => String(item.id) === deleteButton.dataset.templateDelete);
+    if (!template || !window.confirm(`Удалить шаблон «${template.name}»?`)) return;
+    try {
+      await api(`/api/shift-templates/${template.id}`, { method: 'DELETE' });
+      if (activeTemplate && activeTemplate.id === template.id) activeTemplate = null;
+      await loadShiftTemplates();
+      showToast('Шаблон удалён');
+    } catch (requestError) { showToast(requestError.message); }
+  });
+}
+
 function renderCalendar(data) {
   const grid = document.querySelector('#calendar-grid');
   if (!grid) return;
+  const scrollNode = matrixScroll();
+  const previousScrollLeft = scrollNode ? scrollNode.scrollLeft : 0;
   document.querySelector('#calendar-month-title').textContent = `${monthNames[data.month - 1]} ${data.year}`;
   const today = localDateString(new Date());
   const employees = data.employees.filter((person) => person.iiko_id !== null && person.iiko_id !== undefined);
@@ -275,7 +545,7 @@ function renderCalendar(data) {
       } : cellShifts[0];
       const pointClass = shift?.point === 'УЯ' ? 'point-uy-cell' : shift ? 'point-de-cell' : '';
       const shiftContents = shift
-        ? `<span class="matrix-shift-time">${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</span><span class="matrix-shift-point">${escapeHtml(shift.point)}</span>${cellShifts.length > 1 ? `<span class="matrix-shift-extra">+${cellShifts.length - 1}</span>` : ''}`
+        ? `<span class="matrix-shift-time">${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</span><span class="matrix-shift-compact">${escapeHtml(compactHour(shift.start))}</span><span class="matrix-shift-point">${escapeHtml(shift.point)}</span>${cellShifts.length > 1 ? `<span class="matrix-shift-extra">+${cellShifts.length - 1}</span>` : ''}`
         : '<span class="matrix-empty-mark">Вых</span>';
       const rowData = `data-cell-date="${cellDate}" data-employee-id="${employee.id}" ${editMode ? `data-matrix-cell data-matrix-row="${rowIndex}" data-matrix-col="${day - 1}"` : ''}`;
       const pendingClass = pending !== undefined ? 'is-pending' : '';
@@ -288,6 +558,19 @@ function renderCalendar(data) {
   matrixAnchor = null;
   matrixExtent = null;
   updateMatrixSelection();
+  applyMatrixZoom();
+  const monthKey = `${data.year}-${data.month}`;
+  const viewVisible = !document.querySelector('#calendar-view')?.hidden;
+  if (viewVisible && (calendarAutoScroll || matrixAutoMonth !== monthKey)) {
+    calendarAutoScroll = false;
+    matrixAutoMonth = monthKey;
+    // Синхронно: чтение offsetLeft форсирует пересчёт, а rAF не выполняется
+    // в фоновой (невидимой) вкладке.
+    scrollMatrixToToday();
+  } else if (scrollNode) {
+    // Перерисовка черновика не должна сбрасывать позицию скролла в начало.
+    scrollNode.scrollLeft = previousScrollLeft;
+  }
 
   const stats = data.month_stats;
   document.querySelector('#hours-total').textContent = stats.total_hours;
@@ -381,6 +664,7 @@ async function loadCalendar() {
     const year = calendarCursor.getFullYear();
     const month = calendarCursor.getMonth() + 1;
     calendarState = await api(`/api/calendar?year=${year}&month=${month}`);
+    calendarAutoScroll = true;
     renderCalendar(calendarState);
     await loadShiftHistory();
   } catch (error) { showToast(error.message); }
@@ -719,6 +1003,8 @@ function setupDashboard() {
   });
 
   calendarCursor = new Date();
+  const storedZoom = Number(localStorage.getItem(MATRIX_ZOOM_STORAGE));
+  matrixDayWidth = Number.isFinite(storedZoom) && storedZoom > 0 ? clampDayWidth(storedZoom) : null;
   document.querySelector('#month-previous')?.addEventListener('click', () => {
     calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1);
     loadCalendar();
@@ -765,9 +1051,22 @@ function setupDashboard() {
   });
   document.addEventListener('pointerup', () => { matrixPointerDown = false; });
   matrix?.addEventListener('click', (event) => {
+    if (!editMode) return;
     const cell = event.target.closest('[data-cell-date]');
-    if (!cell || !editMode) return;
+    if (!cell) {
+      // Клик по пустому месту матрицы снимает активный шаблон.
+      if (activeTemplate) { activeTemplate = null; renderTemplateBar(); }
+      return;
+    }
     if (matrixMode === 'select') return;
+    if (activeTemplate) {
+      setDraftCell(Number(cell.dataset.employeeId), cell.dataset.cellDate, {
+        start_time: activeTemplate.start, end_time: activeTemplate.end, point: activeTemplate.point,
+      });
+      const status = document.querySelector('#matrix-status');
+      if (status) status.textContent = `Шаблон «${activeTemplate.name}» · нажмите другую ячейку или Esc`;
+      return;
+    }
     const shift = getEffectiveShift(Number(cell.dataset.employeeId), cell.dataset.cellDate);
     openShiftDialog(cell.dataset.cellDate, shift || null, Number(cell.dataset.employeeId));
   });
@@ -780,6 +1079,43 @@ function setupDashboard() {
   }));
   document.querySelector('#matrix-copy')?.addEventListener('click', copyMatrixSelection);
   document.querySelector('#matrix-paste')?.addEventListener('click', pasteMatrixSelection);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && activeTemplate) {
+      activeTemplate = null;
+      renderTemplateBar();
+      const status = document.querySelector('#matrix-status');
+      if (status) status.textContent = 'Шаблон снят';
+    }
+  });
+  document.querySelector('#matrix-zoom-in')?.addEventListener('click', () => setMatrixZoom(currentDayWidth() * 1.25));
+  document.querySelector('#matrix-zoom-out')?.addEventListener('click', () => setMatrixZoom(currentDayWidth() / 1.25));
+  document.querySelector('#matrix-zoom-fit')?.addEventListener('click', fitMatrixMonth);
+  const scroll = matrixScroll();
+  scroll?.addEventListener('wheel', (event) => {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    setMatrixZoom(currentDayWidth() * (event.deltaY < 0 ? 1.15 : 1 / 1.15));
+  }, { passive: false });
+  let pinchStartDistance = 0;
+  let pinchStartDayWidth = 0;
+  scroll?.addEventListener('touchstart', (event) => {
+    if (event.touches.length !== 2) return;
+    pinchStartDistance = touchDistance(event.touches);
+    pinchStartDayWidth = currentDayWidth();
+  }, { passive: true });
+  scroll?.addEventListener('touchmove', (event) => {
+    if (event.touches.length !== 2 || !pinchStartDistance) return;
+    event.preventDefault();
+    setMatrixZoom(pinchStartDayWidth * (touchDistance(event.touches) / pinchStartDistance), false);
+  }, { passive: false });
+  scroll?.addEventListener('touchend', (event) => {
+    if (event.touches.length >= 2) return;
+    pinchStartDistance = 0;
+    if (matrixDayWidth) {
+      try { localStorage.setItem(MATRIX_ZOOM_STORAGE, String(matrixDayWidth)); } catch (error) { /* приватный режим */ }
+    }
+  });
+  if (window.ResizeObserver && scroll) new ResizeObserver(() => applyMatrixZoom()).observe(scroll);
   document.addEventListener('keydown', (event) => {
     if (!editMode || matrixMode !== 'select' || !(event.ctrlKey || event.metaKey)) return;
     if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
@@ -860,7 +1196,11 @@ function setupDashboard() {
     if (modulePreferences.calendar_enabled) loadCalendar();
     if (modulePreferences.quality_enabled) loadDashboard();
   });
-  if (managerRole) setupStoriesAdmin();
+  if (managerRole) {
+    setupStoriesAdmin();
+    setupShiftTemplates();
+    loadShiftTemplates();
+  }
 }
 
 if (document.body.dataset.authenticated === 'true') setupDashboard();

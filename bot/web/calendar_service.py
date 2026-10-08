@@ -7,7 +7,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web.schedule_snapshot import prune_snapshots, render_schedule_snapshot
+
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
+SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
 
 
 def app_timezone() -> tzinfo:
@@ -15,6 +18,18 @@ def app_timezone() -> tzinfo:
         return ZoneInfo(os.getenv("WEB_TIMEZONE", "Europe/Moscow"))
     except ZoneInfoNotFoundError:
         return timezone.utc
+
+
+def _ensure_columns(connection: Any, table: str, columns: dict[str, str]) -> None:
+    """Добавляет недостающие колонки в существующую таблицу (SQLite).
+
+    `CREATE TABLE IF NOT EXISTS` не меняет уже созданную таблицу, а база живёт
+    между релизами, поэтому новые поля нужно докатывать отдельно.
+    """
+    existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+    for name, ddl in columns.items():
+        if name not in existing:
+            connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 def initialize_calendar_schema(engine: Engine) -> None:
@@ -34,9 +49,23 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 new_start_time TEXT,
                 new_end_time TEXT,
                 new_point TEXT,
+                change_type TEXT NOT NULL DEFAULT 'swap',
+                snapshot_path TEXT,
+                period_start DATE,
+                period_end DATE,
+                changes_count INTEGER,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        if engine.dialect.name == "sqlite":
+            # Существующие базы: докидываем поля типа правки и снимка «Расписания».
+            _ensure_columns(connection, "web_shift_change_log", {
+                "change_type": "TEXT NOT NULL DEFAULT 'swap'",
+                "snapshot_path": "TEXT",
+                "period_start": "DATE",
+                "period_end": "DATE",
+                "changes_count": "INTEGER",
+            })
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_web_shift_log_date
             ON web_shift_change_log (shift_date, created_at)
@@ -49,6 +78,126 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        # Личные шаблоны смен. Отдельная таблица: shift_types общий с legacy-ботом,
+        # его менять нельзя. Шаблон принадлежит пользователю.
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS web_shift_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                start_time TEXT NOT NULL,
+                end_time TEXT NOT NULL,
+                point TEXT NOT NULL,
+                order_index INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_web_shift_templates_user
+            ON web_shift_templates (user_id, order_index, id)
+        """))
+
+
+def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+    allowed = {"name", "start_time", "end_time", "point"}
+    if set(payload) - allowed:
+        raise ValueError("Переданы неизвестные поля шаблона")
+    values = dict(payload)
+    if "name" in values or not partial:
+        name = str(values.get("name", "")).strip()
+        if not name or len(name) > 60:
+            raise ValueError("Название шаблона должно содержать от 1 до 60 символов")
+        values["name"] = name
+    for field in ("start_time", "end_time"):
+        if field in values or not partial:
+            try:
+                values[field] = time.fromisoformat(str(values.get(field, ""))).strftime("%H:%M")
+            except (ValueError, TypeError) as error:
+                raise ValueError("Время должно быть в формате ЧЧ:ММ") from error
+    if not partial and values.get("start_time") == values.get("end_time"):
+        raise ValueError("Время начала и окончания не должны совпадать")
+    if "point" in values or not partial:
+        if values.get("point") not in SHIFT_TEMPLATE_POINTS:
+            raise ValueError("Точка должна быть УЯ или ДЕ")
+    return values
+
+
+def _template_dict(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "start": _time_text(row["start_time"]),
+        "end": _time_text(row["end_time"]),
+        "point": row["point"],
+        "order_index": row["order_index"],
+    }
+
+
+def list_shift_templates(engine: Engine, user_id: int) -> list[dict[str, Any]]:
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT id, name, start_time, end_time, point, order_index
+            FROM web_shift_templates WHERE user_id = :user_id
+            ORDER BY order_index, id
+        """), {"user_id": user_id}).mappings().all()
+    return [_template_dict(row) for row in rows]
+
+
+def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидался объект шаблона")
+    values = _validate_template_payload(payload)
+    with engine.begin() as connection:
+        order_index = connection.execute(text(
+            "SELECT COALESCE(MAX(order_index), 0) + 1 FROM web_shift_templates WHERE user_id = :user_id"
+        ), {"user_id": user_id}).scalar_one()
+        template_id = connection.execute(text("""
+            INSERT INTO web_shift_templates (user_id, name, start_time, end_time, point, order_index)
+            VALUES (:user_id, :name, :start_time, :end_time, :point, :order_index)
+            RETURNING id
+        """), {**values, "user_id": user_id, "order_index": order_index}).scalar_one()
+        row = connection.execute(text("""
+            SELECT id, name, start_time, end_time, point, order_index
+            FROM web_shift_templates WHERE id = :id
+        """), {"id": template_id}).mappings().one()
+    return _template_dict(row)
+
+
+def update_shift_template(engine: Engine, user_id: int, template_id: int, payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидался объект шаблона")
+    values = _validate_template_payload(payload, partial=True)
+    if not values:
+        raise ValueError("Нет полей для обновления")
+    with engine.begin() as connection:
+        owned = connection.execute(text(
+            "SELECT start_time, end_time FROM web_shift_templates WHERE id = :id AND user_id = :user_id"
+        ), {"id": template_id, "user_id": user_id}).mappings().first()
+        if not owned:
+            raise LookupError("Шаблон не найден")
+        merged_start = values.get("start_time", _time_text(owned["start_time"]))
+        merged_end = values.get("end_time", _time_text(owned["end_time"]))
+        if merged_start == merged_end:
+            raise ValueError("Время начала и окончания не должны совпадать")
+        assignments = ", ".join(f"{key} = :{key}" for key in values)
+        connection.execute(text(
+            f"UPDATE web_shift_templates SET {assignments}, updated_at = CURRENT_TIMESTAMP "
+            "WHERE id = :id AND user_id = :user_id"
+        ), {**values, "id": template_id, "user_id": user_id})
+        row = connection.execute(text("""
+            SELECT id, name, start_time, end_time, point, order_index
+            FROM web_shift_templates WHERE id = :id
+        """), {"id": template_id}).mappings().one()
+    return _template_dict(row)
+
+
+def delete_shift_template(engine: Engine, user_id: int, template_id: int) -> bool:
+    with engine.begin() as connection:
+        result = connection.execute(text(
+            "DELETE FROM web_shift_templates WHERE id = :id AND user_id = :user_id"
+        ), {"id": template_id, "user_id": user_id})
+        return result.rowcount > 0
 
 
 def _time_text(value: Any) -> str:
@@ -149,6 +298,7 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         "year": year,
         "month": month,
         "current_user_id": current_user_id,
+        "current_user_role": user.get("role"),
         "first_weekday": first_day.weekday(),
         "days_in_month": last_day.day,
         "shifts": shifts,
@@ -184,7 +334,10 @@ def _shift_type_id(connection: Any, start_time: str, end_time: str, point: str) 
     """), {"start_time": start_time, "end_time": end_time, "point": point, "name": f"{label} {point}", "shift_kind": shift_kind}).scalar_one())
 
 
-def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[str, Any]]) -> dict[str, int]:
+def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[str, Any]],
+                           change_type: str = "swap") -> dict[str, Any]:
+    if change_type not in {"swap", "schedule"}:
+        raise ValueError("Неизвестный тип правки")
     if not operations or len(operations) > 500:
         raise ValueError("Нет изменений или превышен лимит в 500 ячеек")
 
@@ -213,9 +366,11 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         })
 
     with engine.begin() as connection:
-        actor = connection.execute(text("SELECT name FROM users WHERE id=:id AND is_active=1"), {"id": actor_id}).mappings().first()
+        actor = connection.execute(text("SELECT name, role FROM users WHERE id=:id AND is_active=1"), {"id": actor_id}).mappings().first()
         if not actor:
             raise LookupError("Пользователь не найден или отключён")
+        if change_type == "schedule" and actor["role"] != "mentor":
+            raise PermissionError("Тип «Расписание» доступен только наставникам")
 
         cells = []
         for operation in prepared:
@@ -254,6 +409,9 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
                 raise FileExistsError(f"{cell['employee']['name']} уже имеет смену {cell['date']}")
 
         for cell in changes:
+            if change_type == "schedule":
+                # «Расписание» не пишет построчный лог — ниже создаётся один снимок.
+                continue
             for old in cell["old_rows"]:
                 connection.execute(text("""
                     INSERT INTO web_shift_change_log (
@@ -304,7 +462,39 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
                 VALUES (:date, :iiko_id, :shift_type_id, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'manual', 1, 1)
             """), {"date": cell["date"], "iiko_id": cell["iiko_id"], "shift_type_id": shift_type_id})
             changed_count += 1
-    return {"changed": changed_count, "cleared": cleared_count, "logged": len(changes)}
+
+        # Тип «Расписание»: вместо построчного лога — один снимок периода.
+        if change_type == "schedule":
+            snapshot_url = None
+            if changes:
+                affected_ids = sorted({cell["employee"]["id"] for cell in changes})
+                changed_dates = sorted(cell["date"] for cell in changes)
+                period_start, period_end = changed_dates[0], changed_dates[-1]
+                snapshot_url = render_schedule_snapshot(connection, affected_ids, period_start, period_end)
+                connection.execute(text("""
+                    INSERT INTO web_shift_change_log (
+                        actor_user_id, actor_name, employee_id, employee_name, shift_date, action,
+                        change_type, snapshot_path, period_start, period_end, changes_count
+                    ) VALUES (
+                        :actor_id, :actor_name, NULL, :employee_name, :period_start, 'published',
+                        'schedule', :snapshot, :period_start, :period_end, :changes_count
+                    )
+                """), {
+                    "actor_id": actor_id, "actor_name": actor["name"],
+                    "employee_name": f"Расписание · {period_start} – {period_end}",
+                    "period_start": period_start, "period_end": period_end,
+                    "snapshot": snapshot_url, "changes_count": len(changes),
+                })
+            result = {
+                "changed": changed_count, "cleared": cleared_count, "change_type": "schedule",
+                "logged": 1 if changes else 0, "snapshot_url": snapshot_url,
+            }
+        else:
+            result = {"changed": changed_count, "cleared": cleared_count, "change_type": "swap", "logged": len(changes)}
+
+    if result.get("snapshot_url"):
+        prune_snapshots(engine)
+    return result
 
 
 def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -> list[dict[str, Any]]:
@@ -313,7 +503,8 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT id, actor_name, employee_name, shift_date, action,
-                   old_start_time, old_end_time, old_point, new_start_time, new_end_time, new_point, created_at
+                   old_start_time, old_end_time, old_point, new_start_time, new_end_time, new_point,
+                   change_type, snapshot_path, period_start, period_end, changes_count, created_at
             FROM web_shift_change_log
             WHERE shift_date >= :first_day AND shift_date <= :last_day
             ORDER BY created_at DESC, id DESC LIMIT :limit

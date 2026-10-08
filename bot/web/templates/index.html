@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}">
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}">
   {% if not user %}
   <main class="login-screen">
     <div class="login-grain" aria-hidden="true"></div>
@@ -122,8 +122,14 @@
         <div class="matrix-toolbar">
           <span id="matrix-summary">Сотрудники × дни месяца</span>
           <div class="matrix-tools">
+            <div class="matrix-zoom" role="group" aria-label="Масштаб календаря">
+              <button class="icon-button" id="matrix-zoom-out" type="button" aria-label="Отдалить" title="Отдалить">−</button>
+              <button class="button button-quiet" id="matrix-zoom-fit" type="button" title="Показать весь месяц">Весь месяц</button>
+              <button class="icon-button" id="matrix-zoom-in" type="button" aria-label="Приблизить" title="Приблизить">＋</button>
+            </div>
             <button class="button button-primary" id="edit-calendar-toggle" type="button" aria-pressed="false">Править график</button>
             <div class="matrix-edit-tools" hidden>
+            <div class="matrix-change-type" id="matrix-change-type" role="group" aria-label="Тип правки" hidden></div>
             <div class="matrix-mode" role="group" aria-label="Режим ячеек"><button class="is-selected" type="button" data-matrix-mode="edit">Ячейка</button><button type="button" data-matrix-mode="select">Диапазон</button></div>
             <button class="button button-quiet" id="matrix-copy" type="button" disabled>Копировать</button>
             <button class="button button-quiet" id="matrix-paste" type="button" disabled>Вставить</button>
@@ -133,6 +139,7 @@
           </div>
           <span class="matrix-status" id="matrix-status" aria-live="polite">Режим просмотра</span>
         </div>
+        <div class="matrix-templates" id="matrix-templates" hidden></div>
         <div class="matrix-scroll"><table class="shift-matrix" id="calendar-grid" aria-label="Смены по сотрудникам и дням месяца"></table></div>
         <section class="panel swaps-panel"><div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ ПРАВОК</p><h3>Изменения графика</h3></div><span class="panel-index" id="history-count">0</span></div><div id="shift-history" class="swap-list"></div></section>
       </section>
@@ -144,6 +151,28 @@
           <label class="module-setting"><span><strong>Календарь смен</strong><small>График команды, часы и замены</small></span><input type="checkbox" id="calendar-module-toggle"><i></i></label>
         </section>
         {% if user.role in ['senior', 'mentor'] %}
+        <section class="panel settings-panel" id="shift-templates-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ГРАФИК</p><h3>Шаблоны смен</h3></div></div>
+          <p class="settings-hint">Шаблон задаёт время и точку. В графике выберите шаблон и нажмите по ячейке — смена подставится. Шаблоны видны только вам.</p>
+          <div class="template-list" id="template-list"></div>
+          <form class="template-form" id="template-form">
+            <input type="hidden" name="template_id" value="">
+            <label>Название<input name="name" maxlength="60" required placeholder="Утро УЯ"></label>
+            <div class="time-fields">
+              <label>Начало<input name="start_time" type="time" required></label>
+              <label>Конец<input name="end_time" type="time" required></label>
+            </div>
+            <fieldset class="point-picker"><legend>Точка</legend>
+              <label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required checked><span><i class="point-swatch point-uy"></i>УЯ</span></label>
+              <label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label>
+            </fieldset>
+            <p class="template-form-error" id="template-form-error" role="alert" hidden></p>
+            <div class="template-form-actions">
+              <button class="button button-quiet" id="template-cancel" type="button" hidden>Отмена</button>
+              <button class="button button-primary" id="template-submit" type="submit">Добавить шаблон</button>
+            </div>
+          </form>
+        </section>
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
           <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"><i></i></label>
         </section>

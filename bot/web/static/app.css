@@ -349,23 +349,23 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .matrix-mode button { min-height: 25px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
 .matrix-mode button.is-selected { background: var(--surface-raised); color: var(--text); }
 .matrix-status { min-width: 130px; color: var(--dim); font-size: 10px; text-align: right; }
-.matrix-scroll { max-height: min(68vh, 760px); overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); background: var(--surface); scrollbar-color: #55564e #171814; }
+.matrix-scroll { max-height: min(68vh, 760px); overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; border: 1px solid var(--line-strong); background: var(--surface); scrollbar-color: #55564e #171814; }
 .shift-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 .shift-matrix th, .shift-matrix td { padding: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .shift-matrix thead th { position: sticky; z-index: 4; top: 0; height: 45px; background: #20211d; }
 .shift-matrix .matrix-name-header { left: 0; z-index: 6; width: 158px; min-width: 158px; padding: 0 12px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-align: left; }
-.shift-matrix .matrix-day-header { width: 62px; min-width: 62px; text-align: center; }
+.shift-matrix .matrix-day-header { width: var(--day-w, 62px); min-width: var(--day-w, 62px); text-align: center; }
 .matrix-day-header span, .matrix-day-header strong { display: block; }
 .matrix-day-header span { margin-top: 4px; color: var(--dim); font: 8px var(--mono); }
 .matrix-day-header strong { color: var(--text); font: 500 12px var(--mono); }
 .matrix-day-header.is-weekend { background: #24241f; }
 .matrix-day-header.is-today { box-shadow: inset 0 -2px var(--mint); }
-.shift-matrix tbody th.matrix-employee { position: sticky; z-index: 2; left: 0; width: 158px; min-width: 158px; height: 53px; padding: 0 10px; background: #191a17; text-align: left; }
+.shift-matrix tbody th.matrix-employee { position: sticky; z-index: 2; left: 0; width: 158px; min-width: 158px; height: var(--row-h, 53px); padding: 0 10px; background: #191a17; text-align: left; }
 .matrix-employee-name { display: inline-block; max-width: 116px; overflow: hidden; color: #dedbd2; font-size: 11px; font-weight: 500; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap; }
 .matrix-avatar { display: inline-grid; width: 24px; height: 24px; margin-right: 7px; place-items: center; border: 1px solid rgba(217,166,95,.28); border-radius: 50%; color: var(--accent); font: 9px var(--mono); vertical-align: middle; }
-.matrix-cell-wrap { width: 62px; min-width: 62px; height: 53px; background: rgba(255,255,255,.009); }
+.matrix-cell-wrap { width: var(--day-w, 62px); min-width: var(--day-w, 62px); height: var(--row-h, 53px); background: rgba(255,255,255,.009); }
 .matrix-cell-wrap.is-today { background: rgba(145,198,174,.035); }
-.matrix-cell { position: relative; display: flex; width: 100%; height: 100%; min-height: 52px; align-items: center; justify-content: center; gap: 3px; padding: 3px; border: 0; background: transparent; color: var(--text); touch-action: manipulation; }
+.matrix-cell { position: relative; display: flex; width: 100%; height: 100%; min-height: calc(var(--row-h, 53px) - 1px); align-items: center; justify-content: center; gap: 3px; padding: 3px; border: 0; background: transparent; color: var(--text); touch-action: pan-x pan-y; }
 .matrix-cell.is-empty { color: var(--dim); cursor: default; }
 .matrix-cell.is-empty::after { content: "+"; position: absolute; color: var(--accent); font: 15px var(--sans); opacity: 0; }
 .matrix-cell.is-empty:hover .matrix-empty-mark, .matrix-cell.is-empty:focus-visible .matrix-empty-mark { opacity: .25; }
@@ -409,6 +409,51 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .history-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; min-height: 48px; border-top: 1px solid var(--line); }
 .history-change { color: #dedbd2; font-size: 11px; }
 .history-actor { color: var(--muted); font-size: 9px; text-align: right; white-space: nowrap; }
+.history-row.is-schedule { grid-template-columns: minmax(0,1fr) auto; align-items: start; row-gap: 8px; padding: 10px 0; }
+.history-shot { grid-column: 1 / -1; display: inline-block; max-width: 100%; }
+.history-shot img { display: block; width: 100%; max-width: 560px; border: 1px solid var(--line); background: #000; }
+.history-shot-missing { grid-column: 1 / -1; color: var(--dim); font-size: 10px; }
+
+/* Масштаб, тип правки и шаблоны */
+.matrix-zoom { display: inline-flex; align-items: center; gap: 4px; }
+.matrix-zoom .icon-button { width: 30px; height: 30px; font-size: 16px; }
+.matrix-zoom .button { min-height: 30px; padding: 0 9px; font-size: 10px; }
+.matrix-change-type { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); background: var(--surface); }
+.matrix-change-type[hidden] { display: none; }
+.matrix-change-type button { min-height: 25px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
+.matrix-change-type button.is-selected { background: var(--surface-raised); color: var(--text); }
+.matrix-change-type button.is-schedule.is-selected { color: var(--accent); }
+.matrix-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 0 10px; }
+.matrix-templates[hidden] { display: none; }
+.matrix-templates-label { color: var(--dim); font: 9px var(--mono); letter-spacing: .06em; }
+.matrix-template { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; cursor: pointer; }
+.matrix-template:hover { color: var(--text); }
+.matrix-template.is-active { border-color: var(--accent); background: rgba(217,166,95,.14); color: var(--text); }
+.matrix-template-empty { color: var(--dim); font-size: 10px; }
+.matrix-shift-compact { font: 9px var(--mono); white-space: nowrap; }
+.matrix-scroll.is-compact .matrix-shift-time,
+.matrix-scroll.is-compact .matrix-shift-point { display: none; }
+.matrix-scroll:not(.is-compact) .matrix-shift-compact { display: none; }
+
+/* Шаблоны смен в личном кабинете */
+.template-list { display: grid; margin-bottom: 12px; }
+.template-list .empty-state { padding: 12px 0; }
+.template-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 10px; min-height: 46px; border-top: 1px solid var(--line); }
+.template-row-name { overflow: hidden; color: #dedbd2; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.template-row-meta { color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
+.template-row-actions { display: flex; gap: 6px; }
+.template-row-actions .button { min-height: 28px; padding: 0 8px; font-size: 10px; }
+.template-form { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.template-form .time-fields { max-width: 320px; }
+.template-form .point-picker { margin: 0; }
+.template-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.template-form-error { color: #ee7166; font-size: 11px; }
+
+@media (max-width: 760px) {
+  .history-shot img { max-width: 100%; }
+  .template-row { grid-template-columns: 1fr; gap: 6px; padding: 10px 0; }
+  .template-row-meta { grid-row: 2; }
+}
 
 @media (max-width: 760px) {
   .matrix-toolbar { flex-wrap: wrap; gap: 7px; padding: 8px 0; }
@@ -421,9 +466,10 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .shift-matrix .matrix-name-header, .shift-matrix tbody th.matrix-employee { width: 118px; min-width: 118px; }
   .matrix-employee-name { max-width: 78px; font-size: 9px; }
   .matrix-avatar { width: 21px; height: 21px; margin-right: 5px; font-size: 8px; }
-  .shift-matrix .matrix-day-header, .matrix-cell-wrap { width: 55px; min-width: 55px; }
+  .shift-matrix .matrix-day-header, .matrix-cell-wrap { width: var(--day-w, 55px); min-width: var(--day-w, 55px); }
   .shift-matrix thead th { height: 42px; }
-  .matrix-cell-wrap, .matrix-cell { height: 49px; min-height: 48px; }
+  .matrix-cell-wrap { height: var(--row-h, 49px); }
+  .matrix-cell { min-height: calc(var(--row-h, 49px) - 1px); }
   .matrix-shift-time { font-size: 7px; }
   .matrix-empty-mark { font-size: 7px; }
   .history-row { grid-template-columns: 1fr; gap: 2px; padding: 8px 0; }
