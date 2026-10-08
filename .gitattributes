@@ -1,6 +1,10 @@
 # Shell-скрипты: только LF, независимо от настроек машины
 *.sh text eol=lf
 
+# Конфиги, которые копируются на Linux-сервер, — тоже LF
+deploy/*.conf text eol=lf
+*.service text eol=lf
+
 # Файлы, которым CRLF нужен по-настоящему
 *.bat text eol=crlf
 *.cmd text eol=crlf
