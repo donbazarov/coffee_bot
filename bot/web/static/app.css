@@ -417,11 +417,6 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .matrix-zoom { display: inline-flex; align-items: center; gap: 4px; }
 .matrix-zoom .icon-button { width: 30px; height: 30px; font-size: 16px; }
 .matrix-zoom .button { min-height: 30px; padding: 0 9px; font-size: 10px; }
-.matrix-change-type { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); background: var(--surface); }
-.matrix-change-type[hidden] { display: none; }
-.matrix-change-type button { min-height: 25px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
-.matrix-change-type button.is-selected { background: var(--surface-raised); color: var(--text); }
-.matrix-change-type button.is-schedule.is-selected { color: var(--accent); }
 .matrix-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 0 10px; }
 .matrix-templates[hidden] { display: none; }
 .matrix-templates-label { color: var(--dim); font: 9px var(--mono); letter-spacing: .06em; }
@@ -452,6 +447,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .template-row-meta { color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
 .template-row-actions { display: flex; gap: 6px; }
 .template-row-actions .button { min-height: 28px; padding: 0 8px; font-size: 10px; }
+.template-row-actions .template-move { min-width: 32px; padding: 0 6px; font-size: 11px; }
 .template-form { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .template-form .time-fields { max-width: 320px; }
 .template-form .point-picker { margin: 0; }
@@ -486,7 +482,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .settings-panel { padding: 14px 13px 5px; }
 }
 
-/* --- Модерация историй гостей (личный кабинет) ---------------------------- */
+/* --- Модерация историй гостей (Панель управления) ---------------------------- */
 .settings-hint { margin: 0 0 14px; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .settings-hint a { border-bottom: 1px solid rgba(217,166,95,.35); color: var(--accent); font-family: var(--mono); font-size: 11px; text-decoration: none; }
 .settings-hint a:hover { border-bottom-color: var(--accent); }

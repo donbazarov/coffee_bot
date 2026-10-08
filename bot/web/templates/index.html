@@ -64,7 +64,7 @@
         <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon">◫</span><span>Обзор</span></button>
         <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon">▦</span><span>График смен</span></button>
         {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon">♧</span><span>Команда</span></button>{% endif %}
-        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon">⚙</span><span>Личный кабинет</span></button>
+        <button class="nav-item" type="button" data-view="settings"><span class="nav-icon">⚙</span><span>Панель управления</span></button>
       </nav>
       <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span><span class="rail-version">WEB / 01</span></div>
     </aside>
@@ -75,8 +75,8 @@
         <div class="account-area">
           <div class="account-mark">{{ user.name[:1] | upper }}</div>
           <div class="account-copy"><strong>{{ user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}</span></div>
-          <button class="icon-button" type="button" data-view="settings" aria-label="Личный кабинет" title="Личный кабинет"><span>⚙</span></button>
-          <button class="icon-button" type="button" id="logout-button" aria-label="Выйти" title="Выйти"><span>↗</span></button>
+          <button class="icon-button" type="button" data-view="settings" aria-label="Панель управления" title="Панель управления"><span>⚙</span></button>
+          <button class="icon-button" type="button" id="logout-button" aria-label="Выйти" title="Выйти"><span>⏻</span></button>
         </div>
       </header>
 
@@ -88,7 +88,7 @@
             <article class="hour-stat"><span>ПРОШЛО ПО ГРАФИКУ</span><strong id="hours-worked">—</strong><small>часов</small></article>
             <article class="hour-stat"><span>ОСТАЛОСЬ</span><strong id="hours-remaining">—</strong><small>часов</small></article>
           </div>
-          <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe">↗ Мой календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
+          <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe">📅 Сохранить календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
         </section>
         <div id="quality-dashboard">
         <div class="section-heading">
@@ -127,14 +127,16 @@
               <button class="button button-quiet" id="matrix-zoom-fit" type="button" title="Показать весь месяц">Весь месяц</button>
               <button class="icon-button" id="matrix-zoom-in" type="button" aria-label="Приблизить" title="Приблизить">＋</button>
             </div>
-            <button class="button button-primary" id="edit-calendar-toggle" type="button" aria-pressed="false">Править график</button>
+            <button class="button button-primary" id="edit-swaps-toggle" type="button">Замены</button>
+            <button class="button button-quiet" id="edit-schedule-toggle" type="button" hidden>Расписание</button>
             <div class="matrix-edit-tools" hidden>
-            <div class="matrix-change-type" id="matrix-change-type" role="group" aria-label="Тип правки" hidden></div>
             <div class="matrix-mode" role="group" aria-label="Режим ячеек"><button class="is-selected" type="button" data-matrix-mode="edit">Ячейка</button><button type="button" data-matrix-mode="select">Диапазон</button></div>
             <button class="button button-quiet" id="matrix-copy" type="button" disabled>Копировать</button>
             <button class="button button-quiet" id="matrix-paste" type="button" disabled>Вставить</button>
             <button class="button button-quiet" id="matrix-discard" type="button">Отменить</button>
             <button class="button button-primary" id="matrix-save" type="button" disabled>Сохранить изменения</button>
+            <button class="button button-quiet" id="matrix-save-draft" type="button" hidden disabled>Сохранить</button>
+            <button class="button button-primary" id="matrix-publish" type="button" hidden disabled>Опубликовать</button>
             </div>
           </div>
           <span class="matrix-status" id="matrix-status" aria-live="polite">Режим просмотра</span>
@@ -145,7 +147,7 @@
       </section>
 
       <section class="view" id="settings-view" hidden>
-        <div class="section-heading"><div><p class="eyebrow">ПРОФИЛЬ</p><h2>Личный кабинет</h2></div></div>
+        <div class="section-heading"><div><p class="eyebrow">ПРОФИЛЬ</p><h2>Панель управления</h2></div></div>
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">МОИ МОДУЛИ</p><h3>Разделы сайта</h3></div></div>
           <label class="module-setting"><span><strong>Контроль качества</strong><small>Оценки напитков и статистика команды</small></span><input type="checkbox" id="quality-module-toggle"><i></i></label>
           <label class="module-setting"><span><strong>Календарь смен</strong><small>График команды, часы и замены</small></span><input type="checkbox" id="calendar-module-toggle"><i></i></label>
@@ -157,7 +159,7 @@
           <div class="template-list" id="template-list"></div>
           <form class="template-form" id="template-form">
             <input type="hidden" name="template_id" value="">
-            <label>Название<input name="name" maxlength="60" required placeholder="Утро УЯ"></label>
+            <label>Название<input name="name" maxlength="60" required placeholder="УЯ утро"></label>
             <div class="time-fields">
               <label>Начало<input name="start_time" type="time" required></label>
               <label>Конец<input name="end_time" type="time" required></label>
@@ -168,6 +170,7 @@
             </fieldset>
             <p class="template-form-error" id="template-form-error" role="alert" hidden></p>
             <div class="template-form-actions">
+              <button class="button button-quiet" id="template-order-toggle" type="button">Изменить порядок</button>
               <button class="button button-quiet" id="template-cancel" type="button" hidden>Отмена</button>
               <button class="button button-primary" id="template-submit" type="submit">Добавить шаблон</button>
             </div>
@@ -175,6 +178,18 @@
         </section>
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
           <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"><i></i></label>
+        </section>
+        <section class="panel settings-panel" id="telegram-channels-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ПУБЛИКАЦИИ</p><h3>Каналы Telegram</h3></div></div>
+          <p class="settings-hint">Бот <strong>@NeftCoffeeBot</strong> должен быть администратором этих каналов. В канал анонсов уходит картинка графика, в канал замен — текстовый лог.</p>
+          <form class="template-form" id="channels-form">
+            <label>Канал анонсов<input name="announce_chat" placeholder="@nefttest1" autocomplete="off"></label>
+            <label>Канал замен<input name="swap_chat" placeholder="@nefttest2" autocomplete="off"></label>
+            <p class="template-form-error" id="channels-form-error" role="alert" hidden></p>
+            <div class="template-form-actions">
+              <button class="button button-primary" id="channels-submit" type="submit">Сохранить каналы</button>
+            </div>
+          </form>
         </section>
         <section class="panel settings-panel" id="stories-admin-panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИИ ГОСТЕЙ</p><h3>Модерация</h3></div><span class="panel-index" id="stories-admin-stats">—</span></div>

@@ -16,7 +16,8 @@ const userRole = document.body.dataset.role || '';
 const isMentor = userRole === 'mentor';
 let baristaPreview = false;
 let matrixDayWidth = null;
-let matrixChangeType = 'swap';
+let editType = 'swap';
+let templateReorderMode = false;
 let activeTemplate = null;
 let shiftTemplates = [];
 let calendarAutoScroll = false;
@@ -152,21 +153,23 @@ function renderUpcoming(shifts) {
 function updateEditControls() {
   if (!editMode) activeTemplate = null;
   document.body.classList.toggle('calendar-editing', editMode);
-  const toggle = document.querySelector('#edit-calendar-toggle');
-  if (toggle) {
-    // Выход из правок — только «Отменить» или «Сохранить изменения».
-    toggle.hidden = editMode;
-    toggle.textContent = 'Править график';
-  }
+  const swapsEntry = document.querySelector('#edit-swaps-toggle');
+  const scheduleEntry = document.querySelector('#edit-schedule-toggle');
+  if (swapsEntry) swapsEntry.hidden = editMode;
+  if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor || baristaPreview;
   const tools = document.querySelector('.matrix-edit-tools');
   if (tools) tools.hidden = !editMode;
-  const saveButton = document.querySelector('#matrix-save');
-  if (saveButton) saveButton.disabled = !editMode || matrixChanges.size === 0;
+  const hasChanges = matrixChanges.size > 0;
+  const swapSave = document.querySelector('#matrix-save');
+  if (swapSave) { swapSave.hidden = editType !== 'swap'; swapSave.disabled = !editMode || !hasChanges; }
+  const draftSave = document.querySelector('#matrix-save-draft');
+  if (draftSave) { draftSave.hidden = editType !== 'schedule'; draftSave.disabled = !editMode || !hasChanges; }
+  const publishButton = document.querySelector('#matrix-publish');
+  if (publishButton) { publishButton.hidden = editType !== 'schedule'; publishButton.disabled = !editMode || !hasChanges; }
   const summary = document.querySelector('#matrix-status');
   if (summary && !editMode) summary.textContent = 'Режим просмотра';
   const templates = document.querySelector('#matrix-templates');
-  if (templates) templates.hidden = !editMode || !managerRole || baristaPreview;
-  renderChangeTypeSwitch();
+  if (templates) templates.hidden = !editMode;
   renderTemplateBar();
 }
 
@@ -226,14 +229,17 @@ function historyEntryHtml(row) {
   return `<article class="history-row"><span class="history-change">${escapeHtml(describeChange(row))}</span><span class="history-actor">${actor}</span></article>`;
 }
 
-async function saveScheduleChanges() {
+async function saveScheduleChanges(publish = true) {
   if (!matrixChanges.size) return;
   const operations = [...matrixChanges.entries()].map(([key, value]) => {
     const [userId, date] = key.split('|');
     return value ? { user_id: Number(userId), date, ...value } : { user_id: Number(userId), date, delete: true };
   });
+  const body = editType === 'schedule'
+    ? { operations, change_type: 'schedule', publish }
+    : { operations, change_type: 'swap' };
   try {
-    const result = await api('/api/shifts/save', { method: 'POST', body: JSON.stringify({ operations, change_type: matrixChangeType }) });
+    const result = await api('/api/shifts/save', { method: 'POST', body: JSON.stringify(body) });
     matrixChanges.clear();
     editMode = false;
     matrixAnchor = null;
@@ -242,7 +248,9 @@ async function saveScheduleChanges() {
     updateEditControls();
     await loadCalendar();
     const status = document.querySelector('#matrix-status');
-    const savedText = result.change_type === 'schedule' ? 'Расписание опубликовано' : `Сохранено ${result.logged} правок`;
+    const savedText = result.change_type === 'schedule'
+      ? (publish ? 'Расписание опубликовано' : 'Расписание сохранено')
+      : `Сохранено ${result.logged} правок`;
     if (status) status.textContent = savedText;
     showToast(savedText);
   } catch (error) { showToast(error.message); }
@@ -418,7 +426,7 @@ function templateClass(template, active) {
 function renderTemplateBar() {
   const bar = document.querySelector('#matrix-templates');
   if (!bar) return;
-  if (!editMode || !managerRole || baristaPreview) { bar.hidden = true; bar.innerHTML = ''; return; }
+  if (!editMode) { bar.hidden = true; bar.innerHTML = ''; return; }
   bar.hidden = false;
   const templates = [DAY_OFF_TEMPLATE, ...shiftTemplates];
   const buttons = templates.map((template) => {
@@ -456,28 +464,7 @@ function onTemplateButton(templateId) {
   }
 }
 
-function renderChangeTypeSwitch() {
-  const box = document.querySelector('#matrix-change-type');
-  if (!box) return;
-  if (!editMode || !isMentor || baristaPreview) { box.hidden = true; box.innerHTML = ''; return; }
-  box.hidden = false;
-  box.innerHTML = `
-    <button type="button" data-change-type="swap" class="${matrixChangeType === 'swap' ? 'is-selected' : ''}">Замена</button>
-    <button type="button" data-change-type="schedule" class="is-schedule ${matrixChangeType === 'schedule' ? 'is-selected' : ''}">Расписание</button>`;
-  box.querySelectorAll('[data-change-type]').forEach((button) => {
-    button.addEventListener('click', () => {
-      matrixChangeType = button.dataset.changeType;
-      renderChangeTypeSwitch();
-      const status = document.querySelector('#matrix-status');
-      if (status) status.textContent = matrixChangeType === 'schedule'
-        ? 'Публикация создаст один снимок графика'
-        : 'Замена: лог правок построчно';
-    });
-  });
-}
-
 async function loadShiftTemplates() {
-  if (!managerRole) return;
   try {
     shiftTemplates = await api('/api/shift-templates');
   } catch (error) {
@@ -496,14 +483,19 @@ function renderTemplateSettings() {
     list.innerHTML = '<p class="empty-state">Шаблонов пока нет. Встроенный «Выходной» уже доступен в режиме правок.</p>';
     return;
   }
-  list.innerHTML = shiftTemplates.map((template) => `
+  list.innerHTML = shiftTemplates.map((template, index) => `
     <div class="template-row" data-template-row="${template.id}" draggable="true">
       <span class="template-drag" title="Перетащите, чтобы изменить порядок" aria-hidden="true">⠿</span>
       <span class="template-row-name"><i class="point-swatch ${template.point === 'УЯ' ? 'point-uy' : 'point-de'}"></i>${escapeHtml(template.name)}</span>
       <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}</span>
       <span class="template-row-actions">
-        <button class="button button-quiet" type="button" data-template-edit="${template.id}">Изменить</button>
-        <button class="button button-quiet" type="button" data-template-delete="${template.id}">Удалить</button>
+        ${templateReorderMode ? `
+          <button class="button button-quiet template-move" type="button" data-template-move="up" data-template-id="${template.id}" ${index === 0 ? 'disabled' : ''} title="Выше">▲</button>
+          <button class="button button-quiet template-move" type="button" data-template-move="down" data-template-id="${template.id}" ${index === shiftTemplates.length - 1 ? 'disabled' : ''} title="Ниже">▼</button>
+        ` : `
+          <button class="button button-quiet" type="button" data-template-edit="${template.id}">Изменить</button>
+          <button class="button button-quiet" type="button" data-template-delete="${template.id}">Удалить</button>
+        `}
       </span>
     </div>`).join('');
 }
@@ -540,7 +532,7 @@ function editTemplate(template) {
 
 function setupShiftTemplates() {
   const form = document.querySelector('#template-form');
-  if (!form || !managerRole) return;
+  if (!form) return;
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = document.querySelector('#template-form-error');
@@ -564,7 +556,18 @@ function setupShiftTemplates() {
     } catch (requestError) { showError(requestError.message); }
   });
   document.querySelector('#template-cancel')?.addEventListener('click', resetTemplateForm);
+  document.querySelector('#template-order-toggle')?.addEventListener('click', () => {
+    templateReorderMode = !templateReorderMode;
+    const button = document.querySelector('#template-order-toggle');
+    if (button) button.textContent = templateReorderMode ? 'Готово' : 'Изменить порядок';
+    renderTemplateSettings();
+  });
   document.querySelector('#template-list')?.addEventListener('click', async (event) => {
+    const moveButton = event.target.closest('[data-template-move]');
+    if (moveButton) {
+      await moveTemplate(moveButton.dataset.templateId, moveButton.dataset.templateMove);
+      return;
+    }
     const editButton = event.target.closest('[data-template-edit]');
     if (editButton) {
       const template = shiftTemplates.find((item) => String(item.id) === editButton.dataset.templateEdit);
@@ -624,16 +627,67 @@ function setupTemplateDragAndDrop() {
   });
 }
 
-async function persistTemplateOrder() {
-  const list = document.querySelector('#template-list');
-  if (!list) return;
-  const order = [...list.querySelectorAll('[data-template-row]')].map((row) => Number(row.dataset.templateRow));
+async function persistOrder(ids) {
   try {
-    shiftTemplates = await api('/api/shift-templates/reorder', { method: 'POST', body: JSON.stringify({ order }) });
+    shiftTemplates = await api('/api/shift-templates/reorder', { method: 'POST', body: JSON.stringify({ order: ids }) });
     renderTemplateSettings();
     renderTemplateBar();
     showToast('Порядок шаблонов сохранён');
   } catch (error) { showToast(error.message); }
+}
+
+async function moveTemplate(templateId, direction) {
+  const index = shiftTemplates.findIndex((item) => String(item.id) === String(templateId));
+  const target = direction === 'up' ? index - 1 : index + 1;
+  if (index < 0 || target < 0 || target >= shiftTemplates.length) return;
+  const next = [...shiftTemplates];
+  [next[index], next[target]] = [next[target], next[index]];
+  shiftTemplates = next;
+  renderTemplateSettings();
+  await persistOrder(next.map((item) => item.id));
+}
+
+async function persistTemplateOrder() {
+  const list = document.querySelector('#template-list');
+  if (!list) return;
+  const order = [...list.querySelectorAll('[data-template-row]')].map((row) => Number(row.dataset.templateRow));
+  await persistOrder(order);
+}
+
+/* --- Каналы Telegram (панель управления) ------------------------------ */
+
+async function loadChannelSettings() {
+  const form = document.querySelector('#channels-form');
+  if (!form) return;
+  try {
+    const settings = await api('/api/app-settings');
+    form.elements.announce_chat.value = settings.announce_chat || '';
+    form.elements.swap_chat.value = settings.swap_chat || '';
+  } catch (error) { /* секции нет — прав нет */ }
+}
+
+function setupChannelSettings() {
+  const form = document.querySelector('#channels-form');
+  if (!form) return;
+  const error = document.querySelector('#channels-form-error');
+  const showError = (message) => { if (error) { error.textContent = message; error.hidden = !message; } };
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    showError('');
+    try {
+      const saved = await api('/api/app-settings', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          announce_chat: form.elements.announce_chat.value.trim(),
+          swap_chat: form.elements.swap_chat.value.trim(),
+        }),
+      });
+      form.elements.announce_chat.value = saved.announce_chat || '';
+      form.elements.swap_chat.value = saved.swap_chat || '';
+      showToast('Каналы сохранены');
+    } catch (requestError) { showError(requestError.message); }
+  });
+  loadChannelSettings();
 }
 
 function renderCalendar(data) {
@@ -816,7 +870,7 @@ function setView(name) {
     view.hidden = !active;
   });
   const title = document.querySelector('#page-title');
-  if (title) title.textContent = name === 'team' ? 'Управление командой' : name === 'calendar' ? 'График смен' : name === 'settings' ? 'Личный кабинет' : `Добрый день, ${title.dataset.name}`;
+  if (title) title.textContent = name === 'team' ? 'Управление командой' : name === 'calendar' ? 'График смен' : name === 'settings' ? 'Панель управления' : `Добрый день, ${title.dataset.name}`;
   document.body.classList.toggle('settings-active', name === 'settings');
   if (name === 'team') loadUsers();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
@@ -1130,8 +1184,9 @@ function setupDashboard() {
     calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1);
     loadCalendar();
   });
-  document.querySelector('#edit-calendar-toggle')?.addEventListener('click', () => {
-    if (editMode) return; // выход из правок — только «Отменить» или «Сохранить изменения»
+  const startEditing = (type) => {
+    if (editMode) return;
+    editType = type;
     editMode = true;
     matrixAnchor = null; matrixExtent = null;
     matrixMode = 'edit';
@@ -1139,9 +1194,15 @@ function setupDashboard() {
     renderCalendar(calendarState);
     updateEditControls();
     const status = document.querySelector('#matrix-status');
-    if (status) status.textContent = 'Изменения пока не сохранены';
-  });
-  document.querySelector('#matrix-save')?.addEventListener('click', saveScheduleChanges);
+    if (status) status.textContent = type === 'schedule'
+      ? 'Расписание: «Сохранить» — тихо, «Опубликовать» — со снимком'
+      : 'Замены: изменения пока не сохранены';
+  };
+  document.querySelector('#edit-swaps-toggle')?.addEventListener('click', () => startEditing('swap'));
+  document.querySelector('#edit-schedule-toggle')?.addEventListener('click', () => startEditing('schedule'));
+  document.querySelector('#matrix-save')?.addEventListener('click', () => saveScheduleChanges(true));
+  document.querySelector('#matrix-save-draft')?.addEventListener('click', () => saveScheduleChanges(false));
+  document.querySelector('#matrix-publish')?.addEventListener('click', () => saveScheduleChanges(true));
   document.querySelector('#matrix-discard')?.addEventListener('click', discardScheduleChanges);
   const matrix = document.querySelector('#calendar-grid');
   matrix?.addEventListener('pointerdown', (event) => {
@@ -1315,10 +1376,11 @@ function setupDashboard() {
     if (modulePreferences.calendar_enabled) loadCalendar();
     if (modulePreferences.quality_enabled) loadDashboard();
   });
+  loadShiftTemplates();
   if (managerRole) {
     setupStoriesAdmin();
     setupShiftTemplates();
-    loadShiftTemplates();
+    setupChannelSettings();
   }
 }
 

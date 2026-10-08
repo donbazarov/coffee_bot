@@ -11,6 +11,9 @@ from bot.web.schedule_snapshot import prune_snapshots, render_schedule_snapshot
 
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
+# Каналы Telegram для публикаций. Стартуют из окружения, потом правятся в панели управления.
+DEFAULT_ANNOUNCE_CHAT = os.getenv("TELEGRAM_ANNOUNCE_CHAT_ID", "@nefttest1")
+DEFAULT_SWAP_CHAT = os.getenv("TELEGRAM_SWAP_CHAT_ID", "@nefttest2")
 
 
 def app_timezone() -> tzinfo:
@@ -78,8 +81,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Личные шаблоны смен. Отдельная таблица: shift_types общий с legacy-ботом,
-        # его менять нельзя. Шаблон принадлежит пользователю.
+        # Шаблоны смен — общий набор команды: их ведут наставники, применяют все.
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS web_shift_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +99,20 @@ def initialize_calendar_schema(engine: Engine) -> None:
             CREATE INDEX IF NOT EXISTS idx_web_shift_templates_user
             ON web_shift_templates (user_id, order_index, id)
         """))
+        # Общие настройки сайта (каналы Telegram для публикаций).
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS web_app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        """))
+        connection.execute(text("""
+            INSERT OR IGNORE INTO web_app_settings (key, value) VALUES ('announce_chat', :announce)
+        """), {"announce": DEFAULT_ANNOUNCE_CHAT})
+        connection.execute(text("""
+            INSERT OR IGNORE INTO web_app_settings (key, value) VALUES ('swap_chat', :swap)
+        """), {"swap": DEFAULT_SWAP_CHAT})
 
 
 def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -> dict[str, Any]:
@@ -134,13 +150,14 @@ def _template_dict(row: Any) -> dict[str, Any]:
     }
 
 
-def list_shift_templates(engine: Engine, user_id: int) -> list[dict[str, Any]]:
+def list_shift_templates(engine: Engine) -> list[dict[str, Any]]:
+    """Общий набор шаблонов команды: их ведут наставники, применяют все."""
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT id, name, start_time, end_time, point, order_index
-            FROM web_shift_templates WHERE user_id = :user_id
+            FROM web_shift_templates
             ORDER BY order_index, id
-        """), {"user_id": user_id}).mappings().all()
+        """)).mappings().all()
     return [_template_dict(row) for row in rows]
 
 
@@ -150,8 +167,8 @@ def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[st
     values = _validate_template_payload(payload)
     with engine.begin() as connection:
         order_index = connection.execute(text(
-            "SELECT COALESCE(MAX(order_index), 0) + 1 FROM web_shift_templates WHERE user_id = :user_id"
-        ), {"user_id": user_id}).scalar_one()
+            "SELECT COALESCE(MAX(order_index), 0) + 1 FROM web_shift_templates"
+        )).scalar_one()
         template_id = connection.execute(text("""
             INSERT INTO web_shift_templates (user_id, name, start_time, end_time, point, order_index)
             VALUES (:user_id, :name, :start_time, :end_time, :point, :order_index)
@@ -164,27 +181,27 @@ def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[st
     return _template_dict(row)
 
 
-def update_shift_template(engine: Engine, user_id: int, template_id: int, payload: Any) -> dict[str, Any]:
+def update_shift_template(engine: Engine, template_id: int, payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Ожидался объект шаблона")
     values = _validate_template_payload(payload, partial=True)
     if not values:
         raise ValueError("Нет полей для обновления")
     with engine.begin() as connection:
-        owned = connection.execute(text(
-            "SELECT start_time, end_time FROM web_shift_templates WHERE id = :id AND user_id = :user_id"
-        ), {"id": template_id, "user_id": user_id}).mappings().first()
-        if not owned:
+        existing = connection.execute(text(
+            "SELECT start_time, end_time FROM web_shift_templates WHERE id = :id"
+        ), {"id": template_id}).mappings().first()
+        if not existing:
             raise LookupError("Шаблон не найден")
-        merged_start = values.get("start_time", _time_text(owned["start_time"]))
-        merged_end = values.get("end_time", _time_text(owned["end_time"]))
+        merged_start = values.get("start_time", _time_text(existing["start_time"]))
+        merged_end = values.get("end_time", _time_text(existing["end_time"]))
         if merged_start == merged_end:
             raise ValueError("Время начала и окончания не должны совпадать")
         assignments = ", ".join(f"{key} = :{key}" for key in values)
         connection.execute(text(
             f"UPDATE web_shift_templates SET {assignments}, updated_at = CURRENT_TIMESTAMP "
-            "WHERE id = :id AND user_id = :user_id"
-        ), {**values, "id": template_id, "user_id": user_id})
+            "WHERE id = :id"
+        ), {**values, "id": template_id})
         row = connection.execute(text("""
             SELECT id, name, start_time, end_time, point, order_index
             FROM web_shift_templates WHERE id = :id
@@ -192,16 +209,16 @@ def update_shift_template(engine: Engine, user_id: int, template_id: int, payloa
     return _template_dict(row)
 
 
-def delete_shift_template(engine: Engine, user_id: int, template_id: int) -> bool:
+def delete_shift_template(engine: Engine, template_id: int) -> bool:
     with engine.begin() as connection:
         result = connection.execute(text(
-            "DELETE FROM web_shift_templates WHERE id = :id AND user_id = :user_id"
-        ), {"id": template_id, "user_id": user_id})
+            "DELETE FROM web_shift_templates WHERE id = :id"
+        ), {"id": template_id})
         return result.rowcount > 0
 
 
-def reorder_shift_templates(engine: Engine, user_id: int, ordered_ids: Any) -> list[dict[str, Any]]:
-    """Сохраняет новый порядок личных шаблонов (порядок задаёт клиент drag-and-drop)."""
+def reorder_shift_templates(engine: Engine, ordered_ids: Any) -> list[dict[str, Any]]:
+    """Сохраняет новый порядок общего набора шаблонов (порядок задаёт клиент)."""
     if not isinstance(ordered_ids, list) or not ordered_ids:
         raise ValueError("Ожидался непустой список шаблонов")
     try:
@@ -211,17 +228,62 @@ def reorder_shift_templates(engine: Engine, user_id: int, ordered_ids: Any) -> l
     if len(set(ids)) != len(ids):
         raise ValueError("Идентификаторы шаблонов повторяются")
     with engine.begin() as connection:
-        owned = [row[0] for row in connection.execute(text(
-            "SELECT id FROM web_shift_templates WHERE user_id = :user_id"
-        ), {"user_id": user_id})]
-        if set(ids) != set(owned):
+        known = [row[0] for row in connection.execute(text("SELECT id FROM web_shift_templates"))]
+        if set(ids) != set(known):
             raise ValueError("Список шаблонов не совпадает с сохранёнными")
         for index, template_id in enumerate(ids):
             connection.execute(text("""
                 UPDATE web_shift_templates SET order_index = :index, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND user_id = :user_id
-            """), {"index": index, "id": template_id, "user_id": user_id})
-    return list_shift_templates(engine, user_id)
+                WHERE id = :id
+            """), {"index": index, "id": template_id})
+    return list_shift_templates(engine)
+
+
+def _normalize_chat(value: Any) -> str:
+    """Приводит ссылку/юзернейм канала к виду, понятному Bot API (@name или -100…)."""
+    text_value = str(value or "").strip()
+    if not text_value:
+        return ""
+    if text_value.startswith("-") and text_value.lstrip("-").isdigit():
+        return text_value
+    trimmed = text_value.split("?", 1)[0].rstrip("/")
+    for prefix in ("https://", "http://"):
+        if trimmed.startswith(prefix):
+            trimmed = trimmed[len(prefix):]
+    if trimmed.startswith("t.me/"):
+        trimmed = trimmed[len("t.me/"):]
+    trimmed = trimmed.lstrip("@")
+    if not trimmed or trimmed.startswith("+"):
+        # Приватные инвайт-ссылки (t.me/+hash) Bot API так не понимает.
+        return ""
+    return f"@{trimmed}"
+
+
+def get_app_settings(engine: Engine) -> dict[str, str]:
+    with engine.connect() as connection:
+        rows = connection.execute(text("SELECT key, value FROM web_app_settings")).mappings().all()
+    values = {row["key"]: row["value"] for row in rows}
+    return {
+        "announce_chat": values.get("announce_chat", DEFAULT_ANNOUNCE_CHAT),
+        "swap_chat": values.get("swap_chat", DEFAULT_SWAP_CHAT),
+    }
+
+
+def save_app_settings(engine: Engine, values: dict[str, Any]) -> dict[str, str]:
+    allowed = {"announce_chat", "swap_chat"}
+    if not isinstance(values, dict) or not values:
+        raise ValueError("Ожидались настройки для сохранения")
+    if set(values) - allowed:
+        raise ValueError("Неизвестные настройки")
+    normalized = {key: _normalize_chat(value) for key, value in values.items()}
+    with engine.begin() as connection:
+        for key, value in normalized.items():
+            connection.execute(text("""
+                INSERT INTO web_app_settings (key, value, updated_at)
+                VALUES (:key, :value, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+            """), {"key": key, "value": value})
+    return get_app_settings(engine)
 
 
 def _time_text(value: Any) -> str:
@@ -358,10 +420,35 @@ def _shift_type_id(connection: Any, start_time: str, end_time: str, point: str) 
     """), {"start_time": start_time, "end_time": end_time, "point": point, "name": f"{label} {point}", "shift_kind": shift_kind}).scalar_one())
 
 
+def _swap_lines(changes: list[dict[str, Any]]) -> list[str]:
+    """Строки изменений для лога и для дублирования в канал замен."""
+    lines: list[str] = []
+    for cell in changes:
+        employee = cell["employee"]["name"]
+        if cell["delete"]:
+            for old in cell["old_rows"]:
+                lines.append(
+                    f"{cell['date']} · {employee}: выходной "
+                    f"(было {_time_text(old['start_time'])}–{_time_text(old['end_time'])}, {old['point']})"
+                )
+            continue
+        if cell["old_rows"]:
+            old = cell["old_rows"][0]
+            lines.append(
+                f"{cell['date']} · {employee}: {_time_text(old['start_time'])}–{_time_text(old['end_time'])}, "
+                f"{old['point']} → {cell['start_time']}–{cell['end_time']}, {cell['point']}"
+            )
+        else:
+            lines.append(f"{cell['date']} · {employee}: {cell['start_time']}–{cell['end_time']}, {cell['point']}")
+    return lines
+
+
 def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[str, Any]],
-                           change_type: str = "swap") -> dict[str, Any]:
+                           change_type: str = "swap", publish: bool = True) -> dict[str, Any]:
     if change_type not in {"swap", "schedule"}:
         raise ValueError("Неизвестный тип правки")
+    if change_type != "schedule":
+        publish = True
     if not operations or len(operations) > 500:
         raise ValueError("Нет изменений или превышен лимит в 500 ячеек")
 
@@ -487,14 +574,16 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
             """), {"date": cell["date"], "iiko_id": cell["iiko_id"], "shift_type_id": shift_type_id})
             changed_count += 1
 
-        # Тип «Расписание»: вместо построчного лога — один снимок периода.
+        # «Расписание»: с публикацией — один снимок; без публикации — тихо, без лога.
+        snapshot_url = None
+        snapshot_caption = ""
         if change_type == "schedule":
-            snapshot_url = None
-            if changes:
+            if changes and publish:
                 affected_ids = sorted({cell["employee"]["id"] for cell in changes})
                 changed_dates = sorted(cell["date"] for cell in changes)
                 period_start, period_end = changed_dates[0], changed_dates[-1]
                 snapshot_url = render_schedule_snapshot(connection, affected_ids, period_start, period_end)
+                snapshot_caption = f"График смен · {period_start} – {period_end} · изменил(а) {actor['name']}"
                 connection.execute(text("""
                     INSERT INTO web_shift_change_log (
                         actor_user_id, actor_name, employee_id, employee_name, shift_date, action,
@@ -511,10 +600,15 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
                 })
             result = {
                 "changed": changed_count, "cleared": cleared_count, "change_type": "schedule",
-                "logged": 1 if changes else 0, "snapshot_url": snapshot_url,
+                "logged": 1 if (changes and publish) else 0,
+                "published": bool(snapshot_url), "snapshot_url": snapshot_url,
+                "snapshot_caption": snapshot_caption,
             }
         else:
-            result = {"changed": changed_count, "cleared": cleared_count, "change_type": "swap", "logged": len(changes)}
+            result = {
+                "changed": changed_count, "cleared": cleared_count, "change_type": "swap",
+                "logged": len(changes), "swap_lines": _swap_lines(changes),
+            }
 
     if result.get("snapshot_url"):
         prune_snapshots(engine)

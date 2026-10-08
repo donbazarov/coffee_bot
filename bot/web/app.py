@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine, init_db
-from bot.web import schedule_snapshot, stories_service, telegram_login
+from bot.web import schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
@@ -23,12 +23,14 @@ from bot.web.calendar_service import (
     build_calendar_feed,
     create_shift_template,
     delete_shift_template,
+    get_app_settings,
     get_month_calendar,
     get_shift_history,
     get_user_preferences,
     initialize_calendar_schema,
     list_shift_templates,
     reorder_shift_templates,
+    save_app_settings,
     save_user_preferences,
     update_shift_template,
 )
@@ -446,8 +448,8 @@ def calendar_snapshot(filename: str, _: dict[str, Any] = Depends(require_user)):
 
 
 @app.get("/api/shift-templates")
-def shift_templates(user: dict[str, Any] = Depends(require_user)):
-    return list_shift_templates(engine, user["id"])
+def shift_templates(_: dict[str, Any] = Depends(require_user)):
+    return list_shift_templates(engine)
 
 
 @app.post("/api/shift-templates")
@@ -460,10 +462,10 @@ async def create_shift_template_route(request: Request, user: dict[str, Any] = D
 
 
 @app.patch("/api/shift-templates/{template_id}")
-async def update_shift_template_route(template_id: int, request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def update_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
     payload = await _read_json_object(request)
     try:
-        return update_shift_template(engine, user["id"], template_id, payload)
+        return update_shift_template(engine, template_id, payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except LookupError as error:
@@ -471,17 +473,32 @@ async def update_shift_template_route(template_id: int, request: Request, user: 
 
 
 @app.delete("/api/shift-templates/{template_id}")
-def delete_shift_template_route(template_id: int, user: dict[str, Any] = Depends(require_manager_csrf)):
-    if not delete_shift_template(engine, user["id"], template_id):
+def delete_shift_template_route(template_id: int, _: dict[str, Any] = Depends(require_manager_csrf)):
+    if not delete_shift_template(engine, template_id):
         raise HTTPException(status_code=404, detail="Шаблон не найден")
     return {"ok": True}
 
 
 @app.post("/api/shift-templates/reorder")
-async def reorder_shift_templates_route(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def reorder_shift_templates_route(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
     payload = await _read_json_object(request)
     try:
-        return reorder_shift_templates(engine, user["id"], payload.get("order"))
+        return reorder_shift_templates(engine, payload.get("order"))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/api/app-settings")
+def app_settings(_: dict[str, Any] = Depends(require_manager)):
+    """Каналы Telegram для публикаций — видит и меняет только наставник/старший."""
+    return get_app_settings(engine)
+
+
+@app.patch("/api/app-settings")
+async def update_app_settings(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    try:
+        return save_app_settings(engine, payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -498,9 +515,13 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
     # Тип «Расписание» — только наставник. Проверка на сервере, не только в UI.
     if change_type == "schedule" and user["role"] != "mentor":
         raise HTTPException(status_code=403, detail="Тип «Расписание» доступен только наставникам")
+    # publish=False — тихое сохранение расписания: без лога, без снимка, без рассылки.
+    publish = payload.get("publish", True)
+    if not isinstance(publish, bool):
+        raise HTTPException(status_code=422, detail="Флаг публикации должен быть булевым")
     try:
         # apply_schedule_changes синхронная и с генерацией картинки — уводим из event loop.
-        return await run_in_threadpool(apply_schedule_changes, engine, user["id"], operations, change_type)
+        result = await run_in_threadpool(apply_schedule_changes, engine, user["id"], operations, change_type, publish)
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (KeyError, TypeError, ValueError) as error:
@@ -509,6 +530,10 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
         raise HTTPException(status_code=409, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    # Уведомления в Telegram — после успешного сохранения, отдельно от транзакции.
+    if result.get("swap_lines") or result.get("published"):
+        await run_in_threadpool(telegram_publish.publish_schedule_events, engine, result, user["name"])
+    return result
 
 
 @app.post("/api/logout")
@@ -688,7 +713,7 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
 #
 # Публичная страница живёт по прямой ссылке /stories. В интерфейсе сотрудников
 # на неё нет ни одной ссылки: страница для гостей, а не для команды.
-# Модерация перенесена из отдельного прототипа в личный кабинет наставника и
+# Модерация перенесена из отдельного прототипа в панель управления наставника и
 # работает по обычной сессии сайта — приватный ключ Neft_moderation_key больше
 # не нужен.
 # --------------------------------------------------------------------------- #
