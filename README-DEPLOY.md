@@ -417,6 +417,10 @@ cd /opt/coffee_bot && ./deploy/deploy.sh
 Скрипт заберёт свежий код из ветки `main`, обновит зависимости, пересоберёт и
 перезапустит сервисы (Docker или systemd — определит сам) и дождётся ответа `/healthz`.
 
+> Если вместе с кодом обновился и сам `deploy.sh`, скрипт напечатает
+> «перезапускаю скрипт» и продолжит работу уже в новой версии — это нормально,
+> так и задумано. Поэтому дальше править его можно без ручных действий на сервере.
+
 Сделать команду ещё короче — один раз добавьте алиас:
 
 ```bash
@@ -545,6 +549,7 @@ docker compose restart          # или: sudo systemctl restart coffee-bot
 
 | Симптом | Причина и решение |
 |---|---|
+| `fatal: 'origin/main' does not appear to be a git repository` | Сервер запускает **старую** версию `deploy.sh`, а она сама себя обновить не может. Обновите код один раз вручную: `cd /opt/coffee_bot && git fetch origin && git merge --ff-only origin/main`. Дальше `./deploy/deploy.sh` заработает как обычно |
 | **Изменения не сохраняются** | Каталог `data/` принадлежит не контейнеру. `sudo chown -R 10001:10001 /opt/coffee_bot/data` |
 | `502 Bad Gateway` | Сервис не запущен. `docker compose ps` и `docker compose logs -f` (или `systemctl status coffee-bot`) |
 | Кнопки входа нет вообще | Не задан `TELEGRAM_BOT_USERNAME` — проверьте `docker compose exec web printenv \| grep TELEGRAM` и пересоздайте контейнер: `docker compose up -d --force-recreate` |

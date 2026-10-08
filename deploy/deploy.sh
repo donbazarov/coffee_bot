@@ -26,10 +26,20 @@ BRANCH="${BRANCH:-main}"
 VENV="${VENV:-$APP_DIR/venv}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8001/healthz}"
 
+# Абсолютный путь к самому скрипту — нужен, чтобы перезапустить себя после
+# обновления кода. Считаем его до `cd`, иначе относительный путь потеряется.
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
 cd "$APP_DIR"
 
 # --- 1. Код ------------------------------------------------------------------
 echo "==> Обновляю код из origin/$BRANCH"
+
+# Запоминаем версию скрипта до обновления. Если слияние принесёт новую версию,
+# продолжать работу по старому тексту нельзя: bash читает файл по мере
+# выполнения. Ниже мы просто перезапустим себя уже в новой редакции.
+SELF_HASH_BEFORE="$(git hash-object -- "$SELF" 2>/dev/null || true)"
+
 git fetch --prune origin
 git checkout "$BRANCH"
 
@@ -42,6 +52,15 @@ if ! git merge --ff-only "origin/$BRANCH"; then
   echo "   Посмотреть: git status"
   echo "   Сбросить:   git checkout -- ."
   exit 1
+fi
+
+# Самовосстановление: если этим слиянием обновился и сам deploy.sh —
+# перезапускаемся, чтобы дальше работала новая логика. На втором проходе
+# хеши совпадут, поэтому цикла не будет.
+SELF_HASH_AFTER="$(git hash-object -- "$SELF" 2>/dev/null || true)"
+if [ -n "$SELF_HASH_BEFORE" ] && [ "$SELF_HASH_BEFORE" != "$SELF_HASH_AFTER" ]; then
+  echo "==> Обновилась и версия deploy.sh — перезапускаю скрипт"
+  exec bash "$SELF" "$@"
 fi
 
 # --- 2. Режим запуска --------------------------------------------------------
