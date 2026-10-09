@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10110f">
-  <title>Качество кофе · НЕФТЬ</title>
+  <title>НЕФТЬ · Crew Desk</title>
   <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
@@ -24,7 +24,7 @@
     <section class="login-content">
       <p class="eyebrow">НЕЕЕЕЕЕЕЕЕЕФТЬ</p>
       <h1>Добро пожаловать<br>в ад.</h1>
-      <p class="login-copy">Пространство команды кофеен НЕФТЬ.</p>
+      <p class="login-copy">От работяг • для работяг </p>
       {% if bot_login_enabled %}
       <div class="login-actions">
         <a class="button button-primary button-login" href="/auth/telegram/start">
@@ -55,7 +55,7 @@
       {% endif %}
       {% if auth_error %}<p class="login-error" role="alert">{{ auth_error }}</p>{% endif %}
     </section>
-    <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span><span>01 — 24</span></footer>
+    <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span></footer>
   </main>
   {% else %}
   <div class="app-shell">
@@ -68,7 +68,7 @@
         {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon">⚙</span><span>Панель управления</span></button>{% endif %}
         <button class="nav-item" type="button" data-view="profile"><span class="nav-icon">☺</span><span>Личный кабинет</span></button>
       </nav>
-      <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span><span class="rail-version">WEB / 01</span></div>
+      <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span></div>
     </aside>
 
     <main class="main-area">
@@ -260,7 +260,7 @@
       </section>
       {% endif %}
 
-      <footer class="app-footer"><span>НЕФТЬ / КАЧЕСТВО КОФЕ</span><span>СОЗДАНО ДЛЯ КОМАНДЫ</span></footer>
+      <footer class="app-footer"><span>НЕФТЬ / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
     </main>
   </div>
 
