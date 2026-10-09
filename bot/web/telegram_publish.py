@@ -119,13 +119,10 @@ def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str) 
 
     if result.get("published"):
         chat = settings.get("announce_chat")
-        shots = result.get("snapshots") or []
-        for index, shot in enumerate(shots, start=1):
+        for shot in result.get("snapshots") or []:
             path = schedule_snapshot.SNAPSHOTS_DIR / os.path.basename(shot["url"])
-            caption = shot.get("caption") or f"График смен · {actor}"
-            if len(shots) > 1:
-                caption = f"{caption} · снимок {index}/{len(shots)}"
-            send_photo(chat, path, caption)
+            # Подпись — только «График смен» и диапазон дат (без автора и нумерации).
+            send_photo(chat, path, shot.get("caption") or "График смен")
 
 
 __all__ = ["publish_schedule_events", "send_message", "send_photo"]

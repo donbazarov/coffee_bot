@@ -230,7 +230,8 @@ function updateEditControls() {
   const draftSave = document.querySelector('#matrix-save-draft');
   if (draftSave) { draftSave.hidden = editType !== 'schedule'; draftSave.disabled = !editMode || !hasChanges; }
   const publishButton = document.querySelector('#matrix-publish');
-  if (publishButton) { publishButton.hidden = editType !== 'schedule'; publishButton.disabled = !editMode || !hasChanges; }
+  // Публиковать можно и без правок — только снимки за выбранный диапазон.
+  if (publishButton) { publishButton.hidden = editType !== 'schedule'; publishButton.disabled = !editMode; }
   const summary = document.querySelector('#matrix-status');
   if (summary && !editMode) summary.textContent = 'Режим просмотра';
   const templates = document.querySelector('#matrix-templates');
@@ -307,7 +308,8 @@ function historyEntryHtml(row) {
 }
 
 async function saveScheduleChanges(publish = true, period = null) {
-  if (!matrixChanges.size) return;
+  // Публикация возможна и без правок — тогда нужен только диапазон дат.
+  if (!matrixChanges.size && !(publish && period)) return;
   const operations = [...matrixChanges.entries()].map(([key, value]) => {
     const [userId, date] = key.split('|');
     return value ? { user_id: Number(userId), date, ...value } : { user_id: Number(userId), date, delete: true };

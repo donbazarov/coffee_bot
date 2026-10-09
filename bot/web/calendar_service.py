@@ -507,10 +507,14 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         raise ValueError("Неизвестный тип правки")
     if change_type != "schedule":
         publish = True
-    if not operations or len(operations) > 500:
-        raise ValueError("Нет изменений или превышен лимит в 500 ячеек")
     # Диапазон публикации задаётся только для «Расписания»; для замен — не используется.
     publish_from, publish_to = _publish_period(publish_start, publish_end) if change_type == "schedule" else (None, None)
+    if len(operations) > 500:
+        raise ValueError("Превышен лимит в 500 ячеек")
+    # Публикация «Расписания» может идти без правок — тогда обязателен диапазон:
+    # так наставник просто рассылает снимки уже утверждённого графика.
+    if not operations and not (publish and publish_from and publish_to):
+        raise ValueError("Нет изменений или превышен лимит в 500 ячеек")
 
     prepared = []
     seen_cells = set()
@@ -638,21 +642,23 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         snapshots: list[dict[str, Any]] = []
         period_start: str | None = None
         period_end: str | None = None
-        if change_type == "schedule" and changes and publish:
-            changed_dates = sorted(cell["date"] for cell in changes)
-            # Диапазон выбирает наставник в окне публикации; без него — по изменённым дням.
-            window_start = publish_from or _to_date(changed_dates[0])
-            window_end = publish_to or _to_date(changed_dates[-1])
+        if change_type == "schedule" and publish:
+            if publish_from and publish_to:
+                window_start, window_end = publish_from, publish_to
+            else:
+                # Без явного диапазона берём дни, которые были изменены.
+                changed_dates = sorted(cell["date"] for cell in changes)
+                window_start, window_end = _to_date(changed_dates[0]), _to_date(changed_dates[-1])
             if window_end < window_start:
                 window_start, window_end = window_end, window_start
             period_start, period_end = window_start.isoformat(), window_end.isoformat()
             # Снимки — по всем активным бариста, а не только по изменённым строкам.
             employee_ids = active_employee_ids(connection)
             for shot in render_schedule_snapshots(connection, employee_ids, window_start, window_end):
+                # В канал анонсов уходит только «График смен» и диапазон дат.
                 snapshots.append({
                     **shot,
-                    "caption": (f"График смен · {_date_label(shot['start'])} – {_date_label(shot['end'])}"
-                                f" · изменил(а) {actor['name']}"),
+                    "caption": f"График смен · {_date_label(shot['start'])} – {_date_label(shot['end'])}",
                 })
             if snapshots:
                 connection.execute(text("""
