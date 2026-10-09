@@ -1,8 +1,7 @@
-from .checklist_stats_operations import (
-    get_individual_stats,
-    get_point_stats, 
-    get_task_stats,
-    get_detailed_log,
-    get_weekday_name,
-    format_stats_period
-)
+"""Пакет работы с базой данных.
+
+Схема и движок живут в `bot.database.models`, а веб-слой работает с базой
+сырым SQL. Раньше здесь реэкспортировались операции чек-листов старого
+Telegram-бота — они удалены вместе с ним, поэтому импорт `bot.database.models`
+больше не тянет ничего лишнего.
+"""

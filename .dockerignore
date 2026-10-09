@@ -14,7 +14,6 @@ credentials.json
 data/
 *.db
 *.sqlite3
-Backup/
 
 # --- Окружение и кеши ---------------------------------------------------------
 venv/
@@ -27,13 +26,9 @@ __pycache__/
 .git/
 .gitignore
 .github/
-Patches/
 *.patch
 
 # --- Документация и лишние файлы ----------------------------------------------
 README*.md
-WEB_SETUP.md
-command_reminder.MD
-Internal_Context.md
 *.xlsx
 .vscode/

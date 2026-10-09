@@ -265,8 +265,7 @@ sudo -u coffee nano /opt/coffee_bot/.env
 | `WEB_SESSION_SECRET` | длинная случайная строка: `openssl rand -hex 32` |
 | `TELEGRAM_BOT_USERNAME` | `NeftCoffeeBot` |
 | `TELEGRAM_AUTH_CALLBACK_URL` | `https://neftcoffee.shop/auth/telegram/callback` |
-| `TELEGRAM_BOT_TOKEN` | токен бота. Если пусто — берётся `bot_token` из `credentials.json` |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | сервисный аккаунт Google одной строкой JSON. Нужен только старому боту, сайту не требуется |
+| `TELEGRAM_BOT_TOKEN` | токен бота. Обязателен для входа через Telegram |
 | `WEB_COOKIE_SECURE` | `1` — обязательно, сайт работает по HTTPS |
 | `NEFT_DATA_DIR` | оставьте пустым — путь по умолчанию подходит и в Docker, и без него. В Docker нужное значение уже задаёт `docker-compose.yml` |
 
@@ -280,8 +279,7 @@ sudo -u coffee nano /opt/coffee_bot/.env
 sudo chmod 600 /opt/coffee_bot/.env
 ```
 
-После переноса `.env` отдельный `credentials.json` на сервере не нужен —
-токен бота уже внутри `.env`.
+Отдельных файлов-ключей проекту не требуется: все секреты лежат в `.env`.
 
 ---
 
@@ -614,7 +612,7 @@ docker compose restart          # или: sudo systemctl restart coffee-bot
 | `502 Bad Gateway` | Сервис не запущен. `docker compose ps` и `docker compose logs -f` (или `systemctl status coffee-bot`) |
 | Кнопки входа нет вообще | Не задан `TELEGRAM_BOT_USERNAME` — проверьте `docker compose exec web printenv \| grep TELEGRAM` и пересоздайте контейнер: `docker compose up -d --force-recreate` |
 | Кнопка «Войти через Telegram» есть, но вход не подтверждается | Контейнер бота не видит Telegram: `docker compose logs bot`. Проверьте `curl https://api.telegram.org/bot<токен>/getMe` |
-| Бот отвечает ошибкой 409 в логах | С тем же токеном работает старый бот (`python -m bot.main`) — остановите его |
+| Бот отвечает ошибкой 409 в логах | С тем же токеном уже работает другой long-polling (например, второй контейнер `coffee-bot-login`) — оставьте один |
 | Виджет Telegram не появился | Он грузится с `telegram.org`: нужен VPN или домен у BotFather. Основной вход через приложение работает и без него |
 | `auth_error=verify` после входа | `TELEGRAM_BOT_TOKEN` не совпадает с ботом, чей домен указан у BotFather |
 | Сессия сбрасывается при каждом входе | Пустой `WEB_SESSION_SECRET`. Задайте его и перезапустите сервис |

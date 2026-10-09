@@ -83,7 +83,7 @@ if [ "$MODE" = "docker" ]; then
 else
   echo "==> Обновляю зависимости (только веб-сервис)"
   "$VENV/bin/pip" install --upgrade pip --quiet
-  "$VENV/bin/pip" install -r requirements-web.txt --quiet
+  "$VENV/bin/pip" install -r requirements.txt --quiet
 
   echo "==> Проверяю, что код компилируется"
   "$VENV/bin/python" -m compileall -q bot run.py

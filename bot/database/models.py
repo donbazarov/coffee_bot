@@ -1,6 +1,15 @@
-from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Text, Date, Time, Index, ForeignKey
+"""ORM-модели и инициализация схемы базы.
+
+Веб-слой читает и пишет данные сырым SQL, но ORM-модели остаются источником
+схемы: `init_db()` создаёт недостающие таблицы на пустой базе. Оставлены
+только нужные веб-сервису таблицы — `users`, `shift_types`, `schedule`.
+
+Модели и код старого Telegram-бота удалены как legacy.
+"""
+
+from sqlalchemy import Boolean, create_engine, Column, Integer, String, DateTime, Date, Time, Index, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import relationship
 from datetime import datetime
 from pathlib import Path
 
@@ -8,10 +17,11 @@ from bot.config import BotConfig
 
 Base = declarative_base()
 
+
 class User(Base):
     """Модель пользователя с ролями"""
     __tablename__ = 'users'
-    
+
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
     iiko_id = Column(Integer, unique=True)  # Внутренний ID из Iiko
@@ -22,29 +32,11 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-class DrinkReview(Base):
-    __tablename__ = 'drink_reviews'
-    
-    id = Column(Integer, primary_key=True)
-    respondent_name = Column(String(100), nullable=False)
-    barista_name = Column(String(100), nullable=False)
-    point = Column(String(50), nullable=False)
-    category = Column(String(50), nullable=False)
-    drink_type = Column(String(50))
-    balance = Column(Integer)
-    bouquet = Column(Integer)
-    body = Column(Integer)
-    aftertaste = Column(Integer)
-    foam = Column(Integer)
-    latte_art = Column(Integer)
-    photo_path = Column(String(255))
-    comment = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 class ShiftType(Base):
     """Модель типов смен"""
     __tablename__ = 'shift_types'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     start_time = Column(Time, nullable=False)  # время прихода
     end_time = Column(Time, nullable=False)  # время ухода
@@ -53,10 +45,11 @@ class ShiftType(Base):
     shift_type = Column(String(20), nullable=False)  # 'morning', 'hybrid', 'evening'
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class Schedule(Base):
     """Модель расписания смен"""
     __tablename__ = 'schedule'
-    
+
     shift_id = Column(Integer, primary_key=True, autoincrement=True)
     shift_date = Column(Date, nullable=False)  # формат: YYYY-MM-DD
     iiko_id = Column(String(50), nullable=False)  # ID из iiko (может быть строкой)
@@ -66,80 +59,16 @@ class Schedule(Base):
     source = Column(String(20), default='sheets')  # 'sheets', 'swap', 'manual'
     version = Column(Integer, default=1)
     is_active = Column(Boolean, default=True)
-    
+
     # Связь с типом смены
     shift_type_obj = relationship("ShiftType", lazy="joined")
-    
+
     # Индексы для быстрого поиска
     __table_args__ = (
         Index('idx_shift_date', 'shift_date'),
         Index('idx_iiko_id', 'iiko_id'),
         Index('idx_shift_date_iiko', 'shift_date', 'iiko_id'),
         Index('idx_shift_type_id', 'shift_type_id'),
-    )
-
-class ChecklistTemplate(Base):
-    """Шаблоны заданий для чек-листов"""
-    __tablename__ = 'checklist_templates'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    #point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ' - убрали из-за объединения списка чек-листов
-    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
-    shift_type = Column(String(20), nullable=False)  # 'morning', 'evening' (для пересмена не создаем отдельные)
-    task_description = Column(String(500), nullable=False)
-    order_index = Column(Integer, default=0)  # порядок отображения
-    is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-class HybridShiftAssignment(Base):
-    """Распределение задач для пересменов"""
-    __tablename__ = 'hybrid_shift_assignments'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    day_of_week = Column(Integer, nullable=False)  # 0-6 (пн-вс)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Связи
-    assigned_tasks = relationship("HybridAssignmentTask", back_populates="assignment")
-
-class HybridAssignmentTask(Base):
-    """Связь между распределением и задачами (многие ко многим)"""
-    __tablename__ = 'hybrid_assignment_tasks'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    assignment_id = Column(Integer, ForeignKey('hybrid_shift_assignments.id'), nullable=False)
-    task_id = Column(Integer, ForeignKey('checklist_templates.id'), nullable=False)
-    shift_type = Column(String(20), nullable=False)  # 'morning' или 'evening'
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Связи
-    assignment = relationship("HybridShiftAssignment", back_populates="assigned_tasks")
-    task = relationship("ChecklistTemplate")
-
-class ChecklistLog(Base):
-    """Лог выполнения чек-листов"""
-    __tablename__ = 'checklist_logs'
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    task_id = Column(Integer, ForeignKey('checklist_templates.id'), nullable=False)
-    shift_date = Column(Date, nullable=False)
-    shift_type = Column(String(20), nullable=False)  # 'morning', 'hybrid', 'evening'
-    point = Column(String(10), nullable=False)
-    completed_at = Column(DateTime, default=datetime.utcnow)
-    completed_by_user_id = Column(Integer, ForeignKey('users.id'))  # кто выполнил (для синхронизации)
-    
-    # Связи
-    user = relationship("User", foreign_keys=[user_id])
-    task = relationship("ChecklistTemplate")
-    completed_by = relationship("User", foreign_keys=[completed_by_user_id])
-    
-    # Индексы
-    __table_args__ = (
-        Index('idx_checklist_log_date_user', 'shift_date', 'user_id'),
-        Index('idx_checklist_log_date_point', 'shift_date', 'point'),
-        Index('idx_checklist_log_task', 'task_id'),
     )
 
 
@@ -150,8 +79,32 @@ if "sqlite" in BotConfig.database_url:
     _connect_args = {"check_same_thread": False, "timeout": 15}
 else:
     _connect_args = {}
+
 engine = create_engine(BotConfig.database_url, connect_args=_connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# Оценки качества. ORM-модель удалена как legacy — функционал будет переписан
+# с нуля, — но веб-дашборд пока читает эту таблицу сырым SQL. Поэтому схема
+# создаётся явным DDL: иначе на пустой базе дашборд падал бы с "no such table".
+DRINK_REVIEWS_DDL = """
+CREATE TABLE IF NOT EXISTS drink_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    respondent_name TEXT NOT NULL,
+    barista_name TEXT NOT NULL,
+    point TEXT NOT NULL,
+    category TEXT NOT NULL,
+    drink_type TEXT,
+    balance INTEGER,
+    bouquet INTEGER,
+    body INTEGER,
+    aftertaste INTEGER,
+    foam INTEGER,
+    latte_art INTEGER,
+    photo_file_id TEXT,
+    comment TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 
 def init_db():
     """Создаёт недостающие таблицы.
@@ -164,3 +117,5 @@ def init_db():
     if engine.dialect.name == "sqlite" and engine.url.database:
         Path(engine.url.database).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(text(DRINK_REVIEWS_DDL))

@@ -26,7 +26,6 @@ build/
 *.patch
 credentials.json
 coffee_quality.db
-backup/
 # Рабочие данные: база историй гостей и загруженные фотографии.
 # Переносятся вместе с проектом, но в git не попадают.
 data/

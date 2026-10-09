@@ -4,7 +4,7 @@
 #  НЕФТЬ · Coffee Bot — образ веб-сервиса и бота входа
 #
 #  Лёгкий: slim-база, только runtime-зависимости сайта, без компиляторов.
-#  Секреты (.env, credentials.json) в образ НЕ копируются — передаются
+#  Секреты (.env) в образ НЕ копируются — передаются
 #  в рантайме через --env-file или docker compose.
 #
 #  Сборка:  docker build -t coffee-bot .
@@ -31,11 +31,11 @@ WORKDIR /app
 
 # 1) Зависимости отдельным слоем: переустанавливаются только при их изменении.
 #    Все пакеты приходят колёсами, поэтому gcc и build-essential не нужны.
-COPY requirements-web.txt ./
-RUN pip install --no-cache-dir -r requirements-web.txt
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 2) Только код приложения — явные COPY вместо `COPY . .`,
-#    чтобы .env и credentials.json физически не могли попасть в образ.
+#    чтобы .env физически не мог попасть в образ.
 COPY bot/ ./bot/
 COPY run.py ./
 

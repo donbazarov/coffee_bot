@@ -6,19 +6,18 @@
     TELEGRAM_BOT_USERNAME         — имя бота без @
     TELEGRAM_AUTH_CALLBACK_URL    — публичный HTTPS-адрес callback
     WEB_SESSION_SECRET            — подпись сессионных cookie
-    GOOGLE_SERVICE_ACCOUNT_JSON   — сервисный аккаунт Google одной строкой JSON
+    WEB_HOST / WEB_PORT           — адрес и порт веб-сервиса
+    DATABASE_URL                  — путь к SQLite-базе (по умолчанию в корне)
 
-Файл `credentials.json` поддерживается как запасной вариант, чтобы старые
-запуски не сломались, но приоритет всегда у переменных окружения.
+Секретов в коде нет: токен и остальные значения приходят только из `.env`
+или из переменных окружения.
 """
 
 import os
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
-_CREDENTIALS_PATH = _ROOT / "credentials.json"
 
 
 def load_env_file() -> None:
@@ -40,41 +39,9 @@ def load_env_file() -> None:
 load_env_file()
 
 
-def _credentials_file() -> dict:
-    """Содержимое credentials.json или пустой словарь."""
-    if not _CREDENTIALS_PATH.exists():
-        return {}
-    try:
-        with _CREDENTIALS_PATH.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _load_token() -> str | None:
-    """Токен бота: сначала переменная окружения, потом credentials.json."""
-    return os.getenv("TELEGRAM_BOT_TOKEN") or _credentials_file().get("bot_token") or None
-
-
-def google_service_account() -> dict | None:
-    """Данные сервисного аккаунта Google для синхронизации с таблицами.
-
-    Приоритет — `GOOGLE_SERVICE_ACCOUNT_JSON` (одна строка JSON в .env),
-    иначе — credentials.json без поля bot_token.
-    """
-    raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-    if raw:
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, dict) and parsed.get("client_email") and parsed.get("private_key"):
-            return parsed
-
-    data = _credentials_file()
-    data.pop("bot_token", None)
-    return data or None
+    """Токен бота из TELEGRAM_BOT_TOKEN. Секреты живут только в .env."""
+    return os.getenv("TELEGRAM_BOT_TOKEN") or None
 
 
 @dataclass
