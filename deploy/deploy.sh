@@ -78,8 +78,12 @@ MODE="$(detect_mode)"
 echo "==> Режим запуска: $MODE"
 
 if [ "$MODE" = "docker" ]; then
-  echo "==> Пересобираю образ и перезапускаю контейнер"
-  docker compose up -d --build --remove-orphans
+  # Сборка отдельным шагом: пока собирается образ, работающий контейнер
+  # продолжает обслуживать сайт. Пересоздание занимает секунды, а не минуты.
+  echo "==> Собираю образ (сайт в это время работает)"
+  docker compose build
+  echo "==> Пересоздаю контейнеры"
+  docker compose up -d --remove-orphans
 else
   echo "==> Обновляю зависимости (только веб-сервис)"
   "$VENV/bin/pip" install --upgrade pip --quiet
@@ -94,7 +98,7 @@ fi
 
 # --- 3. Проверка, что приложение ожило ---------------------------------------
 echo "==> Жду ответа приложения на $HEALTH_URL"
-for _ in $(seq 1 10); do
+for _ in $(seq 1 45); do
   if curl -fsS --max-time 3 "$HEALTH_URL" >/dev/null 2>&1; then
     echo "==> Готово: сайт работает"
     exit 0
@@ -102,7 +106,7 @@ for _ in $(seq 1 10); do
   sleep 2
 done
 
-echo "!! Приложение не ответило за 20 секунд. Последние логи:"
+echo "!! Приложение не ответило за 90 секунд. Последние логи:"
 if [ "$MODE" = "docker" ]; then
   docker compose logs --tail=50 || true
 else

@@ -22,6 +22,10 @@ services:
     image: coffee-bot:latest
     container_name: coffee-bot
     restart: unless-stopped
+    # При пересоздании контейнера (автодеплой) окно недоступности нужно
+    # сократить до секунд: uvicorn на SIGTERM может ждать завершения
+    # запросов в обработке, а сайт в это время отдаёт 502.
+    stop_grace_period: 5s
     env_file:
       - .env
     environment:
@@ -56,6 +60,9 @@ services:
     container_name: coffee-bot-login
     restart: unless-stopped
     command: ["python", "-m", "bot.web.telegram_login_bot"]
+    # Long polling держит запрос к Telegram до 45 с; бот сам завершается по
+    # SIGTERM, но grace-period всё равно короткий — деплой не должен ждать.
+    stop_grace_period: 5s
     env_file:
       - .env
     environment:

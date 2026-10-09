@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import sys
 import time
 import urllib.error
@@ -47,6 +48,33 @@ RESPONSES = {
     "disabled": "Доступ к вашей учётной записи отключён. Обратитесь к администратору.",
     "conflict": "Не удалось однозначно сопоставить аккаунт. Обратитесь к администратору.",
 }
+
+
+class _StopRequested(SystemExit):
+    """Остановка по SIGTERM/SIGINT."""
+
+
+def _install_stop_handler() -> None:
+    """Завершаться сразу по сигналу остановки.
+
+    Долгий long polling держит соединение с Telegram до 45 секунд. Без этого
+    обработчика Docker, пересоздавая контейнер (автодеплой), ждал бы завершения
+    этого запроса целый grace-period, и сайт дольше оставался недоступным.
+    """
+
+    def _stop(signum, _frame):
+        logger.info("Получен сигнал %s — завершаю работу", signum)
+        raise _StopRequested(0)
+
+    for name in ("SIGTERM", "SIGINT"):
+        signum = getattr(signal, name, None)
+        if signum is None:
+            continue
+        try:
+            signal.signal(signum, _stop)
+        except (ValueError, OSError):
+            # Не главный поток или платформа без сигналов — не критично.
+            pass
 
 
 def _call(token: str, method: str, params: dict | None = None, timeout: int = 40) -> dict:
@@ -165,7 +193,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    _install_stop_handler()
     try:
         sys.exit(main())
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, _StopRequested):
         logger.info("Бот остановлен.")
