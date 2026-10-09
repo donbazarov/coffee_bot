@@ -1338,13 +1338,8 @@ function applyServerAppearance(prefs) {
   syncAppearanceControls();
 }
 
-let appearanceSaveTimer = null;
 function persistAppearance(values) {
   api('/api/preferences', { method: 'PATCH', body: JSON.stringify(values) }).catch(() => { /* не критично */ });
-}
-function persistAppearanceDebounced(values) {
-  clearTimeout(appearanceSaveTimer);
-  appearanceSaveTimer = setTimeout(() => persistAppearance(values), 450);
 }
 
 function renderAccentSwatches() {
@@ -1362,12 +1357,16 @@ function renderAccentSwatches() {
     persistAppearance({ accent: swatch.dataset.accent });
   }));
   const custom = row.querySelector('#accent-custom-input');
+  // Пока тянем ползунок — только локальное превью (без запросов).
   custom?.addEventListener('input', () => {
     const color = custom.value.toLowerCase();
     storeItem(ACCENT_KEY, color);
     applyAccent(color);
     syncAppearanceControls();
-    persistAppearanceDebounced({ accent: color });
+  });
+  // На сервер уходит один PATCH — когда выбор завершён (change).
+  custom?.addEventListener('change', () => {
+    persistAppearance({ accent: custom.value.toLowerCase() });
   });
 }
 
