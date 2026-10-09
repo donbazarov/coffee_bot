@@ -1,4 +1,5 @@
 import calendar
+import json
 import os
 import re
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -8,10 +9,16 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web.schedule_snapshot import prune_snapshots, render_schedule_snapshot
+from bot.web.schedule_snapshot import (
+    active_employee_ids,
+    prune_snapshots,
+    render_schedule_snapshots,
+)
 
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
+# Максимум дней в одной публикации: 92 дня — это ровно 12 снимков по 8 дней.
+MAX_PUBLISH_DAYS = 92
 # Оформление аккаунта: тема и акцентный цвет (по умолчанию мягкий коралл).
 DEFAULT_ACCENT = "#f47369"
 THEME_VALUES = {"system", "light", "dark"}
@@ -59,6 +66,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 new_point TEXT,
                 change_type TEXT NOT NULL DEFAULT 'swap',
                 snapshot_path TEXT,
+                snapshot_paths TEXT,
                 period_start DATE,
                 period_end DATE,
                 changes_count INTEGER,
@@ -70,6 +78,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
             _ensure_columns(connection, "web_shift_change_log", {
                 "change_type": "TEXT NOT NULL DEFAULT 'swap'",
                 "snapshot_path": "TEXT",
+                "snapshot_paths": "TEXT",
                 "period_start": "DATE",
                 "period_end": "DATE",
                 "changes_count": "INTEGER",
@@ -461,14 +470,47 @@ def _swap_lines(changes: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _to_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _date_label(value: Any) -> str:
+    return _to_date(value).strftime("%d.%m.%Y")
+
+
+def _publish_period(start: Any, end: Any) -> tuple[date | None, date | None]:
+    """Проверяет диапазон публикации: либо обе даты, либо ни одной."""
+    empty = (None, "")
+    if start in empty and end in empty:
+        return None, None
+    if start in empty or end in empty:
+        raise ValueError("Нужны обе даты диапазона публикации")
+    try:
+        first, last = _to_date(start), _to_date(end)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Не удалось разобрать даты диапазона публикации") from error
+    if last < first:
+        first, last = last, first
+    if (last - first).days + 1 > MAX_PUBLISH_DAYS:
+        raise ValueError(f"Диапазон публикации длиннее {MAX_PUBLISH_DAYS} дней")
+    return first, last
+
+
 def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[str, Any]],
-                           change_type: str = "swap", publish: bool = True) -> dict[str, Any]:
+                           change_type: str = "swap", publish: bool = True,
+                           publish_start: Any = None, publish_end: Any = None) -> dict[str, Any]:
     if change_type not in {"swap", "schedule"}:
         raise ValueError("Неизвестный тип правки")
     if change_type != "schedule":
         publish = True
     if not operations or len(operations) > 500:
         raise ValueError("Нет изменений или превышен лимит в 500 ячеек")
+    # Диапазон публикации задаётся только для «Расписания»; для замен — не используется.
+    publish_from, publish_to = _publish_period(publish_start, publish_end) if change_type == "schedule" else (None, None)
 
     prepared = []
     seen_cells = set()
@@ -592,35 +634,50 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
             """), {"date": cell["date"], "iiko_id": cell["iiko_id"], "shift_type_id": shift_type_id})
             changed_count += 1
 
-        # «Расписание»: с публикацией — один снимок; без публикации — тихо, без лога.
-        snapshot_url = None
-        snapshot_caption = ""
-        if change_type == "schedule":
-            if changes and publish:
-                affected_ids = sorted({cell["employee"]["id"] for cell in changes})
-                changed_dates = sorted(cell["date"] for cell in changes)
-                period_start, period_end = changed_dates[0], changed_dates[-1]
-                snapshot_url = render_schedule_snapshot(connection, affected_ids, period_start, period_end)
-                snapshot_caption = f"График смен · {period_start} – {period_end} · изменил(а) {actor['name']}"
+        # «Расписание»: с публикацией — снимки всего диапазона; без публикации — тихо, без лога.
+        snapshots: list[dict[str, Any]] = []
+        period_start: str | None = None
+        period_end: str | None = None
+        if change_type == "schedule" and changes and publish:
+            changed_dates = sorted(cell["date"] for cell in changes)
+            # Диапазон выбирает наставник в окне публикации; без него — по изменённым дням.
+            window_start = publish_from or _to_date(changed_dates[0])
+            window_end = publish_to or _to_date(changed_dates[-1])
+            if window_end < window_start:
+                window_start, window_end = window_end, window_start
+            period_start, period_end = window_start.isoformat(), window_end.isoformat()
+            # Снимки — по всем активным бариста, а не только по изменённым строкам.
+            employee_ids = active_employee_ids(connection)
+            for shot in render_schedule_snapshots(connection, employee_ids, window_start, window_end):
+                snapshots.append({
+                    **shot,
+                    "caption": (f"График смен · {_date_label(shot['start'])} – {_date_label(shot['end'])}"
+                                f" · изменил(а) {actor['name']}"),
+                })
+            if snapshots:
                 connection.execute(text("""
                     INSERT INTO web_shift_change_log (
                         actor_user_id, actor_name, employee_id, employee_name, shift_date, action,
-                        change_type, snapshot_path, period_start, period_end, changes_count
+                        change_type, snapshot_path, snapshot_paths, period_start, period_end, changes_count
                     ) VALUES (
                         :actor_id, :actor_name, NULL, :employee_name, :period_start, 'published',
-                        'schedule', :snapshot, :period_start, :period_end, :changes_count
+                        'schedule', :snapshot, :snapshot_list, :period_start, :period_end, :changes_count
                     )
                 """), {
                     "actor_id": actor_id, "actor_name": actor["name"],
-                    "employee_name": f"Расписание · {period_start} – {period_end}",
+                    "employee_name": f"Расписание · {_date_label(period_start)} – {_date_label(period_end)}",
                     "period_start": period_start, "period_end": period_end,
-                    "snapshot": snapshot_url, "changes_count": len(changes),
+                    "snapshot": snapshots[0]["url"],
+                    "snapshot_list": json.dumps([shot["url"] for shot in snapshots], ensure_ascii=False),
+                    "changes_count": len(changes),
                 })
+        if change_type == "schedule":
             result = {
                 "changed": changed_count, "cleared": cleared_count, "change_type": "schedule",
-                "logged": 1 if (changes and publish) else 0,
-                "published": bool(snapshot_url), "snapshot_url": snapshot_url,
-                "snapshot_caption": snapshot_caption,
+                "logged": 1 if snapshots else 0,
+                "published": bool(snapshots), "snapshots": snapshots,
+                "period_start": period_start, "period_end": period_end,
+                "changes_count": len(changes),
             }
         else:
             result = {
@@ -628,7 +685,7 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
                 "logged": len(changes), "swap_lines": _swap_lines(changes),
             }
 
-    if result.get("snapshot_url"):
+    if result.get("published"):
         prune_snapshots(engine)
     return result
 
@@ -640,7 +697,7 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
         rows = connection.execute(text("""
             SELECT id, actor_name, employee_name, shift_date, action,
                    old_start_time, old_end_time, old_point, new_start_time, new_end_time, new_point,
-                   change_type, snapshot_path, period_start, period_end, changes_count, created_at
+                   change_type, snapshot_path, snapshot_paths, period_start, period_end, changes_count, created_at
             FROM web_shift_change_log
             WHERE shift_date >= :first_day AND shift_date <= :last_day
             ORDER BY created_at DESC, id DESC LIMIT :limit

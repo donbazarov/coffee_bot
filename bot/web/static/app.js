@@ -167,6 +167,44 @@ function displayDate(value, includeYear = false) {
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', ...(includeYear ? { year: 'numeric' } : {}) }).format(date);
 }
 
+/* Нарезка диапазона публикации. Должна совпадать с split_period() в
+   bot/web/schedule_snapshot.py: окна выравниваются по длине (01–15 → 01–08, 09–15). */
+const SNAPSHOT_CHUNK_DAYS = 8;
+const MAX_PUBLISH_DAYS = 92;
+
+function parseIsoDate(value) {
+  if (!value) return null;
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function splitPublishPeriod(startValue, endValue) {
+  const start = parseIsoDate(startValue);
+  const end = parseIsoDate(endValue);
+  if (!start || !end) return [];
+  const first = start <= end ? start : end;
+  const last = start <= end ? end : start;
+  const total = Math.round((last - first) / 86400000) + 1;
+  if (total < 1 || total > MAX_PUBLISH_DAYS) return [];
+  const chunks = Math.ceil(total / SNAPSHOT_CHUNK_DAYS);
+  const base = Math.floor(total / chunks);
+  const extra = total % chunks;
+  const windows = [];
+  let cursor = new Date(first);
+  for (let index = 0; index < chunks; index += 1) {
+    const windowEnd = new Date(cursor);
+    windowEnd.setDate(windowEnd.getDate() + base + (index < extra ? 1 : 0) - 1);
+    windows.push([new Date(cursor), windowEnd]);
+    cursor = new Date(windowEnd);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return windows;
+}
+
+function formatDayMonth(date) {
+  return new Intl.DateTimeFormat('ru-RU', { day: '2-digit', month: '2-digit' }).format(date);
+}
+
 function renderUpcoming(shifts) {
   const list = document.querySelector('#upcoming-shifts');
   if (!list) return;
@@ -241,6 +279,16 @@ async function loadShiftHistory() {
   } catch (error) { showToast(error.message); }
 }
 
+function historySnapshotUrls(row) {
+  if (row.snapshot_paths) {
+    try {
+      const parsed = JSON.parse(row.snapshot_paths);
+      if (Array.isArray(parsed) && parsed.length) return parsed;
+    } catch { /* старые записи и битый JSON — падаем на snapshot_path */ }
+  }
+  return row.snapshot_path ? [row.snapshot_path] : [];
+}
+
 function historyEntryHtml(row) {
   const actor = `${escapeHtml(row.actor_name)} · ${escapeHtml(String(row.created_at).slice(0, 16))}`;
   if (row.action === 'published' || row.change_type === 'schedule') {
@@ -248,22 +296,24 @@ function historyEntryHtml(row) {
       ? `${displayDate(row.period_start)} – ${displayDate(row.period_end, true)}`
       : displayDate(row.shift_date, true);
     const count = row.changes_count ?? 0;
-    const shot = row.snapshot_path
-      ? `<a class="history-shot" href="${escapeHtml(row.snapshot_path)}" target="_blank" rel="noopener"><img src="${escapeHtml(row.snapshot_path)}" alt="Снимок расписания" loading="lazy"></a>`
+    const shots = historySnapshotUrls(row);
+    const shot = shots.length
+      ? `<div class="history-shots">${shots.map((url) => `<a class="history-shot" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="Снимок расписания" loading="lazy"></a>`).join('')}</div>`
       : '<span class="history-shot-missing">снимок удалён по сроку хранения</span>';
-    return `<article class="history-row is-schedule"><span class="history-change">Расписание · ${escapeHtml(period)} · правок: ${count}</span><span class="history-actor">${actor}</span>${shot}</article>`;
+    const shotsLabel = shots.length > 1 ? ` · снимков: ${shots.length}` : '';
+    return `<article class="history-row is-schedule"><span class="history-change">Расписание · ${escapeHtml(period)} · правок: ${count}${shotsLabel}</span><span class="history-actor">${actor}</span>${shot}</article>`;
   }
   return `<article class="history-row"><span class="history-change">${escapeHtml(describeChange(row))}</span><span class="history-actor">${actor}</span></article>`;
 }
 
-async function saveScheduleChanges(publish = true) {
+async function saveScheduleChanges(publish = true, period = null) {
   if (!matrixChanges.size) return;
   const operations = [...matrixChanges.entries()].map(([key, value]) => {
     const [userId, date] = key.split('|');
     return value ? { user_id: Number(userId), date, ...value } : { user_id: Number(userId), date, delete: true };
   });
   const body = editType === 'schedule'
-    ? { operations, change_type: 'schedule', publish }
+    ? { operations, change_type: 'schedule', publish, ...(period ? { publish_start: period.start, publish_end: period.end } : {}) }
     : { operations, change_type: 'swap' };
   try {
     const result = await api('/api/shifts/save', { method: 'POST', body: JSON.stringify(body) });
@@ -275,12 +325,62 @@ async function saveScheduleChanges(publish = true) {
     updateEditControls();
     await loadCalendar();
     const status = document.querySelector('#matrix-status');
+    const shots = result.snapshots?.length ?? 0;
     const savedText = result.change_type === 'schedule'
-      ? (publish ? 'Расписание опубликовано' : 'Расписание сохранено')
+      ? (publish ? `Опубликовано · снимков: ${shots}` : 'Расписание сохранено')
       : `Сохранено ${result.logged} правок`;
     if (status) status.textContent = savedText;
     showToast(savedText);
   } catch (error) { showToast(error.message); }
+}
+
+/* Окно публикации: диапазон дат + пресеты «1–15» и «15–конец месяца». */
+function publishMonthBounds() {
+  const year = calendarCursor.getFullYear();
+  const month = calendarCursor.getMonth();
+  return {
+    first: localDateString(new Date(year, month, 1)),
+    middle: localDateString(new Date(year, month, 15)),
+    last: localDateString(new Date(year, month + 1, 0)),
+  };
+}
+
+function updatePublishPreview() {
+  const form = document.querySelector('#publish-form');
+  const preview = document.querySelector('#publish-preview');
+  const errorNode = document.querySelector('#publish-form-error');
+  if (!form || !preview) return [];
+  const start = form.elements.publish_start.value;
+  const end = form.elements.publish_end.value;
+  errorNode.hidden = true;
+  const windows = splitPublishPeriod(start, end);
+  if (!start || !end) {
+    preview.textContent = 'Выберите начало и конец диапазона';
+    return [];
+  }
+  if (!windows.length) {
+    preview.textContent = '';
+    errorNode.textContent = `Диапазон должен быть от 1 до ${MAX_PUBLISH_DAYS} дней`;
+    errorNode.hidden = false;
+    return [];
+  }
+  const plan = windows.map(([from, to]) => `${formatDayMonth(from)}–${formatDayMonth(to)}`).join(', ');
+  const employees = calendarState?.employees?.length ?? 0;
+  preview.textContent = `Снимков: ${windows.length} · ${plan} · сотрудников: ${employees}`;
+  return windows;
+}
+
+function openPublishDialog() {
+  const dialog = document.querySelector('#publish-dialog');
+  const form = document.querySelector('#publish-form');
+  if (!dialog || !form) return;
+  const bounds = publishMonthBounds();
+  form.reset();
+  form.elements.publish_start.value = bounds.first;
+  form.elements.publish_end.value = bounds.middle;
+  document.querySelector('#publish-form-error').hidden = true;
+  updatePublishPreview();
+  dialog.showModal();
 }
 
 function discardScheduleChanges() {
@@ -1484,14 +1584,33 @@ function setupDashboard() {
     updateEditControls();
     const status = document.querySelector('#matrix-status');
     if (status) status.textContent = type === 'schedule'
-      ? 'Расписание: «Сохранить» — тихо, «Опубликовать» — со снимком'
+      ? 'Расписание: «Сохранить» — тихо, «Опубликовать» — снимки за период'
       : 'Замены: изменения пока не сохранены';
   };
   document.querySelector('#edit-swaps-toggle')?.addEventListener('click', () => startEditing('swap'));
   document.querySelector('#edit-schedule-toggle')?.addEventListener('click', () => startEditing('schedule'));
   document.querySelector('#matrix-save')?.addEventListener('click', () => saveScheduleChanges(true));
   document.querySelector('#matrix-save-draft')?.addEventListener('click', () => saveScheduleChanges(false));
-  document.querySelector('#matrix-publish')?.addEventListener('click', () => saveScheduleChanges(true));
+  document.querySelector('#matrix-publish')?.addEventListener('click', openPublishDialog);
+  document.querySelectorAll('[data-publish-preset]').forEach((button) => button.addEventListener('click', () => {
+    const form = document.querySelector('#publish-form');
+    if (!form) return;
+    const bounds = publishMonthBounds();
+    const second = button.dataset.publishPreset === 'second';
+    form.elements.publish_start.value = second ? bounds.middle : bounds.first;
+    form.elements.publish_end.value = second ? bounds.last : bounds.middle;
+    updatePublishPreview();
+  }));
+  document.querySelector('#publish-form')?.addEventListener('input', updatePublishPreview);
+  document.querySelector('#publish-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const windows = updatePublishPreview();
+    if (!windows.length) return;
+    const period = { start: form.elements.publish_start.value, end: form.elements.publish_end.value };
+    form.closest('dialog')?.close();
+    await saveScheduleChanges(true, period);
+  });
   document.querySelector('#matrix-discard')?.addEventListener('click', discardScheduleChanges);
   const matrix = document.querySelector('#calendar-grid');
   matrix?.addEventListener('pointerdown', (event) => {

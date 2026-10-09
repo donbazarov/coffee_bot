@@ -585,9 +585,16 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
     publish = payload.get("publish", True)
     if not isinstance(publish, bool):
         raise HTTPException(status_code=422, detail="Флаг публикации должен быть булевым")
+    # Диапазон скриншотов «Расписания»: без него снимки строятся по изменённым дням.
+    publish_start = payload.get("publish_start")
+    publish_end = payload.get("publish_end")
+    for label, value in (("начала", publish_start), ("окончания", publish_end)):
+        if value is not None and not isinstance(value, str):
+            raise HTTPException(status_code=422, detail=f"Дата {label} диапазона должна быть строкой")
     try:
         # apply_schedule_changes синхронная и с генерацией картинки — уводим из event loop.
-        result = await run_in_threadpool(apply_schedule_changes, engine, user["id"], operations, change_type, publish)
+        result = await run_in_threadpool(apply_schedule_changes, engine, user["id"], operations,
+                                         change_type, publish, publish_start, publish_end)
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
     except (KeyError, TypeError, ValueError) as error:

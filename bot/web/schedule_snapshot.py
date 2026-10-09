@@ -51,6 +51,10 @@ UY_FILL = (150, 45, 40)
 DE_FILL = (40, 90, 170)
 WHITE = (255, 255, 255)
 
+# Публикация «Расписания» режется на снимки не длиннее этого окна: диапазон
+# 01–15 превращается в два снимка (01–08 и 09–15), чтобы таблица читалась на телефоне.
+SNAPSHOT_CHUNK_DAYS = 8
+
 BASE_W = 1280
 BASE_H = 720
 NAME_W = 250
@@ -91,11 +95,41 @@ def _fit_text(draw: ImageDraw.ImageDraw, value: str, font: ImageFont.FreeTypeFon
     return (trimmed + "…") if trimmed else ""
 
 
+def active_employee_ids(connection: Connection) -> list[int]:
+    """Все активные сотрудники графика — тот же состав, что и в таблице на сайте."""
+    rows = connection.execute(text("""
+        SELECT id FROM users
+        WHERE is_active = 1 AND role IN ('barista', 'senior', 'mentor')
+        ORDER BY COALESCE(display_name, name) COLLATE NOCASE
+    """)).scalars().all()
+    return [int(row) for row in rows]
+
+
+def split_period(start_date: Any, end_date: Any, max_days: int = SNAPSHOT_CHUNK_DAYS) -> list[tuple[date, date]]:
+    """Режет диапазон на последовательные окна длиной не больше ``max_days``.
+
+    Окна выравниваются по длине, а не «по 8 плюс огрызок»: 01–15 → 01–08 и 09–15.
+    """
+    start, end = _as_date(start_date), _as_date(end_date)
+    if end < start:
+        start, end = end, start
+    total = (end - start).days + 1
+    chunks = -(-total // max(1, max_days))  # округление вверх
+    base, extra = divmod(total, chunks)
+    windows: list[tuple[date, date]] = []
+    cursor = start
+    for index in range(chunks):
+        window_end = cursor + timedelta(days=base + (1 if index < extra else 0) - 1)
+        windows.append((cursor, window_end))
+        cursor = window_end + timedelta(days=1)
+    return windows
+
+
 def _load_employees(connection: Connection, user_ids: list[int], params: dict[str, Any]) -> list[Any]:
     placeholders = ", ".join(f":u{i}" for i in range(len(user_ids)))
     rows = connection.execute(text(f"""
-        SELECT id, name FROM users WHERE id IN ({placeholders})
-        ORDER BY name COLLATE NOCASE
+        SELECT id, COALESCE(display_name, name) AS name FROM users WHERE id IN ({placeholders})
+        ORDER BY COALESCE(display_name, name) COLLATE NOCASE
     """), params).mappings().all()
     return list(rows)
 
@@ -236,6 +270,17 @@ def render_schedule_snapshot(connection: Connection, user_ids: list[int], start_
     return f"{URL_PREFIX}{filename}"
 
 
+def render_schedule_snapshots(connection: Connection, user_ids: list[int], start_date: Any, end_date: Any,
+                              max_days: int = SNAPSHOT_CHUNK_DAYS) -> list[dict[str, str]]:
+    """Снимки на весь диапазон: по одному файлу на каждое окно до ``max_days`` дней."""
+    snapshots: list[dict[str, str]] = []
+    for window_start, window_end in split_period(start_date, end_date, max_days):
+        url = render_schedule_snapshot(connection, user_ids, window_start, window_end)
+        if url:
+            snapshots.append({"url": url, "start": window_start.isoformat(), "end": window_end.isoformat()})
+    return snapshots
+
+
 def read_snapshot(filename: str) -> Path | None:
     """Безопасно достаёт файл снимка из каталога. Защита от path traversal."""
     safe = os.path.basename(filename)
@@ -269,8 +314,8 @@ def prune_snapshots(engine: Engine, keep_days: int = 35) -> dict[str, int]:
     cutoff_date = (datetime.now().date() - timedelta(days=keep_days)).isoformat()
     with engine.begin() as connection:
         cleared = connection.execute(text("""
-            UPDATE web_shift_change_log SET snapshot_path = NULL
-            WHERE snapshot_path IS NOT NULL AND period_end IS NOT NULL
+            UPDATE web_shift_change_log SET snapshot_path = NULL, snapshot_paths = NULL
+            WHERE (snapshot_path IS NOT NULL OR snapshot_paths IS NOT NULL) AND period_end IS NOT NULL
               AND date(period_end) < date(:cutoff)
         """), {"cutoff": cutoff_date}).rowcount
     return {"removed_files": removed_files, "cleared_links": cleared}
@@ -278,8 +323,12 @@ def prune_snapshots(engine: Engine, keep_days: int = 35) -> dict[str, int]:
 
 __all__ = [
     "SNAPSHOTS_DIR",
+    "SNAPSHOT_CHUNK_DAYS",
     "URL_PREFIX",
+    "active_employee_ids",
     "prune_snapshots",
     "read_snapshot",
     "render_schedule_snapshot",
+    "render_schedule_snapshots",
+    "split_period",
 ]
