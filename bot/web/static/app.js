@@ -62,13 +62,31 @@ function syncProgress() {
   progressBar.classList.toggle('is-active', activeRequests > 0);
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function api(path, options = {}) {
   activeRequests += 1;
   syncProgress();
   try {
     const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
     if (options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
-    const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+    let response;
+    try {
+      response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+    } catch (networkError) {
+      // Контейнер мог перезапускаться (деплой) — один раз тихо повторяем GET.
+      if (!options.method || options.method === 'GET') {
+        await delay(900);
+        return api(path, { ...options, retried: true });
+      }
+      throw networkError;
+    }
+    if (response.status >= 500 && (!options.method || options.method === 'GET') && !options.retried) {
+      await delay(900);
+      return api(path, { ...options, retried: true });
+    }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || 'Не удалось выполнить запрос');
     return data;
@@ -1804,4 +1822,23 @@ function setupDashboard() {
   }
 }
 
+/* Автовход после подтверждения в Telegram: страница входа сама опрашивает
+   статус и перезагружается — без ручного «Обновить» (была гонка: человек
+   возвращался раньше, чем бот успевал подтвердить заявку). */
+function setupTelegramWait() {
+  if (document.body.dataset.tgPending !== 'true') return;
+  let attempts = 0;
+  const poll = async () => {
+    attempts += 1;
+    try {
+      const data = await api('/api/auth/telegram/status');
+      if (data.status === 'approved' || data.status === 'denied') { window.location.reload(); return; }
+      if (data.status === 'unknown') return;
+    } catch (error) { /* сервер временно недоступен — просто ждём дальше */ }
+    if (attempts < 200) setTimeout(poll, 3000);
+  };
+  setTimeout(poll, 2500);
+}
+
 if (document.body.dataset.authenticated === 'true') setupDashboard();
+else setupTelegramWait();

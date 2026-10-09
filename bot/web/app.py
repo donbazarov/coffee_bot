@@ -110,10 +110,17 @@ async def add_security_headers(request: Request, call_next):
         "img-src 'self' data: https://t.me https://*.telegram.org; connect-src 'self'; "
         "frame-src https://oauth.telegram.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )
-    # Статика и HTML перепроверяются при каждой загрузке — иначе после деплоя
-    # браузер отдаёт старый интерфейс (у StaticFiles нет Cache-Control).
     content_type = response.headers.get("content-type", "")
-    if request.url.path.startswith("/static/") or content_type.startswith("text/html"):
+    if request.url.path.startswith("/static/"):
+        # Версионированные ссылки (?v=<hash>) кешируем надолго: при рестарте
+        # контейнера (деплой) страница не остаётся без стилей — браузер берёт
+        # CSS/JS из кеша. Без версии — сутки (это logo.svg и шрифты из CSS).
+        if request.query_params.get("v"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=86400"
+    elif content_type.startswith("text/html"):
+        # HTML перепроверяем всегда — иначе после деплоя браузер держит старую разметку.
         response.headers["Cache-Control"] = "no-cache"
     return response
 
@@ -216,7 +223,10 @@ async def update_profile(request: Request, user: dict[str, Any] = Depends(requir
 
 @app.get("/avatars/{user_id}.jpg")
 def user_avatar(user_id: int, _: dict[str, Any] = Depends(require_user)):
-    path = avatars.avatar_path(user_id)
+    try:
+        path = avatars.avatar_path(user_id)
+    except OSError as error:
+        raise HTTPException(status_code=404, detail="Аватара нет") from error
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Аватара нет")
     return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
@@ -268,6 +278,7 @@ async def _read_json_object(request: Request) -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     user, csrf_token = _session_user(request)
+    tg_pending = False
 
     # Сотрудник вернулся на сайт после подтверждения в Telegram — входим сразу,
     # без повторного нажатия кнопки.
@@ -281,14 +292,21 @@ def home(request: Request):
                 _set_session_cookie(response, cookie_value)
                 response.delete_cookie(TG_LOGIN_COOKIE, path="/")
                 return response
+        # Заявка ещё не подтверждена: страница входа сама опросит статус и
+        # обновит себя, чтобы не приходилось жать «Обновить» вручную.
+        tg_pending = bool(entry and entry["status"] == telegram_login.STATUS_PENDING)
 
     if user and user.get("telegram_id") and not user.get("avatar_rev"):
-        # Фото из Telegram скачиваем в фоне — страница не ждёт сеть.
-        threading.Thread(
-            target=avatars.ensure_telegram_avatar,
-            args=(engine, user["id"], user["telegram_id"]),
-            daemon=True,
-        ).start()
+        # Фото из Telegram скачиваем в фоне — страница не ждёт сеть. Ошибки
+        # внутри потока гасятся там же: запрос из-за этого падать не должен.
+        try:
+            threading.Thread(
+                target=avatars.ensure_telegram_avatar,
+                args=(engine, user["id"], user["telegram_id"]),
+                daemon=True,
+            ).start()
+        except RuntimeError:
+            pass
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
@@ -297,6 +315,7 @@ def home(request: Request):
         name="index.html",
         context={
             "user": user,
+            "tg_pending": tg_pending,
             "csrf_token": csrf_token or "",
             "bot_username": bot_username,
             "telegram_callback_url": telegram_callback_url,

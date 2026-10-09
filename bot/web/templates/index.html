@@ -14,7 +14,7 @@
   <link rel="stylesheet" href="/static/app.css?v={{ static_version }}">
   <script src="/static/app.js?v={{ static_version }}" defer></script>
 </head>
-<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}">
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}">
   {# Инлайновый спрайт иконок: SVG с currentColor вместо эмодзи-символов. #}
   <svg class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
     <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/></symbol>
@@ -51,6 +51,10 @@
         </a>
         <p class="login-hint">Откроется приложение Telegram — нажмите там <strong>Start</strong>.</p>
       </div>
+      {% endif %}
+
+      {% if tg_pending %}
+      <p class="login-hint login-wait-hint" id="tg-wait-hint">Ждём подтверждения в Telegram… страница обновится сама.</p>
       {% endif %}
 
       {% if telegram_login_enabled %}

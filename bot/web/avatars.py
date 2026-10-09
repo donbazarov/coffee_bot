@@ -47,10 +47,17 @@ def _token() -> str | None:
     return os.getenv("TELEGRAM_BOT_TOKEN") or BotConfig.token
 
 
+_avatars_dir: Path | None = None
+
+
 def avatars_dir() -> Path:
-    path = Path(os.getenv("NEFT_AVATARS_DIR") or (_ROOT / "data" / "avatars"))
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    """Каталог аватаров. Создаётся один раз за процесс."""
+    global _avatars_dir
+    if _avatars_dir is None:
+        path = Path(os.getenv("NEFT_AVATARS_DIR") or (_ROOT / "data" / "avatars"))
+        path.mkdir(parents=True, exist_ok=True)
+        _avatars_dir = path
+    return _avatars_dir
 
 
 def avatar_path(user_id: int) -> Path:
@@ -136,12 +143,17 @@ def ensure_telegram_avatar(engine: Engine, user_id: int, telegram_id: int | None
     `avatar_rev` увеличивается только при успешном сохранении файла, поэтому
     «есть файл» ⟺ `avatar_rev > 0` — это использует фронтенд как признак аватара.
     """
-    if not telegram_id or user_id in _attempted or has_avatar(user_id):
+    if not telegram_id or user_id in _attempted:
         return
     _attempted.add(user_id)
-    data = fetch_telegram_photo(int(telegram_id))
-    if not data or not store_avatar(user_id, data):
-        return
-    with engine.begin() as connection:
-        connection.execute(text("UPDATE users SET avatar_rev = avatar_rev + 1 WHERE id = :id"), {"id": user_id})
-    logger.info("Аватар пользователя %s получен из Telegram", user_id)
+    try:
+        if has_avatar(user_id):
+            return
+        data = fetch_telegram_photo(int(telegram_id))
+        if not data or not store_avatar(user_id, data):
+            return
+        with engine.begin() as connection:
+            connection.execute(text("UPDATE users SET avatar_rev = avatar_rev + 1 WHERE id = :id"), {"id": user_id})
+        logger.info("Аватар пользователя %s получен из Telegram", user_id)
+    except Exception as error:  # noqa: BLE001 — фоновый поток не должен ничего ронять
+        logger.warning("Аватар пользователя %s не получен: %s", user_id, error)
