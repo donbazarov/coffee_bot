@@ -127,6 +127,14 @@ h1, h2, h3 { font-weight: 600; }
 button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 [hidden] { display: none !important; }
 
+/* Иконки — инлайновые SVG со stroke: currentColor.
+   Раньше в интерфейсе стояли символы вроде «☺ ⚙ ⏻ ♧»: на десктопе они
+   выглядят тонко, а на iOS часть из них браузер подменяет цветными эмодзи. */
+.icon { display: inline-block; width: 1em; height: 1em; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.14em; }
+.icon-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.button .icon { width: 16px; height: 16px; }
+.icon-button .icon { width: 1em; height: 1em; }
+
 .login-screen { isolation: isolate; position: relative; display: flex; min-height: 100svh; flex-direction: column; overflow: hidden; padding: 30px clamp(24px, 7vw, 96px) 24px; background: radial-gradient(ellipse at 82% 24%, color-mix(in srgb, var(--mint) 20%, transparent), transparent 34%), radial-gradient(ellipse at 8% 92%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 33%), var(--bg-deep); }
 .login-grain { position: absolute; z-index: -1; inset: 0; pointer-events: none; opacity: .23; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.16'/%3E%3C/svg%3E"); }
 .brand { display: inline-flex; align-items: center; gap: 11px; color: var(--text); text-decoration: none; }
@@ -151,7 +159,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .nav-item:hover { color: var(--text); background: rgba(var(--hl), .05); }
 .nav-item.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
 .nav-item.is-active .nav-icon { color: var(--accent); }
-.nav-icon { width: 18px; color: var(--dim); font-size: 17px; text-align: center; }
+.nav-icon { display: inline-flex; width: 18px; flex: 0 0 auto; align-items: center; justify-content: center; color: var(--dim); font-size: 17px; }
 .rail-bottom { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 12px 9px 0; color: var(--dim); font: 9px var(--mono); letter-spacing: .07em; }
 .rail-version { margin-left: auto; }
 .status-light { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--mint); box-shadow: 0 0 12px color-mix(in srgb, var(--mint) 45%, transparent); }
@@ -339,7 +347,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .hour-stat small { padding-bottom: 2px; color: var(--muted); font-size: 10px; }
 .upcoming-panel { padding: 17px 0 13px; }
 .upcoming-panel .panel-heading h3 { font-size: 17px; }
-.text-button { padding: 7px 0 7px 9px; border: 0; background: transparent; color: var(--mint); font-size: 11px; cursor: pointer; }
+.text-button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 0 7px 9px; border: 0; background: transparent; color: var(--mint); font-size: 11px; cursor: pointer; }
+.text-button .icon { width: 15px; height: 15px; }
 .upcoming-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 7px; margin-top: 12px; }
 .upcoming-item { display: grid; grid-template-columns: 43px 1fr auto; align-items: center; gap: 9px; min-height: 48px; padding: 7px 10px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
 .upcoming-date { color: var(--accent); font: 10px var(--mono); }
