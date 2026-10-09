@@ -68,7 +68,7 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:
@@ -895,6 +895,21 @@ def stories_moderation_delete(story_id: str, _: dict[str, Any] = Depends(require
 
 
 # --- иконки и манифест: браузеры запрашивают их из корня сайта --------------- #
+
+@app.get("/sw.js")
+def service_worker():
+    """Service Worker отдаём именно из корня: от пути зависит его область.
+
+    Из /static/sw.js область была бы только /static/ и страницы он бы не
+    перехватывал. Кешировать его нельзя — браузер должен проверять новую
+    версию при каждом запуске, иначе обновление приложения «залипнет».
+    """
+    return FileResponse(
+        BASE_DIR / "static" / "sw.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
 
 @app.get("/site.webmanifest")
 def web_manifest():

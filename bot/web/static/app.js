@@ -1840,5 +1840,25 @@ function setupTelegramWait() {
   setTimeout(poll, 2500);
 }
 
+/* Оболочка приложения в кеше телефона: сохранённое на домашний экран приложение
+   открывается мгновенно, а сеть догоняет в фоне (см. static/sw.js). Версию
+   берём из адреса самого app.js — при деплое она меняется, и старый кеш
+   выбрасывается автоматически. */
+function setupServiceWorker() {
+  if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+  const script = Array.from(document.scripts).find((node) => node.src && node.src.includes('/static/app.js'));
+  const version = script ? new URL(script.src).searchParams.get('v') || '' : '';
+  navigator.serviceWorker.addEventListener('message', (event) => {
+    // Сервер вернул другую страницу входа (сессия истекла или наоборот) —
+    // кеш показал бы не тот экран, поэтому перезагружаемся.
+    if (event.data === 'reload') window.location.reload();
+  });
+  navigator.serviceWorker.register(`/sw.js?v=${version}`, { scope: '/' }).catch(() => {
+    // Не получилось — сайт работает как раньше, просто без мгновенного старта.
+  });
+}
+
+setupServiceWorker();
+
 if (document.body.dataset.authenticated === 'true') setupDashboard();
 else setupTelegramWait();
