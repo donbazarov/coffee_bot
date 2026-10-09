@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Montserrat:wght@300;400;500;600;700;900&display=swap');
+/* Шрифты подключаются отдельным локальным файлом `static/fonts.css`
+   (самохостинг). Раньше здесь стоял @import на fonts.googleapis.com — он делал
+   всю таблицу стилей зависимой от внешнего домена: в РФ на мобильном запрос
+   блокируется/висит, и страница оставалась без стилей. */
 
 /* =========================================================================
    Дизайн-система НЕФТЬ · токены, темы, акценты
@@ -717,9 +720,10 @@ body { transition: background-color .3s ease, color .3s ease; }
 .account-note { min-height: 16px; margin: 0; color: var(--muted); font-size: 11px; }
 
 /* =========================================================================
-   View Transitions API: мягкая смена разделов (прогрессивное улучшение)
+   View Transitions API: мягкая смена разделов (прогрессивное улучшение).
+   Только программные переходы (document.startViewTransition) — кросс-документные
+   (@view-transition: navigation auto) отключены, чтобы не мигало при переходах.
    ========================================================================= */
-@view-transition { navigation: auto; }
 ::view-transition-old(root) { animation: vt-out .18s ease both; }
 ::view-transition-new(root) { animation: vt-in .26s cubic-bezier(.2,.8,.2,1) both; }
 @keyframes vt-out { to { opacity: 0; } }

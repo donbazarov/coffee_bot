@@ -68,7 +68,7 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("theme-boot.js", "app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:
@@ -106,7 +106,7 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; script-src 'self' https://telegram.org; "
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; "
+        "style-src 'self' 'unsafe-inline'; font-src 'self'; "
         "img-src 'self' data: https://t.me https://*.telegram.org; connect-src 'self'; "
         "frame-src https://oauth.telegram.org; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     )

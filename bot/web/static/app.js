@@ -1326,15 +1326,22 @@ function applyAccent(hex) {
 function syncAppearanceControls() {
   const pref = storedItem(THEME_KEY) || 'system';
   document.querySelectorAll('[data-theme-choice]').forEach((button) => button.classList.toggle('is-selected', button.dataset.themeChoice === pref));
-  const current = (storedItem(ACCENT_KEY) || DEFAULT_ACCENT).toLowerCase();
+  const storedAccent = String(storedItem(ACCENT_KEY) || '').toLowerCase();
+  const current = validAccent(storedAccent) ? storedAccent : DEFAULT_ACCENT;
   document.querySelectorAll('#accent-row [data-accent]').forEach((swatch) => swatch.classList.toggle('is-selected', swatch.dataset.accent === current));
 }
 
 /* Серверные значения — источник истины (синхронизация между устройствами),
    localStorage остаётся кэшем для мгновенного старта. */
+/* Акцент — только корректный #rrggbb: пустое/битое значение не сохраняем и не
+   применяем, иначе палитра выглядит «сломанной» и цвет будто сбрасывается. */
+function validAccent(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || ''));
+}
+
 function applyServerAppearance(prefs) {
   if (prefs && prefs.theme) { storeItem(THEME_KEY, prefs.theme); applyThemePreference(prefs.theme); }
-  if (prefs && prefs.accent) { storeItem(ACCENT_KEY, prefs.accent); applyAccent(prefs.accent); }
+  if (prefs && validAccent(prefs.accent)) { storeItem(ACCENT_KEY, prefs.accent); applyAccent(prefs.accent); }
   syncAppearanceControls();
 }
 
@@ -1345,7 +1352,8 @@ function persistAppearance(values) {
 function renderAccentSwatches() {
   const row = document.querySelector('#accent-row');
   if (!row) return;
-  const current = (storedItem(ACCENT_KEY) || DEFAULT_ACCENT).toLowerCase();
+  const storedAccent = String(storedItem(ACCENT_KEY) || '').toLowerCase();
+  const current = validAccent(storedAccent) ? storedAccent : DEFAULT_ACCENT;
   const swatches = ACCENT_PRESETS
     .map((color) => `<button type="button" class="accent-swatch" style="--swatch:${color}" data-accent="${color}" aria-label="Акцент ${color}"></button>`)
     .join('');
@@ -1360,13 +1368,16 @@ function renderAccentSwatches() {
   // Пока тянем ползунок — только локальное превью (без запросов).
   custom?.addEventListener('input', () => {
     const color = custom.value.toLowerCase();
+    if (!validAccent(color)) return;
     storeItem(ACCENT_KEY, color);
     applyAccent(color);
     syncAppearanceControls();
   });
   // На сервер уходит один PATCH — когда выбор завершён (change).
   custom?.addEventListener('change', () => {
-    persistAppearance({ accent: custom.value.toLowerCase() });
+    const color = custom.value.toLowerCase();
+    if (!validAccent(color)) return;
+    persistAppearance({ accent: color });
   });
 }
 
