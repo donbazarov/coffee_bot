@@ -35,6 +35,12 @@ function escapeHtml(value) {
   })[character]);
 }
 
+/* Кружок аватара: картинка, если есть файл (avatar_rev > 0), иначе инициал. */
+function avatarMarkup(userId, avatarRev, name) {
+  if (avatarRev) return `<img src="/avatars/${userId}.jpg?v=${avatarRev}" alt="" loading="lazy">`;
+  return escapeHtml((name || '?').slice(0, 1).toUpperCase());
+}
+
 function showToast(message) {
   const toast = document.querySelector('#toast');
   if (!toast) return;
@@ -44,13 +50,32 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove('is-visible'), 3200);
 }
 
+let activeRequests = 0;
+let progressBar = null;
+
+function syncProgress() {
+  if (!progressBar) {
+    progressBar = document.createElement('div');
+    progressBar.className = 'api-progress';
+    document.body.appendChild(progressBar);
+  }
+  progressBar.classList.toggle('is-active', activeRequests > 0);
+}
+
 async function api(path, options = {}) {
-  const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
-  if (options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
-  const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || 'Не удалось выполнить запрос');
-  return data;
+  activeRequests += 1;
+  syncProgress();
+  try {
+    const headers = { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) };
+    if (options.method && options.method !== 'GET') headers['X-CSRF-Token'] = csrfToken;
+    const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'Не удалось выполнить запрос');
+    return data;
+  } finally {
+    activeRequests = Math.max(0, activeRequests - 1);
+    syncProgress();
+  }
 }
 
 function renderChart(days) {
@@ -94,9 +119,9 @@ function renderRecent(reviews) {
 async function loadDashboard(period = '30d') {
   try {
     const data = await api(`/api/dashboard?period=${encodeURIComponent(period)}`);
-    document.querySelector('#metric-reviews').textContent = data.review_count;
-    document.querySelector('#metric-average').textContent = data.average ?? '—';
-    document.querySelector('#metric-staff').textContent = data.active_users;
+    animateNumber(document.querySelector('#metric-reviews'), data.review_count);
+    animateNumber(document.querySelector('#metric-average'), data.average, 1);
+    animateNumber(document.querySelector('#metric-staff'), data.active_users);
     renderChart(data.daily);
     renderLeaderboard(data.leaderboard);
     renderRecent(data.recent);
@@ -113,14 +138,16 @@ function renderUsers(users) {
   count.textContent = `${activeCount} активных · ${pendingCount} ожидают · ${users.length} всего`;
   if (!users.length) { list.innerHTML = '<p class="empty-state">Сотрудников пока нет</p>'; return; }
   const roleNames = { barista: 'Бариста', senior: 'Старший', mentor: 'Наставник', guest: 'Ожидает доступа' };
-  list.innerHTML = users.map((user) => `
+  list.innerHTML = users.map((user) => {
+    const shown = user.display_name || user.name;
+    return `
     <article class="user-row ${user.is_active ? '' : 'is-inactive'} ${user.access_pending ? 'is-pending' : ''}" data-user-id="${user.id}">
-      <div class="user-person"><span class="user-avatar">${escapeHtml((user.name || '?').slice(0, 1).toUpperCase())}</span><strong title="${escapeHtml(user.name)}">${escapeHtml(user.name)}</strong></div>
+      <div class="user-person"><span class="user-avatar">${avatarMarkup(user.id, user.avatar_rev, shown)}</span><strong title="${escapeHtml(shown)}">${escapeHtml(shown)}</strong></div>
       <span class="user-detail user-iiko">${user.iiko_id ? `Iiko ${escapeHtml(user.iiko_id)}` : 'Iiko не указан'}</span>
       <span class="user-detail user-telegram">${user.telegram_username ? `@${escapeHtml(user.telegram_username)}` : 'Telegram не привязан'}</span>
       <span class="user-detail user-role">${roleNames[user.role] || escapeHtml(user.role)}</span>
       <div class="user-actions"><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте роль через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает роль' : 'Выдать доступ'}</button></div>
-    </article>`).join('');
+    </article>`; }).join('');
 }
 
 async function loadUsers() {
@@ -271,18 +298,18 @@ function applyModuleVisibility() {
   if (summary) summary.hidden = !modulePreferences.calendar_enabled;
   if (quality) quality.hidden = !modulePreferences.quality_enabled;
   document.querySelectorAll('[data-view="calendar"]').forEach((button) => { button.hidden = !modulePreferences.calendar_enabled; });
-  if (!modulePreferences.calendar_enabled && document.querySelector('#calendar-view')?.classList.contains('is-visible')) setView('settings');
+  if (!modulePreferences.calendar_enabled && document.querySelector('#calendar-view')?.classList.contains('is-visible')) setView('profile');
 }
 
 function applyBaristaPreview(enabled) {
   baristaPreview = enabled;
   document.body.classList.toggle('barista-preview', enabled);
-  document.querySelectorAll('[data-view="team"]').forEach((button) => { button.hidden = enabled; });
+  document.querySelectorAll('[data-view="team"], [data-view="control"]').forEach((button) => { button.hidden = enabled; });
   const toggle = document.querySelector('#barista-preview-toggle');
   if (toggle) toggle.checked = enabled;
   const roleLabel = document.querySelector('.account-copy span');
   if (roleLabel) roleLabel.textContent = enabled ? 'Бариста · предпросмотр' : document.body.dataset.roleLabel;
-  if (enabled && document.querySelector('#team-view')?.classList.contains('is-visible')) setView('overview');
+  if (enabled && (document.querySelector('#team-view')?.classList.contains('is-visible') || document.querySelector('#control-view')?.classList.contains('is-visible'))) setView('overview');
   // Черновик не сбрасываем: бариста тоже может делать «Замену». Но у него нет
   // инструментов наставника (шаблоны и тип правки) — обновляем панель.
   updateEditControls();
@@ -294,6 +321,7 @@ async function loadPreferences() {
     document.querySelector('#quality-module-toggle').checked = modulePreferences.quality_enabled;
     document.querySelector('#calendar-module-toggle').checked = modulePreferences.calendar_enabled;
     applyModuleVisibility();
+    applyServerAppearance(modulePreferences);
   } catch (error) { showToast(error.message); }
   applyBaristaPreview(managerRole && localStorage.getItem('barista-preview') === 'true');
 }
@@ -722,7 +750,7 @@ function renderCalendar(data) {
       const pendingClass = pending !== undefined ? 'is-pending' : '';
       return `<td class="matrix-cell-wrap ${cellDate === today ? 'is-today' : ''}"><button type="button" class="matrix-cell ${shift ? 'has-shift' : 'is-empty'} ${pointClass} ${pendingClass}" ${editMode ? rowData : ''} data-cell-date="${cellDate}" data-employee-id="${employee.id}" data-shift-id="${shift?.id || ''}" aria-label="${escapeHtml(employee.name)}, ${day} ${monthNames[data.month - 1]}${shift ? `, ${shift.start}–${shift.end}, ${shift.point}` : ', выходной'}">${shiftContents}</button></td>`;
     }).join('');
-    return `<tr><th class="matrix-employee sticky-column"><span class="matrix-avatar">${escapeHtml((employee.name || '?').slice(0, 1).toUpperCase())}</span><span class="matrix-employee-name" title="${escapeHtml(employee.name)}">${escapeHtml(employee.name)}</span></th>${cells}</tr>`;
+    return `<tr><th class="matrix-employee sticky-column"><span class="matrix-avatar">${avatarMarkup(employee.id, employee.avatar_rev, employee.name)}</span><span class="matrix-employee-name" title="${escapeHtml(employee.name)}">${escapeHtml(employee.name)}</span></th>${cells}</tr>`;
   }).join('');
   grid.innerHTML = `<thead><tr><th class="matrix-name-header sticky-column">БАРИСТА</th>${dayHeaders}</tr></thead><tbody>${bodyRows || `<tr><td class="matrix-no-employees" colspan="${data.days_in_month + 1}">Нет активных сотрудников с iiko ID</td></tr>`}</tbody>`;
   document.querySelector('#matrix-summary')?.replaceChildren(document.createTextNode(`${employees.length} сотрудников · ${data.days_in_month} дней`));
@@ -744,9 +772,9 @@ function renderCalendar(data) {
   }
 
   const stats = data.month_stats;
-  document.querySelector('#hours-total').textContent = stats.total_hours;
-  document.querySelector('#hours-worked').textContent = stats.worked_hours;
-  document.querySelector('#hours-remaining').textContent = stats.remaining_hours;
+  animateNumber(document.querySelector('#hours-total'), stats.total_hours, 1);
+  animateNumber(document.querySelector('#hours-worked'), stats.worked_hours, 1);
+  animateNumber(document.querySelector('#hours-remaining'), stats.remaining_hours, 1);
   renderUpcoming(stats.upcoming);
   const employeeSelect = document.querySelector('#shift-employee');
   if (employeeSelect) {
@@ -861,21 +889,62 @@ function openShiftDialog(date, shift = null, employeeId = null) {
   dialog.showModal();
 }
 
+function prefersReducedMotion() {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/* Плавный подчёт числа: от текущего значения к целевому. При reduced-motion —
+   сразу финальное значение (никакой анимации). */
+function animateNumber(node, value, decimals = 0) {
+  if (!node) return;
+  if (value === null || value === undefined || value === '') { node.textContent = '—'; return; }
+  const target = Number(value);
+  if (!Number.isFinite(target)) { node.textContent = String(value); return; }
+  const format = (number) => (decimals > 0 ? number.toFixed(decimals) : String(Math.round(number)));
+  if (prefersReducedMotion()) { node.textContent = format(target); return; }
+  const from = Number(String(node.textContent).replace(',', '.')) || 0;
+  const duration = 650;
+  const started = performance.now();
+  const step = (now) => {
+    const progress = Math.min(1, (now - started) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    node.textContent = format(from + (target - from) * eased);
+    if (progress < 1) window.requestAnimationFrame(step);
+  };
+  window.requestAnimationFrame(step);
+}
+
 function setView(name) {
-  if (name === 'calendar' && !modulePreferences.calendar_enabled) name = 'settings';
-  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
-  document.querySelectorAll('.view').forEach((view) => {
-    const active = view.id === `${name}-view`;
-    view.classList.toggle('is-visible', active);
-    view.hidden = !active;
-  });
-  const title = document.querySelector('#page-title');
-  if (title) title.textContent = name === 'team' ? 'Управление командой' : name === 'calendar' ? 'График смен' : name === 'settings' ? 'Панель управления' : `Добрый день, ${title.dataset.name}`;
-  document.body.classList.toggle('settings-active', name === 'settings');
+  if (name === 'calendar' && !modulePreferences.calendar_enabled) name = 'profile';
+  if (name === 'control' && !managerRole) name = 'profile';
+  const apply = () => {
+    document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
+    document.querySelectorAll('.view').forEach((view) => {
+      const active = view.id === `${name}-view`;
+      view.classList.toggle('is-visible', active);
+      view.hidden = !active;
+    });
+    const title = document.querySelector('#page-title');
+    if (title) {
+      title.textContent =
+        name === 'team' ? 'Управление командой' :
+        name === 'calendar' ? 'График смен' :
+        name === 'control' ? 'Панель управления' :
+        name === 'profile' ? 'Личный кабинет' :
+        `Добрый день, ${title.dataset.name}`;
+    }
+    document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
+    document.startViewTransition(apply);
+  } else {
+    apply();
+  }
   if (name === 'team') loadUsers();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
-  if (name === 'settings' && managerRole) loadStoriesAdmin();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (name === 'control' && managerRole) loadStoriesAdmin();
+  closeDrawer();
 }
 
 /* --- Модерация историй гостей -------------------------------------------
@@ -1108,17 +1177,237 @@ function setupStoriesAdmin() {
   loadStoriesAdmin();
 }
 
+/* --- Оформление: тема и акцент -------------------------------------------
+   Применяются мгновенно и сохраняются в localStorage (то же делает
+   theme-boot.js до первой отрисовки). Серверная синхронизация по аккаунту —
+   отдельным шагом поверх этих же ключей. */
+
+const THEME_KEY = 'neft-theme';
+const ACCENT_KEY = 'neft-accent';
+const DEFAULT_ACCENT = '#f47369';
+const ACCENT_PRESETS = ['#f47369', '#f4a259', '#e9c46a', '#2a9d8f', '#4a7ede', '#9b6bd6'];
+
+function storedItem(key) { try { return localStorage.getItem(key); } catch (error) { return null; } }
+function storeItem(key, value) { try { localStorage.setItem(key, value); } catch (error) { /* приватный режим */ } }
+
+function systemTheme() {
+  return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+}
+
+function contrastOn(hex) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!match) return '#2a1310';
+  const value = parseInt(match[1], 16);
+  const channel = (part) => { part /= 255; return part <= 0.03928 ? part / 12.92 : Math.pow((part + 0.055) / 1.055, 2.4); };
+  const luminance = 0.2126 * channel((value >> 16) & 255) + 0.7152 * channel((value >> 8) & 255) + 0.0722 * channel(value & 255);
+  return luminance > 0.3 ? '#241512' : '#ffffff';
+}
+
+function applyThemePreference(pref) {
+  document.documentElement.setAttribute('data-theme', pref === 'light' || pref === 'dark' ? pref : systemTheme());
+  syncThemeColor();
+}
+
+/* <meta name="theme-color"> — окраска интерфейса браузера под фон темы. */
+function syncThemeColor() {
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) return;
+  const background = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();
+  if (background) meta.setAttribute('content', background);
+}
+
+function applyAccent(hex) {
+  document.documentElement.style.setProperty('--accent', hex);
+  document.documentElement.style.setProperty('--accent-contrast', contrastOn(hex));
+}
+
+function syncAppearanceControls() {
+  const pref = storedItem(THEME_KEY) || 'system';
+  document.querySelectorAll('[data-theme-choice]').forEach((button) => button.classList.toggle('is-selected', button.dataset.themeChoice === pref));
+  const current = (storedItem(ACCENT_KEY) || DEFAULT_ACCENT).toLowerCase();
+  document.querySelectorAll('#accent-row [data-accent]').forEach((swatch) => swatch.classList.toggle('is-selected', swatch.dataset.accent === current));
+}
+
+/* Серверные значения — источник истины (синхронизация между устройствами),
+   localStorage остаётся кэшем для мгновенного старта. */
+function applyServerAppearance(prefs) {
+  if (prefs && prefs.theme) { storeItem(THEME_KEY, prefs.theme); applyThemePreference(prefs.theme); }
+  if (prefs && prefs.accent) { storeItem(ACCENT_KEY, prefs.accent); applyAccent(prefs.accent); }
+  syncAppearanceControls();
+}
+
+let appearanceSaveTimer = null;
+function persistAppearance(values) {
+  api('/api/preferences', { method: 'PATCH', body: JSON.stringify(values) }).catch(() => { /* не критично */ });
+}
+function persistAppearanceDebounced(values) {
+  clearTimeout(appearanceSaveTimer);
+  appearanceSaveTimer = setTimeout(() => persistAppearance(values), 450);
+}
+
+function renderAccentSwatches() {
+  const row = document.querySelector('#accent-row');
+  if (!row) return;
+  const current = (storedItem(ACCENT_KEY) || DEFAULT_ACCENT).toLowerCase();
+  const swatches = ACCENT_PRESETS
+    .map((color) => `<button type="button" class="accent-swatch" style="--swatch:${color}" data-accent="${color}" aria-label="Акцент ${color}"></button>`)
+    .join('');
+  row.innerHTML = `${swatches}<label class="accent-custom">Свой<input type="color" id="accent-custom-input" value="${/^#[0-9a-f]{6}$/.test(current) ? current : DEFAULT_ACCENT}" aria-label="Свой акцентный цвет"></label>`;
+  row.querySelectorAll('[data-accent]').forEach((swatch) => swatch.addEventListener('click', () => {
+    storeItem(ACCENT_KEY, swatch.dataset.accent);
+    applyAccent(swatch.dataset.accent);
+    syncAppearanceControls();
+    persistAppearance({ accent: swatch.dataset.accent });
+  }));
+  const custom = row.querySelector('#accent-custom-input');
+  custom?.addEventListener('input', () => {
+    const color = custom.value.toLowerCase();
+    storeItem(ACCENT_KEY, color);
+    applyAccent(color);
+    syncAppearanceControls();
+    persistAppearanceDebounced({ accent: color });
+  });
+}
+
+function setupAppearance() {
+  document.querySelectorAll('[data-theme-choice]').forEach((button) => button.addEventListener('click', () => {
+    storeItem(THEME_KEY, button.dataset.themeChoice);
+    applyThemePreference(button.dataset.themeChoice);
+    syncAppearanceControls();
+    persistAppearance({ theme: button.dataset.themeChoice });
+  }));
+  renderAccentSwatches();
+  syncAppearanceControls();
+}
+
+/* --- Профиль: имя и фото ------------------------------------------------ */
+
+function setupProfile() {
+  const nameInput = document.querySelector('#display-name-input');
+  const nameSave = document.querySelector('#display-name-save');
+  const note = document.querySelector('#account-note');
+  const fileInput = document.querySelector('#avatar-input');
+  const uploadButton = document.querySelector('#avatar-upload');
+  const resetButton = document.querySelector('#avatar-reset');
+  if (!nameInput || !nameSave) return;
+
+  const setNote = (message) => { if (note) note.textContent = message; };
+  const refreshNames = (shown) => {
+    document.querySelectorAll('.account-copy strong').forEach((node) => { node.textContent = shown; });
+    const title = document.querySelector('#page-title');
+    if (title) { title.dataset.name = shown; title.textContent = `Добрый день, ${shown}`; }
+  };
+
+  nameSave.addEventListener('click', async () => {
+    setNote('');
+    try {
+      const result = await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ display_name: nameInput.value }) });
+      refreshNames(result.display_name || document.body.dataset.userName || '');
+      setNote('Имя сохранено');
+    } catch (error) { setNote(error.message); }
+  });
+
+  uploadButton?.addEventListener('click', () => fileInput?.click());
+  fileInput?.addEventListener('change', async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    setNote('Загружаем фото…');
+    try {
+      const response = await fetch('/api/profile/avatar', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        credentials: 'same-origin',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить фото');
+      window.location.reload();
+    } catch (error) { setNote(error.message); }
+  });
+
+  resetButton?.addEventListener('click', async () => {
+    setNote('');
+    try { await api('/api/profile/avatar', { method: 'DELETE' }); window.location.reload(); }
+    catch (error) { setNote(error.message); }
+  });
+}
+
+/* --- Сэндвич-drawer ------------------------------------------------------ */
+
+function closeDrawer() {
+  const drawer = document.querySelector('#drawer');
+  if (!drawer) return;
+  drawer.classList.remove('is-open');
+  drawer.setAttribute('aria-hidden', 'true');
+  document.querySelector('#drawer-backdrop')?.classList.remove('is-open');
+  document.querySelector('#drawer-open')?.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('drawer-open');
+}
+
+function setupDrawer() {
+  const drawer = document.querySelector('#drawer');
+  const backdrop = document.querySelector('#drawer-backdrop');
+  const openButton = document.querySelector('#drawer-open');
+  if (!drawer || !backdrop || !openButton) return;
+  let lastFocus = null;
+
+  const open = () => {
+    lastFocus = document.activeElement;
+    backdrop.classList.add('is-open');
+    drawer.classList.add('is-open');
+    drawer.setAttribute('aria-hidden', 'false');
+    openButton.setAttribute('aria-expanded', 'true');
+    document.body.classList.add('drawer-open');
+    drawer.querySelector('button, a')?.focus();
+  };
+
+  openButton.addEventListener('click', open);
+  document.querySelector('#drawer-close')?.addEventListener('click', () => { closeDrawer(); lastFocus?.focus?.(); });
+  backdrop.addEventListener('click', closeDrawer);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && drawer.classList.contains('is-open')) {
+      closeDrawer();
+      lastFocus?.focus?.();
+      return;
+    }
+    if (event.key !== 'Tab' || !drawer.classList.contains('is-open')) return;
+    const focusables = drawer.querySelectorAll('button, a[href], input, [tabindex]:not([tabindex="-1"])');
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  });
+
+  // Закрытие свайпом влево.
+  let startX = null;
+  drawer.addEventListener('pointerdown', (event) => { startX = event.clientX; });
+  drawer.addEventListener('pointerup', (event) => {
+    if (startX !== null && startX - event.clientX > 60) closeDrawer();
+    startX = null;
+  });
+
+  // На широких экранах drawer не нужен — закрываем при возврате к десктопу.
+  window.addEventListener('resize', () => { if (window.innerWidth > 760) closeDrawer(); });
+}
+
 function setupDashboard() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+  setupAppearance();
+  setupDrawer();
+  setupProfile();
   document.querySelectorAll('[data-period]').forEach((button) => button.addEventListener('click', () => {
     document.querySelectorAll('[data-period]').forEach((item) => item.classList.toggle('is-selected', item === button));
     loadDashboard(button.dataset.period);
   }));
 
-  document.querySelector('#logout-button')?.addEventListener('click', async () => {
+  const logout = async () => {
     try { await api('/api/logout', { method: 'POST' }); window.location.reload(); }
     catch (error) { showToast(error.message); }
-  });
+  };
+  document.querySelector('#logout-button')?.addEventListener('click', logout);
+  document.querySelector('#drawer-logout')?.addEventListener('click', logout);
 
   const dialog = document.querySelector('#user-dialog');
   const form = document.querySelector('#user-form');

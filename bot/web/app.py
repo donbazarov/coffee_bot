@@ -2,6 +2,8 @@ import os
 import hmac
 import hashlib
 import logging
+import re
+import threading
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -15,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine, init_db
-from bot.web import schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
@@ -32,6 +34,7 @@ from bot.web.calendar_service import (
     reorder_shift_templates,
     save_app_settings,
     save_user_preferences,
+    THEME_VALUES,
     update_shift_template,
 )
 from bot.web.migrations import migrate_legacy_telegram_ids
@@ -39,6 +42,8 @@ from bot.web.migrations import migrate_legacy_telegram_ids
 BASE_DIR = Path(__file__).resolve().parent
 ROLE_VALUES = {"barista", "senior", "mentor"}
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
+ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+MAX_AVATAR_BYTES = 4 * 1024 * 1024
 SCORE_SQL = """
     CASE
         WHEN category = 'Эспрессо/Фильтр' AND balance IS NOT NULL AND bouquet IS NOT NULL
@@ -63,7 +68,7 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in ("theme-boot.js", "app.css", "app.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:
@@ -119,7 +124,7 @@ def _session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
         return None, None
     with engine.connect() as connection:
         user = connection.execute(text("""
-            SELECT id,name,role FROM users
+            SELECT id,name,display_name,role,avatar_rev,telegram_id FROM users
             WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
         """), {"id": session["user_id"]}).mappings().first()
     return (dict(user), session["csrf_token"]) if user else (None, None)
@@ -179,10 +184,63 @@ def preferences(user: dict[str, Any] = Depends(require_user)):
 @app.patch("/api/preferences")
 async def update_preferences(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     payload = await _read_json_object(request)
-    allowed = {"quality_enabled", "calendar_enabled"}
-    if not payload or set(payload) - allowed or any(not isinstance(value, bool) for value in payload.values()):
-        raise HTTPException(status_code=422, detail="Ожидаются настройки модулей типа boolean")
+    allowed = {"quality_enabled", "calendar_enabled", "theme", "accent"}
+    if not payload or set(payload) - allowed:
+        raise HTTPException(status_code=422, detail="Неизвестные настройки")
+    for key, value in payload.items():
+        if key in {"quality_enabled", "calendar_enabled"} and not isinstance(value, bool):
+            raise HTTPException(status_code=422, detail="Настройки модулей должны быть boolean")
+        if key == "theme" and value not in THEME_VALUES:
+            raise HTTPException(status_code=422, detail="Неизвестная тема оформления")
+        if key == "accent" and not (isinstance(value, str) and ACCENT_RE.match(value)):
+            raise HTTPException(status_code=422, detail="Акцент должен быть цветом вида #rrggbb")
     return save_user_preferences(engine, user["id"], payload)
+
+
+@app.patch("/api/profile")
+async def update_profile(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    """Отображаемое имя — видно всем (график, интерфейс, ICS)."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"display_name"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля профиля")
+    display_name = str(payload.get("display_name") or "").strip()
+    if len(display_name) > 100:
+        raise HTTPException(status_code=422, detail="Имя должно быть не длиннее 100 символов")
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE users SET display_name = :name, updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
+            {"name": display_name or None, "id": user["id"]},
+        )
+    return {"ok": True, "display_name": display_name}
+
+
+@app.get("/avatars/{user_id}.jpg")
+def user_avatar(user_id: int, _: dict[str, Any] = Depends(require_user)):
+    path = avatars.avatar_path(user_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Аватара нет")
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.post("/api/profile/avatar")
+async def upload_avatar(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    """Тело запроса — сам файл изображения (без multipart, чтобы не тянуть зависимость)."""
+    data = await request.body()
+    if not data or len(data) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=413, detail="Файл пустой или больше 4 МБ")
+    if not avatars.store_avatar(user["id"], data):
+        raise HTTPException(status_code=422, detail="Не удалось прочитать изображение")
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE users SET avatar_rev = avatar_rev + 1 WHERE id = :id"), {"id": user["id"]})
+    return {"ok": True}
+
+
+@app.delete("/api/profile/avatar")
+def reset_avatar(user: dict[str, Any] = Depends(require_csrf)):
+    avatars.delete_avatar(user["id"])
+    with engine.begin() as connection:
+        connection.execute(text("UPDATE users SET avatar_rev = 0 WHERE id = :id"), {"id": user["id"]})
+    return {"ok": True}
 
 
 def _check_csrf(request: Request, csrf_token: str | None) -> None:
@@ -223,6 +281,14 @@ def home(request: Request):
                 _set_session_cookie(response, cookie_value)
                 response.delete_cookie(TG_LOGIN_COOKIE, path="/")
                 return response
+
+    if user and user.get("telegram_id") and not user.get("avatar_rev"):
+        # Фото из Telegram скачиваем в фоне — страница не ждёт сеть.
+        threading.Thread(
+            target=avatars.ensure_telegram_avatar,
+            args=(engine, user["id"], user["telegram_id"]),
+            daemon=True,
+        ).start()
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
@@ -606,8 +672,8 @@ def dashboard(period: str = "30d", _: dict[str, Any] = Depends(require_user)):
 def list_users(_: dict[str, Any] = Depends(require_manager)):
     with engine.connect() as connection:
         users = connection.execute(text("""
-            SELECT id, name, iiko_id, telegram_username, role, is_active, telegram_id
-            FROM users ORDER BY is_active DESC, name COLLATE NOCASE
+            SELECT id, name, display_name, avatar_rev, iiko_id, telegram_username, role, is_active, telegram_id
+            FROM users ORDER BY is_active DESC, COALESCE(display_name, name) COLLATE NOCASE
         """)).mappings().all()
     role_names = {**ROLE_NAMES, "guest": "Ожидает доступа"}
     return [

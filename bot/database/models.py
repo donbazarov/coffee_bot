@@ -27,6 +27,8 @@ class User(Base):
     iiko_id = Column(Integer, unique=True)  # Внутренний ID из Iiko
     telegram_id = Column(Integer, unique=True)  # ID в Telegram
     telegram_username = Column(String(100), unique=True)
+    display_name = Column(String(100))  # отображаемое имя (в графике и интерфейсе)
+    avatar_rev = Column(Integer, default=0, nullable=False)  # версия аватара; 0 = файла нет
     role = Column(String(50), nullable=False)  # 'barista', 'senior', 'mentor'
     is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
     created_at = Column(DateTime, default=datetime.utcnow)

@@ -1,5 +1,6 @@
 import calendar
 import os
+import re
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -11,6 +12,10 @@ from bot.web.schedule_snapshot import prune_snapshots, render_schedule_snapshot
 
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
+# Оформление аккаунта: тема и акцентный цвет (по умолчанию мягкий коралл).
+DEFAULT_ACCENT = "#f47369"
+THEME_VALUES = {"system", "light", "dark"}
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 # Каналы Telegram для публикаций. Стартуют из окружения, потом правятся в панели управления.
 DEFAULT_ANNOUNCE_CHAT = os.getenv("TELEGRAM_ANNOUNCE_CHAT_ID", "@nefttest1")
 DEFAULT_SWAP_CHAT = os.getenv("TELEGRAM_SWAP_CHAT_ID", "@nefttest2")
@@ -78,9 +83,21 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 user_id INTEGER PRIMARY KEY REFERENCES users(id),
                 quality_enabled INTEGER NOT NULL DEFAULT 1,
                 calendar_enabled INTEGER NOT NULL DEFAULT 1,
+                theme TEXT NOT NULL DEFAULT 'system',
+                accent TEXT NOT NULL DEFAULT '#f47369',
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        if engine.dialect.name == "sqlite":
+            # Существующие базы: докидываем оформление и данные аккаунта.
+            _ensure_columns(connection, "web_user_preferences", {
+                "theme": "TEXT NOT NULL DEFAULT 'system'",
+                "accent": "TEXT NOT NULL DEFAULT '#f47369'",
+            })
+            _ensure_columns(connection, "users", {
+                "display_name": "TEXT",
+                "avatar_rev": "INTEGER NOT NULL DEFAULT 0",
+            })
         # Шаблоны смен — общий набор команды: их ведут наставники, применяют все.
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS web_shift_templates (
@@ -333,7 +350,7 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         ).mappings().first()
         rows = connection.execute(text("""
             SELECT s.shift_id, s.shift_date, s.iiko_id, st.start_time, st.end_time,
-                   st.point, st.shift_type, u.id AS user_id, u.name AS employee_name
+                   st.point, st.shift_type, u.id AS user_id, COALESCE(u.display_name, u.name) AS employee_name
             FROM schedule AS s
             JOIN shift_types AS st ON st.id = s.shift_type_id
             LEFT JOIN users AS u ON CAST(u.iiko_id AS TEXT) = s.iiko_id
@@ -342,9 +359,9 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
             ORDER BY s.shift_date, st.start_time, u.name
         """), {"first_day": first_day.isoformat(), "last_day": last_day.isoformat()}).mappings().all()
         employees = connection.execute(text("""
-            SELECT id, name, iiko_id, role FROM users
+            SELECT id, COALESCE(display_name, name) AS name, iiko_id, role, avatar_rev FROM users
             WHERE is_active = 1 AND role IN ('barista', 'senior', 'mentor')
-            ORDER BY name COLLATE NOCASE
+            ORDER BY COALESCE(display_name, name) COLLATE NOCASE
         """)).mappings().all()
         current_user_id = user["id"]
         own_iiko_id = str(employee["iiko_id"]) if employee and employee["iiko_id"] is not None else None
@@ -352,7 +369,7 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         if own_iiko_id:
             upcoming_rows = connection.execute(text("""
                 SELECT s.shift_id, s.shift_date, s.iiko_id, st.start_time, st.end_time,
-                       st.point, st.shift_type, u.id AS user_id, u.name AS employee_name
+                       st.point, st.shift_type, u.id AS user_id, COALESCE(u.display_name, u.name) AS employee_name
                 FROM schedule AS s
                 JOIN shift_types AS st ON st.id = s.shift_type_id
                 LEFT JOIN users AS u ON CAST(u.iiko_id AS TEXT) = s.iiko_id
@@ -389,7 +406,8 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         "days_in_month": last_day.day,
         "shifts": shifts,
         "employees": [
-            {"id": row["id"], "name": row["name"], "iiko_id": row["iiko_id"], "role": row["role"]}
+            {"id": row["id"], "name": row["name"], "iiko_id": row["iiko_id"],
+             "role": row["role"], "avatar_rev": row["avatar_rev"] or 0}
             for row in employees
         ],
         "month_stats": {
@@ -630,32 +648,42 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
     return [dict(row) for row in rows]
 
 
-def get_user_preferences(engine: Engine, user_id: int) -> dict[str, bool]:
+def get_user_preferences(engine: Engine, user_id: int) -> dict[str, Any]:
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT quality_enabled, calendar_enabled FROM web_user_preferences WHERE user_id=:user_id
+            SELECT quality_enabled, calendar_enabled, theme, accent
+            FROM web_user_preferences WHERE user_id=:user_id
         """), {"user_id": user_id}).mappings().first()
-    return {"quality_enabled": bool(row["quality_enabled"]) if row else True,
-            "calendar_enabled": bool(row["calendar_enabled"]) if row else True}
+    theme = row["theme"] if row and row["theme"] in THEME_VALUES else "system"
+    accent = row["accent"] if row and _HEX_COLOR.match(row["accent"] or "") else DEFAULT_ACCENT
+    return {
+        "quality_enabled": bool(row["quality_enabled"]) if row else True,
+        "calendar_enabled": bool(row["calendar_enabled"]) if row else True,
+        "theme": theme,
+        "accent": accent,
+    }
 
 
-def save_user_preferences(engine: Engine, user_id: int, values: dict[str, bool]) -> dict[str, bool]:
+def save_user_preferences(engine: Engine, user_id: int, values: dict[str, Any]) -> dict[str, Any]:
     current = get_user_preferences(engine, user_id)
     updated = {**current, **values}
     with engine.begin() as connection:
         connection.execute(text("""
-            INSERT INTO web_user_preferences (user_id, quality_enabled, calendar_enabled, updated_at)
-            VALUES (:user_id, :quality, :calendar, CURRENT_TIMESTAMP)
+            INSERT INTO web_user_preferences (user_id, quality_enabled, calendar_enabled, theme, accent, updated_at)
+            VALUES (:user_id, :quality, :calendar, :theme, :accent, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id) DO UPDATE SET quality_enabled=excluded.quality_enabled,
-                calendar_enabled=excluded.calendar_enabled, updated_at=CURRENT_TIMESTAMP
-        """), {"user_id": user_id, "quality": int(updated["quality_enabled"]), "calendar": int(updated["calendar_enabled"])})
+                calendar_enabled=excluded.calendar_enabled, theme=excluded.theme,
+                accent=excluded.accent, updated_at=CURRENT_TIMESTAMP
+        """), {"user_id": user_id, "quality": int(updated["quality_enabled"]),
+               "calendar": int(updated["calendar_enabled"]),
+               "theme": updated["theme"], "accent": updated["accent"]})
     return updated
 
 
 def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
     with engine.connect() as connection:
         user = connection.execute(text("""
-            SELECT id, name, iiko_id FROM users WHERE id = :user_id AND is_active = 1
+            SELECT id, name, display_name, iiko_id FROM users WHERE id = :user_id AND is_active = 1
               AND role IN ('barista','senior','mentor')
         """), {"user_id": user_id}).mappings().first()
         if not user or user["iiko_id"] is None:
@@ -679,7 +707,7 @@ def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -
         # Отдельная синхронизация не нужна: фид собирается из БД на каждый запрос.
         "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
         "X-PUBLISHED-TTL:PT1H",
-        f"X-WR-CALNAME:Смены — {user['name']}",
+        f"X-WR-CALNAME:Смены — {user['display_name'] or user['name']}",
     ]
     now = datetime.now(user_timezone).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for shift in shifts:
