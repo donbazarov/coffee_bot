@@ -1551,17 +1551,27 @@ function setupDrawer() {
    заменах создаёт сервер при сохранении, остальные публикует наставник.
    «Колокольчик» — набор категорий, которые считаются в счётчике непрочитанного. */
 
+/* Фильтр по умолчанию — «Важное»: расписание, события и общая информация
+   без замен, чтобы главная не тонула в рутине. */
+const IMPORTANT_FILTER = 'important';
 const announcementsState = {
   items: [],
   unread: { total: 0, by_category: {}, enabled: [] },
   categories: [],
   canPublish: false,
-  filter: 'all',
+  filter: IMPORTANT_FILTER,
 };
 
-function announcementCategoryLabel(key) {
-  const found = (announcementsState.categories || []).find((item) => item.key === key);
-  return found ? found.label : key;
+/* Слайд-шоу на главной: один анонс за раз. */
+const slideshow = { index: 0, timer: null, items: [], paused: false };
+
+function announcementCategory(code) {
+  return (announcementsState.categories || []).find((item) => item.code === code) || null;
+}
+
+function announcementCategoryLabel(code) {
+  const found = announcementCategory(code);
+  return found ? found.label : code;
 }
 
 function announcementTime(iso) {
@@ -1571,29 +1581,42 @@ function announcementTime(iso) {
 }
 
 function announcementMarkup(item, options = {}) {
+  const category = announcementCategory(item.category);
+  const color = (category && category.color) || '#7b8794';
   const snapshots = ((item.payload || {}).snapshots || []).slice(0, 6);
   const gallery = snapshots.length
     ? `<div class="announcement-gallery">${snapshots.map((url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(url)}" alt="" loading="lazy"></a>`).join('')}</div>`
     : '';
-  const remove = options.manage && announcementsState.canPublish
-    ? `<button class="text-button announcement-remove" type="button" data-announcement-delete="${item.id}">Удалить</button>`
-    : '';
   const when = item.start_at
     ? `<span class="announcement-when"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg>${escapeHtml(announcementTime(item.start_at))}</span>`
     : '';
+  const pin = item.pinned
+    ? '<span class="announcement-pin" title="Закреплено"><svg class="icon" aria-hidden="true"><use href="#i-pin"></use></svg></span>'
+    : '';
+  const actions = options.manage && announcementsState.canPublish
+    ? `<div class="announcement-actions">
+         <button class="text-button" type="button" data-announcement-pin="${item.id}" data-pinned="${item.pinned ? 'true' : 'false'}">${item.pinned ? 'Открепить' : 'Закрепить'}</button>
+         <button class="text-button" type="button" data-announcement-edit="${item.id}">Изменить</button>
+         <button class="text-button" type="button" data-announcement-delete="${item.id}">Удалить</button>
+       </div>`
+    : '';
   return `
-    <article class="announcement chip-tone-${escapeHtml(item.category)} ${item.is_read ? '' : 'is-unread'}" data-category="${escapeHtml(item.category)}">
-      <header class="announcement-top"><span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span>${when}<span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
-      <h4 class="announcement-title">${escapeHtml(item.title)}</h4>
+    <article class="announcement ${item.is_read ? '' : 'is-unread'} ${item.pinned ? 'is-pinned' : ''}"
+             style="--announcement-color: ${escapeHtml(color)}"
+             data-announcement-id="${item.id}" data-category="${escapeHtml(item.category)}">
+      <header class="announcement-top">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><h4 class="announcement-title">${escapeHtml(item.title)}</h4>${when}<span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
       ${item.body ? `<p class="announcement-body">${escapeHtml(item.body)}</p>` : ''}
-      ${gallery}${remove}
+      ${gallery}${actions}
     </article>`;
 }
 
 function visibleAnnouncements(limit) {
-  const items = announcementsState.filter === 'all'
+  const filter = announcementsState.filter;
+  const items = filter === 'all'
     ? announcementsState.items
-    : announcementsState.items.filter((item) => item.category === announcementsState.filter);
+    : filter === IMPORTANT_FILTER
+      ? announcementsState.items.filter((item) => item.important)
+      : announcementsState.items.filter((item) => item.category === filter);
   return limit ? items.slice(0, limit) : items;
 }
 
@@ -1613,6 +1636,74 @@ function renderAnnouncementBadge() {
   });
 }
 
+function renderAnnouncementFilters() {
+  const chips = [`<button class="chip ${announcementsState.filter === IMPORTANT_FILTER ? 'is-selected' : ''}" type="button" data-ann-filter="${IMPORTANT_FILTER}">Важное</button>`,
+                 `<button class="chip ${announcementsState.filter === 'all' ? 'is-selected' : ''}" type="button" data-ann-filter="all">Все</button>`];
+  for (const item of announcementsState.categories || []) {
+    chips.push(`<button class="chip ${announcementsState.filter === item.code ? 'is-selected' : ''}" type="button" data-ann-filter="${escapeHtml(item.code)}">${escapeHtml(item.label)}</button>`);
+  }
+  const markup = chips.join('');
+  for (const selector of ['#announcements-preview-filter', '#announcements-filters']) {
+    const target = document.querySelector(selector);
+    if (target) target.innerHTML = markup;
+  }
+}
+
+function renderAnnouncementBell() {
+  const target = document.querySelector('#announcements-bell');
+  if (!target) return;
+  const enabled = (announcementsState.unread || {}).enabled || [];
+  target.innerHTML = (announcementsState.categories || []).map((item) => `
+    <button class="chip chip-toggle ${enabled.includes(item.code) ? 'is-selected' : ''}" type="button"
+            data-ann-bell="${escapeHtml(item.code)}" aria-pressed="${enabled.includes(item.code) ? 'true' : 'false'}">
+      <svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>${escapeHtml(item.label)}
+    </button>`).join('');
+}
+
+/* Закреплённые держим всегда, остальное — за последнюю неделю. */
+function slideshowItems() {
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  return announcementsState.items.filter((item) => {
+    if (item.pinned) return true;
+    const created = item.created_at ? new Date(item.created_at).getTime() : 0;
+    return created >= weekAgo;
+  });
+}
+
+function stopSlideshow() {
+  if (slideshow.timer) { clearInterval(slideshow.timer); slideshow.timer = null; }
+}
+
+function startSlideshow() {
+  stopSlideshow();
+  if (slideshow.paused || slideshow.items.length < 2) return;
+  slideshow.timer = setInterval(() => shiftSlide(1), 5000);
+}
+
+function shiftSlide(step) {
+  if (!slideshow.items.length) return;
+  slideshow.index = (slideshow.index + step + slideshow.items.length) % slideshow.items.length;
+  renderAnnouncementsPreview();
+}
+
+function renderAnnouncementsPreview() {
+  const node = document.querySelector('#announcements-preview-list');
+  if (!node) return;
+  slideshow.items = slideshowItems();
+  if (!slideshow.items.length) {
+    node.innerHTML = '<p class="empty-state">Пока пусто</p>';
+    stopSlideshow();
+    return;
+  }
+  if (slideshow.index >= slideshow.items.length) slideshow.index = 0;
+  const total = slideshow.items.length;
+  const nav = total > 1
+    ? `<div class="slideshow-nav"><button class="icon-button" type="button" data-slide-step="-1" aria-label="Предыдущий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><span class="slideshow-count">${slideshow.index + 1} / ${total}</span><button class="icon-button" type="button" data-slide-step="1" aria-label="Следующий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>${'<div class="slideshow-dots">' + slideshow.items.map((item, index) => `<button type="button" class="slideshow-dot ${index === slideshow.index ? 'is-active' : ''}" data-slide="${index}" aria-label="Анонс ${index + 1}"></button>`).join('') + '</div>'}`
+    : '';
+  node.innerHTML = `<div class="slideshow">${announcementMarkup(slideshow.items[slideshow.index])}${nav}</div>`;
+  startSlideshow();
+}
+
 function renderAnnouncements() {
   const list = document.querySelector('#announcements-list');
   if (list) {
@@ -1621,16 +1712,9 @@ function renderAnnouncements() {
       ? items.map((item) => announcementMarkup(item, { manage: true })).join('')
       : '<p class="empty-state">Анонсов пока нет</p>';
   }
-  const preview = document.querySelector('#announcements-preview-list');
-  if (preview) {
-    const items = visibleAnnouncements(5);
-    preview.innerHTML = items.length
-      ? items.map((item) => announcementMarkup(item)).join('')
-      : '<p class="empty-state">Пока пусто</p>';
-  }
-  document.querySelectorAll('[data-ann-filter]').forEach((button) => {
-    button.classList.toggle('is-selected', button.dataset.annFilter === announcementsState.filter);
-  });
+  renderAnnouncementFilters();
+  renderAnnouncementBell();
+  renderAnnouncementsPreview();
   renderAnnouncementBadge();
 }
 
@@ -1638,9 +1722,78 @@ function renderAnnouncementCategories() {
   const node = document.querySelector('#announcements-categories');
   if (!node) return;
   const categories = announcementsState.categories || [];
-  node.innerHTML = categories.length
-    ? categories.map((item) => `<article class="announcement-category ${item.system ? 'is-system' : ''}"><strong>${escapeHtml(item.label)}</strong><span>${item.system ? 'системная' : 'ручная'}</span></article>`).join('')
-    : '<p class="empty-state">Категории не загружены</p>';
+  if (!categories.length) {
+    node.innerHTML = '<p class="empty-state">Категории не загружены</p>';
+    return;
+  }
+  node.innerHTML = categories.map((item) => `
+    <article class="announcement-category ${item.system ? 'is-system' : ''}">
+      <span class="category-swatch" style="--announcement-color: ${escapeHtml(item.color)}"></span>
+      <strong>${escapeHtml(item.label)}</strong>
+      <span class="category-flags">${item.important ? 'важное' : 'вне «Важного»'}${item.system ? ' · системная' : ''}</span>
+      ${item.system ? '' : `<div class="category-actions">
+        <button class="text-button" type="button" data-category-edit="${escapeHtml(item.code)}">Изменить</button>
+        <button class="text-button" type="button" data-category-delete="${escapeHtml(item.code)}">Удалить</button>
+      </div>`}
+    </article>`).join('');
+}
+
+function openAnnouncementDialog(item = null) {
+  const dialog = document.querySelector('#announcement-dialog');
+  const form = document.querySelector('#announcement-form');
+  if (!dialog || !form) return;
+  const errorNode = document.querySelector('#announcement-form-error');
+  form.reset();
+  form.dataset.announcementId = item ? String(item.id) : '';
+  form.elements.category.innerHTML = (announcementsState.categories || [])
+    .map((entry) => `<option value="${escapeHtml(entry.code)}">${escapeHtml(entry.label)}</option>`).join('');
+  const kicker = document.querySelector('#announcement-dialog-kicker');
+  const title = document.querySelector('#announcement-dialog-title');
+  const submit = document.querySelector('#announcement-submit');
+  if (kicker) kicker.textContent = item ? 'ПРАВКА АНОНСА' : 'НОВОЕ ОБЪЯВЛЕНИЕ';
+  if (title) title.textContent = item ? 'Изменить анонс' : 'Анонс';
+  if (submit) submit.textContent = item ? 'Сохранить' : 'Опубликовать';
+  if (item) {
+    form.elements.category.value = item.category;
+    form.elements.title.value = item.title;
+    form.elements.body.value = item.body || '';
+    form.elements.start_at.value = item.start_at ? item.start_at.slice(0, 16) : '';
+    form.elements.pinned.checked = Boolean(item.pinned);
+  } else {
+    form.elements.category.value = (announcementsState.categories.find((entry) => entry.code === 'event') || {}).code || '';
+  }
+  if (errorNode) errorNode.hidden = true;
+  dialog.showModal();
+}
+
+function openCategoryDialog(item = null) {
+  const dialog = document.querySelector('#announcement-category-dialog');
+  const form = document.querySelector('#announcement-category-form');
+  if (!dialog || !form) return;
+  const errorNode = document.querySelector('#announcement-category-error');
+  form.reset();
+  form.dataset.code = item ? item.code : '';
+  const title = document.querySelector('#announcement-category-title');
+  const submit = document.querySelector('#announcement-category-submit');
+  if (title) title.textContent = item ? 'Изменить категорию' : 'Новая категория';
+  if (submit) submit.textContent = item ? 'Сохранить' : 'Создать';
+  form.elements.color.value = item ? item.color : '#7b8794';
+  form.elements.important.checked = item ? Boolean(item.important) : true;
+  if (item) form.elements.label.value = item.label;
+  if (errorNode) errorNode.hidden = true;
+  dialog.showModal();
+}
+
+/* Клик по карточке открывает анонс в разделе «Анонсы» и подсвечивает его. */
+async function openAnnouncementCard(id) {
+  announcementsState.filter = 'all';
+  setView('announcements');
+  await openAnnouncements();
+  const target = document.querySelector(`[data-announcement-id="${id}"]`);
+  if (!target) return;
+  target.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+  target.classList.add('is-highlighted');
+  setTimeout(() => target.classList.remove('is-highlighted'), 2200);
 }
 
 async function loadAnnouncements() {
@@ -1671,6 +1824,12 @@ async function openAnnouncements() {
 
 function setupAnnouncements() {
   document.addEventListener('click', async (event) => {
+    const step = event.target.closest('[data-slide-step]');
+    if (step) { shiftSlide(Number(step.dataset.slideStep) || 1); return; }
+
+    const dot = event.target.closest('[data-slide]');
+    if (dot) { slideshow.index = Number(dot.dataset.slide) || 0; renderAnnouncementsPreview(); return; }
+
     const filter = event.target.closest('[data-ann-filter]');
     if (filter) {
       announcementsState.filter = filter.dataset.annFilter;
@@ -1685,8 +1844,26 @@ function setupAnnouncements() {
       if (enabled.has(name)) enabled.delete(name); else enabled.add(name);
       try {
         const data = await api('/api/announcements/settings', { method: 'PATCH', body: JSON.stringify({ enabled: [...enabled] }) });
-        if (data.unread) { announcementsState.unread = data.unread; renderAnnouncementBadge(); }
+        if (data.unread) { announcementsState.unread = data.unread; renderAnnouncementBell(); renderAnnouncementBadge(); }
       } catch (error) { showToast(error.message); }
+      return;
+    }
+
+    const pin = event.target.closest('[data-announcement-pin]');
+    if (pin) {
+      const next = pin.dataset.pinned !== 'true';
+      try {
+        await api(`/api/announcements/${pin.dataset.announcementPin}`, { method: 'PATCH', body: JSON.stringify({ pinned: next }) });
+        await loadAnnouncements();
+        showToast(next ? 'Анонс закреплён' : 'Анонс откреплён');
+      } catch (error) { showToast(error.message); }
+      return;
+    }
+
+    const edit = event.target.closest('[data-announcement-edit]');
+    if (edit) {
+      const item = announcementsState.items.find((entry) => String(entry.id) === edit.dataset.announcementEdit);
+      if (item) openAnnouncementDialog(item);
       return;
     }
 
@@ -1700,31 +1877,93 @@ function setupAnnouncements() {
       return;
     }
 
-    if (event.target.closest('#announcements-read-all')) await markAnnouncementsRead();
+    const categoryEdit = event.target.closest('[data-category-edit]');
+    if (categoryEdit) {
+      const item = (announcementsState.categories || []).find((entry) => entry.code === categoryEdit.dataset.categoryEdit);
+      if (item) openCategoryDialog(item);
+      return;
+    }
+
+    const categoryDelete = event.target.closest('[data-category-delete]');
+    if (categoryDelete) {
+      try {
+        await api(`/api/announcements/categories/${categoryDelete.dataset.categoryDelete}`, { method: 'DELETE' });
+        await loadAnnouncements();
+        showToast('Категория удалена');
+      } catch (error) { showToast(error.message); }
+      return;
+    }
+
+    if (event.target.closest('#announcements-read-all')) { await markAnnouncementsRead(); return; }
+
+    // Важно: проверяем последним — кнопки внутри карточки уже обработаны выше.
+    const card = event.target.closest('[data-announcement-id]');
+    if (card) openAnnouncementCard(Number(card.dataset.announcementId));
   });
 
   const dialog = document.querySelector('#announcement-dialog');
   const form = document.querySelector('#announcement-form');
   const errorNode = document.querySelector('#announcement-form-error');
-  document.querySelector('#announcements-add')?.addEventListener('click', () => {
-    form?.reset();
-    if (errorNode) errorNode.hidden = true;
-    dialog?.showModal();
-  });
+  document.querySelector('#announcements-add')?.addEventListener('click', () => openAnnouncementDialog(null));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    const current = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(current).entries());
+    payload.pinned = Boolean(current.elements.pinned?.checked);
+    const id = current.dataset.announcementId;
     try {
-      await api('/api/announcements', { method: 'POST', body: JSON.stringify(payload) });
+      if (id) await api(`/api/announcements/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/announcements', { method: 'POST', body: JSON.stringify(payload) });
       dialog?.close();
       await loadAnnouncements();
-      showToast('Анонс опубликован');
+      showToast(id ? 'Анонс обновлён' : 'Анонс опубликован');
     } catch (error) {
       if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
     }
   });
   document.querySelectorAll('#announcement-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
   dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+
+  const categoryDialog = document.querySelector('#announcement-category-dialog');
+  const categoryForm = document.querySelector('#announcement-category-form');
+  const categoryError = document.querySelector('#announcement-category-error');
+  document.querySelector('#announcements-category-add')?.addEventListener('click', () => openCategoryDialog(null));
+  categoryForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const current = event.currentTarget;
+    const payload = Object.fromEntries(new FormData(current).entries());
+    payload.important = Boolean(current.elements.important?.checked);
+    const code = current.dataset.code;
+    try {
+      if (code) await api(`/api/announcements/categories/${code}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      else await api('/api/announcements/categories', { method: 'POST', body: JSON.stringify(payload) });
+      categoryDialog?.close();
+      await loadAnnouncements();
+      showToast(code ? 'Категория обновлена' : 'Категория создана');
+    } catch (error) {
+      if (categoryError) { categoryError.textContent = error.message; categoryError.hidden = false; }
+    }
+  });
+  document.querySelectorAll('#announcement-category-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => categoryDialog?.close()));
+  categoryDialog?.addEventListener('click', (event) => { if (event.target === categoryDialog) categoryDialog.close(); });
+
+  // Свайп по слайд-шоу и пауза, пока вкладка не на экране.
+  const preview = document.querySelector('#announcements-preview-list');
+  if (preview) {
+    let startX = null;
+    preview.addEventListener('pointerdown', (event) => { startX = event.clientX; slideshow.paused = true; stopSlideshow(); });
+    preview.addEventListener('pointerup', (event) => {
+      if (startX !== null && Math.abs(event.clientX - startX) > 40) shiftSlide(event.clientX < startX ? 1 : -1);
+      startX = null;
+      slideshow.paused = false;
+      startSlideshow();
+    });
+    preview.addEventListener('pointercancel', () => { startX = null; slideshow.paused = false; startSlideshow(); });
+  }
+  document.addEventListener('visibilitychange', () => {
+    slideshow.paused = document.hidden;
+    if (document.hidden) stopSlideshow(); else startSlideshow();
+  });
 
   // Календарь анонсов: отдельная ссылка от личного календаря смен.
   const feedDialog = document.querySelector('#announcements-feed-dialog');

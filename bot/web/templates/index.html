@@ -36,6 +36,7 @@
     <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"/></symbol>
     <symbol id="i-calendar-plus" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M12 13v5M9.5 15.5h5"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M7 3h10v18l-5-4-5 4z"/></symbol>
   </svg>
   {% if not user %}
   <main class="login-screen">
@@ -129,14 +130,8 @@
       <section class="view is-visible" id="overview-view">
         <section class="panel announcements-panel" id="announcements-preview">
           <div class="panel-heading"><div><p class="eyebrow">ЛЕНТА</p><h3>Последние события</h3></div><button class="button button-quiet" type="button" data-view="announcements">Все анонсы <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
-          <div class="chip-row" id="announcements-preview-filter" role="group" aria-label="Категория анонсов">
-            <button class="chip is-selected" type="button" data-ann-filter="all">Все</button>
-            <button class="chip" type="button" data-ann-filter="schedule">Расписание</button>
-            <button class="chip" type="button" data-ann-filter="swap">Замены</button>
-            <button class="chip" type="button" data-ann-filter="event">Событие</button>
-            <button class="chip" type="button" data-ann-filter="general">Общая информация</button>
-          </div>
-          <div class="announcement-list is-compact" id="announcements-preview-list"></div>
+          <div class="chip-row" id="announcements-preview-filter" role="group" aria-label="Категория анонсов"></div>
+          <div class="announcement-slideshow" id="announcements-preview-list"></div>
         </section>
         <section class="schedule-summary" id="calendar-summary" aria-label="Сводка по сменам">
           <div class="section-heading schedule-heading"><div><p class="eyebrow">МОЙ ГРАФИК</p><h2>Этот месяц</h2></div><button class="button button-quiet" type="button" data-view="calendar">Открыть календарь <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
@@ -181,21 +176,10 @@
         </div>
         <section class="panel settings-panel" id="announcements-bell-panel">
           <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Что меня уведомляет</h3></div><span class="panel-index" id="announcements-unread-label">—</span></div>
-          <div class="chip-row" role="group" aria-label="Категории уведомлений">
-            <button class="chip chip-toggle" type="button" data-ann-bell="schedule" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Расписание</button>
-            <button class="chip chip-toggle" type="button" data-ann-bell="swap" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Замены</button>
-            <button class="chip chip-toggle" type="button" data-ann-bell="event" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Событие</button>
-            <button class="chip chip-toggle" type="button" data-ann-bell="general" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Общая информация</button>
-          </div>
+          <div class="chip-row" id="announcements-bell" role="group" aria-label="Категории уведомлений"></div>
           <p class="settings-hint">Отмеченные категории — это всё, что вас уведомляет: счётчик на иконке «Анонсы» и попадание анонсов с датой в календарь. Сам список показывает всё в любом случае.</p>
         </section>
-        <div class="chip-row" role="group" aria-label="Фильтр ленты">
-          <button class="chip is-selected" type="button" data-ann-filter="all">Все</button>
-          <button class="chip" type="button" data-ann-filter="schedule">Расписание</button>
-          <button class="chip" type="button" data-ann-filter="swap">Замены</button>
-          <button class="chip" type="button" data-ann-filter="event">Событие</button>
-          <button class="chip" type="button" data-ann-filter="general">Общая информация</button>
-        </div>
+        <div class="chip-row" id="announcements-filters" role="group" aria-label="Фильтр ленты"></div>
         <div class="announcement-list" id="announcements-list"></div>
       </section>
 
@@ -336,7 +320,7 @@
         </section>
         <section class="panel settings-panel" id="announcements-settings-panel">
           <div class="panel-heading"><div><p class="eyebrow">АНОНСЫ</p><h3>Категории</h3></div></div>
-          <p class="settings-hint">Системные категории создаёт сам сервис при публикации графика — их нельзя переименовать или отключить. Свои категории добавим позже.</p>
+          <div class="section-heading-inline"><p class="settings-hint">Системные категории создаёт сам сервис при публикации графика — их нельзя переименовать, перекрасить или удалить. Цветом отмечаются анонсы, флажок «важное» решает, попадать ли категории в блок «Важное» на главной.</p><button class="button button-quiet" type="button" id="announcements-category-add">Новая категория</button></div>
           <div class="announcement-categories" id="announcements-categories"></div>
         </section>
         <section class="panel settings-panel" id="stories-admin-panel">
@@ -390,7 +374,8 @@
   <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
   {% endif %}
   {% if user.role in ['senior', 'mentor'] %}
-  <dialog class="user-dialog" id="announcement-dialog"><form id="announcement-form"><div class="dialog-top"><div><p class="eyebrow">НОВОЕ ОБЪЯВЛЕНИЕ</p><h2>Анонс</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Категория<select name="category"><option value="event">Событие</option><option value="general">Общая информация</option><option value="swap">Замены</option><option value="schedule">Расписание</option></select></label><label>Заголовок<input name="title" maxlength="120" required placeholder="Например: Собрание команды"></label><label>Текст <span class="optional">необязательно</span><textarea name="body" rows="5" maxlength="2000" placeholder="Что нужно знать команде"></textarea></label><label>Дата и время <span class="optional">необязательно — без них анонс не попадёт в календарь</span><input name="start_at" type="datetime-local"></label><p class="dialog-error" id="announcement-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Опубликовать</button></div></form></dialog>
+  <dialog class="user-dialog" id="announcement-dialog"><form id="announcement-form"><div class="dialog-top"><div><p class="eyebrow" id="announcement-dialog-kicker">НОВОЕ ОБЪЯВЛЕНИЕ</p><h2 id="announcement-dialog-title">Анонс</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Категория<select name="category"></select></label><label>Заголовок<input name="title" maxlength="120" required placeholder="Например: Собрание команды"></label><label>Текст <span class="optional">необязательно</span><textarea name="body" rows="5" maxlength="2000" placeholder="Что нужно знать команде"></textarea></label><label>Дата и время <span class="optional">необязательно — без них анонс не попадёт в календарь</span><input name="start_at" type="datetime-local"></label><label class="checkbox-row"><input name="pinned" type="checkbox"><span>Закрепить — анонс всегда вверху, даже через неделю</span></label><p class="dialog-error" id="announcement-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-submit" type="submit">Опубликовать</button></div></form></dialog>
+  <dialog class="user-dialog" id="announcement-category-dialog"><form id="announcement-category-form"><div class="dialog-top"><div><p class="eyebrow">КАТЕГОРИЯ АНОНСОВ</p><h2 id="announcement-category-title">Новая категория</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="label" maxlength="60" required placeholder="Например: Обучение"></label><label>Цвет<input name="color" type="color" value="#7b8794"></label><label class="checkbox-row"><input name="important" type="checkbox" checked><span>Показывать в «Важном» на главной</span></label><p class="dialog-error" id="announcement-category-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-category-submit" type="submit">Создать</button></div></form></dialog>
   {% endif %}
   <dialog class="user-dialog shift-dialog" id="shift-dialog"><form id="shift-form"><div class="dialog-top"><div><p class="eyebrow" id="shift-dialog-kicker">РАСПИСАНИЕ</p><h2 id="shift-dialog-title">Смена</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Бариста<select name="user_id" id="shift-employee" required></select></label><label>Дата<input name="date" type="date" required></label><div class="time-fields"><label>Приход<input name="start_time" type="time" required></label><label>Уход<input name="end_time" type="time" required></label></div><fieldset class="point-picker"><legend>Точка</legend><label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required><span><i class="point-swatch point-uy"></i>УЯ</span></label><label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label></fieldset><p class="dialog-error" id="shift-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet" id="delete-shift-button" type="button">Выходной</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Готово</button></div></form></dialog>
   <dialog class="user-dialog publish-dialog" id="publish-dialog"><form id="publish-form"><div class="dialog-top"><div><p class="eyebrow">ПУБЛИКАЦИЯ РАСПИСАНИЯ</p><h2>Диапазон снимков</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="publish-presets"><button class="button button-quiet" type="button" data-publish-preset="first">1–15</button><button class="button button-quiet" type="button" data-publish-preset="second">15–конец месяца</button></div><div class="time-fields"><label>С какого числа<input name="publish_start" type="date" required></label><label>По какое число<input name="publish_end" type="date" required></label></div><p class="publish-preview" id="publish-preview" role="status"></p><p class="dialog-error" id="publish-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Опубликовать</button></div></form></dialog>

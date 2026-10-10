@@ -759,14 +759,14 @@ def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
 
 @app.get("/api/announcements")
 def list_announcements(category: str | None = None, limit: int = 30, user: dict[str, Any] = Depends(require_user)):
-    if category not in (None, "all") and category not in announcements.CATEGORIES:
+    if category not in (None, "all", "important") and category not in announcements.category_keys(engine):
         raise HTTPException(status_code=422, detail="Неизвестная категория")
     return {
         "items": announcements.list_for_user(
             engine, user["id"], None if category in (None, "all") else category, limit
         ),
         "unread": announcements.unread_counts(engine, user["id"]),
-        "categories": announcements.categories_payload(),
+        "categories": announcements.all_categories(engine),
         "can_publish": user["role"] in {"senior", "mentor"},
     }
 
@@ -794,10 +794,10 @@ def announcements_feed(token: str):
 @app.post("/api/announcements")
 async def create_announcement(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
     payload = await _read_json_object(request)
-    if set(payload) - {"category", "title", "body", "start_at"}:
+    if set(payload) - {"category", "title", "body", "start_at", "pinned"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля анонса")
     category = str(payload.get("category") or "")
-    if category not in announcements.CATEGORIES:
+    if category not in announcements.category_keys(engine):
         raise HTTPException(status_code=422, detail="Неизвестная категория")
     title = str(payload.get("title") or "").strip()
     if not title or len(title) > announcements.MAX_TITLE:
@@ -810,9 +810,54 @@ async def create_announcement(request: Request, user: dict[str, Any] = Depends(r
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     announcement_id = announcements.create(
-        engine, category, title, body, user["id"], user["name"], None, start_at
+        engine, category, title, body, user["id"], user["name"], None, start_at,
+        bool(payload.get("pinned")),
     )
     return {"ok": True, "id": announcement_id}
+
+
+@app.post("/api/announcements/categories")
+async def create_announcement_category(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    if set(payload) - {"label", "color", "important"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля категории")
+    try:
+        code = announcements.create_category(
+            engine, str(payload.get("label") or ""), payload.get("color"),
+            True if payload.get("important", True) else False,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "code": code, "categories": announcements.all_categories(engine)}
+
+
+@app.patch("/api/announcements/categories/{code}")
+async def update_announcement_category(code: str, request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    if set(payload) - {"label", "color", "important"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля категории")
+    try:
+        category = announcements.update_category(
+            engine, code, payload.get("label"), payload.get("color"), payload.get("important")
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    return {"ok": True, "category": category, "categories": announcements.all_categories(engine)}
+
+
+@app.delete("/api/announcements/categories/{code}")
+def delete_announcement_category(code: str, _: dict[str, Any] = Depends(require_manager_csrf)):
+    try:
+        announcements.delete_category(engine, code)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"ok": True, "categories": announcements.all_categories(engine)}
 
 
 @app.delete("/api/announcements/{announcement_id}")
@@ -831,7 +876,7 @@ async def read_announcements(request: Request, user: dict[str, Any] = Depends(re
     if ids is not None and (not isinstance(ids, list) or any(not isinstance(value, int) for value in ids)):
         raise HTTPException(status_code=422, detail="ids должен быть списком чисел")
     category = payload.get("category")
-    if category is not None and category not in announcements.CATEGORIES:
+    if category is not None and category not in announcements.category_keys(engine):
         raise HTTPException(status_code=422, detail="Неизвестная категория")
     announcements.mark_read(engine, user["id"], ids, category)
     return {"ok": True, "unread": announcements.unread_counts(engine, user["id"])}
@@ -848,10 +893,39 @@ async def update_announcement_settings(request: Request, user: dict[str, Any] = 
     if set(payload) != {"enabled"} or not isinstance(payload.get("enabled"), list):
         raise HTTPException(status_code=422, detail="Ожидался список категорий")
     for value in payload["enabled"]:
-        if value not in announcements.CATEGORIES:
+        if value not in announcements.category_keys(engine):
             raise HTTPException(status_code=422, detail="Неизвестная категория")
     enabled = announcements.set_prefs(engine, user["id"], payload["enabled"])
     return {"ok": True, "enabled": enabled, "unread": announcements.unread_counts(engine, user["id"])}
+
+
+@app.patch("/api/announcements/{announcement_id}")
+async def update_announcement(announcement_id: int, request: Request,
+                             user: dict[str, Any] = Depends(require_manager_csrf)):
+    """Правка анонса: текст, категория, дата и флажок закрепления."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"title", "body", "category", "start_at", "pinned"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля анонса")
+    title = payload.get("title")
+    if title is not None and (not str(title).strip() or len(str(title)) > announcements.MAX_TITLE):
+        raise HTTPException(status_code=422, detail="Заголовок должен быть от 1 до 120 символов")
+    category = payload.get("category")
+    if category is not None and category not in announcements.category_keys(engine):
+        raise HTTPException(status_code=422, detail="Неизвестная категория")
+    try:
+        updated = announcements.update(
+            engine, announcement_id,
+            title=title, body=payload.get("body"), category=category,
+            start_at=payload.get("start_at"),
+            pinned=bool(payload["pinned"]) if "pinned" in payload else None,
+        )
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    if not updated:
+        raise HTTPException(status_code=404, detail="Анонс не найден")
+    return {"ok": True}
 
 
 @app.get("/api/dashboard")
