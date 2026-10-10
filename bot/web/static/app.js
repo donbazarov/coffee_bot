@@ -1600,13 +1600,15 @@ function announcementMarkup(item, options = {}) {
          <button class="text-button" type="button" data-announcement-delete="${item.id}">Удалить</button>
        </div>`
     : '';
+  const meta = `${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}`;
   return `
     <article class="announcement ${item.is_read ? '' : 'is-unread'} ${item.pinned ? 'is-pinned' : ''}"
              style="--announcement-color: ${escapeHtml(color)}"
              data-announcement-id="${item.id}" data-category="${escapeHtml(item.category)}">
-      <header class="announcement-top">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><h4 class="announcement-title">${escapeHtml(item.title)}</h4>${when}<span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
+      <header class="announcement-top">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><h4 class="announcement-title">${escapeHtml(item.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
       ${item.body ? `<p class="announcement-body">${escapeHtml(item.body)}</p>` : ''}
-      ${gallery}${actions}
+      ${gallery}
+      <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span>${actions}</footer>
     </article>`;
 }
 

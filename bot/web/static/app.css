@@ -685,16 +685,22 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .announcement-body { margin: 7px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
 .announcement-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 .announcement-gallery img { width: 108px; height: 76px; object-fit: cover; border: 1px solid var(--line); }
+/* Подвал карточки: на десктопе в нём только кнопки (дата и автор — в шапке),
+   на телефоне — дата с автором и кнопки под ними. */
+.announcement-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.announcement-meta-mobile { display: none; }
 .announcement-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
 .announcement-actions .text-button { padding: 0; color: var(--muted); }
 .announcement-actions .text-button:hover { color: var(--accent); }
 
-/* На телефоне карточка максимально короткая: без времени, автора и кнопок */
+/* На телефоне шапка короче — мета уезжает вниз, к кнопкам. */
 @media (max-width: 760px) {
   .announcement { padding: 11px 13px; }
-  .announcement-meta { display: none; }
+  .announcement-top .announcement-meta { display: none; }
+  .announcement-meta-mobile { display: inline; }
   .announcement-title { font-size: 14px; }
-  .announcement-actions { display: none; }
+  .announcement-foot { flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 8px; }
+  .announcement-foot .announcement-actions { margin-top: 0; }
 }
 
 /* Слайд-шоу последних анонсов на главной: всегда один блок */
