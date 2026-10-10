@@ -120,6 +120,8 @@ def _api_call(method: str, params: dict[str, Any]) -> Any:
 
 
 def fetch_telegram_photo(telegram_id: int) -> bytes | None:
+    if not BotConfig.telegram_outbound_enabled:
+        return None
     photos = _api_call("getUserProfilePhotos", {"user_id": telegram_id, "limit": 1})
     if not photos or not photos.get("photos"):
         return None
@@ -143,7 +145,7 @@ def ensure_telegram_avatar(engine: Engine, user_id: int, telegram_id: int | None
     `avatar_rev` увеличивается только при успешном сохранении файла, поэтому
     «есть файл» ⟺ `avatar_rev > 0` — это использует фронтенд как признак аватара.
     """
-    if not telegram_id or user_id in _attempted:
+    if not BotConfig.telegram_outbound_enabled or not telegram_id or user_id in _attempted:
         return
     _attempted.add(user_id)
     try:

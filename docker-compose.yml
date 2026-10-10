@@ -58,6 +58,10 @@ services:
     build: .
     image: coffee-bot:latest
     container_name: coffee-bot-login
+    # Telegram-вход выключен (AUTH_TELEGRAM_ENABLED=0), а api.telegram.org с этого
+    # сервера недоступен, поэтому контейнер не стартует по умолчанию. Поднять явно:
+    #     docker compose --profile telegram up -d bot
+    profiles: ["telegram"]
     restart: unless-stopped
     command: ["python", "-m", "bot.web.telegram_login_bot"]
     # Long polling держит запрос к Telegram до 45 с; бот сам завершается по

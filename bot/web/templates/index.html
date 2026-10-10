@@ -77,7 +77,8 @@
       {% endif %}
 
       {% if not bot_login_enabled and not telegram_login_enabled %}
-      <p class="setup-notice">Задайте <code>TELEGRAM_BOT_USERNAME</code>, чтобы включить вход через Telegram.</p>
+      {# Telegram-вход выключен (AUTH_TELEGRAM_ENABLED=0); вход по коду доступа — отдельным релизом. #}
+      <p class="setup-notice">Обновляем способ входа — он появится здесь. Пока обратитесь к наставнику.</p>
       {% endif %}
       {% if auth_error %}<p class="login-error" role="alert">{{ auth_error }}</p>{% endif %}
     </section>

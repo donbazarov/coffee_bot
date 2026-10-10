@@ -86,12 +86,16 @@ def _call(method: str, data: dict[str, Any], files: dict[str, tuple[str, bytes, 
 
 
 def send_message(chat_id: str, text: str) -> bool:
+    if not BotConfig.telegram_outbound_enabled:
+        return False
     if not chat_id or not text:
         return False
     return _call("sendMessage", {"chat_id": chat_id, "text": text[:MAX_MESSAGE], "disable_web_page_preview": "true"})
 
 
 def send_photo(chat_id: str, photo_path: Path, caption: str = "") -> bool:
+    if not BotConfig.telegram_outbound_enabled:
+        return False
     if not chat_id or not photo_path.is_file():
         return False
     mime = mimetypes.guess_type(photo_path.name)[0] or "image/jpeg"
@@ -104,6 +108,11 @@ def send_photo(chat_id: str, photo_path: Path, caption: str = "") -> bool:
 
 def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str) -> None:
     """Рассылает уведомления по итогам сохранения графика (замены/публикация)."""
+    if not BotConfig.telegram_outbound_enabled:
+        # Выходим ДО чтения настроек и похода в сеть: иначе каждый снимок ждёт
+        # таймаут 20 с внутри запроса сохранения графика, и nginx отдаёт 504,
+        # хотя график уже сохранён.
+        return
     try:
         settings = get_app_settings(engine)
     except Exception as error:  # noqa: BLE001 — настройки не должны ломать сохранение

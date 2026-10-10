@@ -44,9 +44,27 @@ def _load_token() -> str | None:
     return os.getenv("TELEGRAM_BOT_TOKEN") or None
 
 
+def _load_flag(name: str, default: bool = False) -> bool:
+    """Булев флаг из окружения: 1/true/yes/on — включено, пусто — значение по умолчанию."""
+    value = (os.getenv(name) or "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class BotConfig:
     token: str | None = _load_token()
+
+    # Вход через Telegram: кнопка, виджет и роуты /auth/telegram/*.
+    # Выключен: с этого сервера api.telegram.org недоступен, вход переводится
+    # на «iiko_id + персональный код доступа».
+    telegram_login_enabled: bool = _load_flag("AUTH_TELEGRAM_ENABLED")
+
+    # Исходящие вызовы Bot API: публикации в каналы и фото профиля из Telegram.
+    # Выключено по умолчанию: недоступный Telegram висит таймаутом 20 с прямо
+    # внутри запроса сохранения графика, из-за чего nginx отдаёт 504.
+    telegram_outbound_enabled: bool = _load_flag("TELEGRAM_OUTBOUND_ENABLED")
 
     # Путь к базе можно переопределить через DATABASE_URL.
     # В Docker удобно держать базу рядом с остальными данными:

@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.concurrency import run_in_threadpool
 
+from bot.config import BotConfig
 from bot.database.models import engine, init_db
 from bot.web import avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
@@ -281,8 +282,9 @@ def home(request: Request):
     tg_pending = False
 
     # Сотрудник вернулся на сайт после подтверждения в Telegram — входим сразу,
-    # без повторного нажатия кнопки.
-    if user is None:
+    # без повторного нажатия кнопки. При выключенном Telegram-входе заявки не
+    # разбираем вообще: подтверждать их некому, бот не работает.
+    if user is None and BotConfig.telegram_login_enabled:
         entry = telegram_login.get_login_request(engine, request.cookies.get(TG_LOGIN_COOKIE))
         if entry and entry["status"] == telegram_login.STATUS_APPROVED:
             done = _complete_telegram_login(entry)
@@ -296,7 +298,7 @@ def home(request: Request):
         # обновит себя, чтобы не приходилось жать «Обновить» вручную.
         tg_pending = bool(entry and entry["status"] == telegram_login.STATUS_PENDING)
 
-    if user and user.get("telegram_id") and not user.get("avatar_rev"):
+    if user and BotConfig.telegram_outbound_enabled and user.get("telegram_id") and not user.get("avatar_rev"):
         # Фото из Telegram скачиваем в фоне — страница не ждёт сеть. Ошибки
         # внутри потока гасятся там же: запрос из-за этого падать не должен.
         try:
@@ -319,9 +321,13 @@ def home(request: Request):
             "csrf_token": csrf_token or "",
             "bot_username": bot_username,
             "telegram_callback_url": telegram_callback_url,
-            "telegram_login_enabled": bool(bot_username and telegram_callback_url.startswith("https://")),
-            # Вход через бота работает и там, где telegram.org недоступен
-            "bot_login_enabled": bool(bot_username),
+            # Оба способа входа через Telegram гасит один флаг AUTH_TELEGRAM_ENABLED=0:
+            # виджет грузится с telegram.org, а бот не может дотянуться до api.telegram.org.
+            "telegram_login_enabled": (
+                BotConfig.telegram_login_enabled
+                and bool(bot_username and telegram_callback_url.startswith("https://"))
+            ),
+            "bot_login_enabled": BotConfig.telegram_login_enabled and bool(bot_username),
             "auth_error": {
                 "verify": "Не удалось подтвердить вход через Telegram. Попробуйте ещё раз.",
                 "account": "Ваш Telegram не привязан к активной учётной записи команды.",
@@ -407,6 +413,9 @@ def _complete_telegram_login(entry: dict[str, Any]) -> tuple[str, str] | None:
 @app.get("/auth/telegram/start")
 def telegram_start(request: Request, next: str = "/", force: int = 0):
     """Создаёт заявку на вход и отправляет браузер в приложение Telegram."""
+    if not BotConfig.telegram_login_enabled:
+        return RedirectResponse("/", status_code=303)
+
     username = _bot_username()
     if not username:
         return RedirectResponse("/?auth_error=setup", status_code=303)
