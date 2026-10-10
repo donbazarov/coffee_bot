@@ -1817,6 +1817,121 @@ async function markAnnouncementsRead() {
   } catch (error) { showToast(error.message); }
 }
 
+/* --- Push на устройстве -------------------------------------------------
+   Ключ VAPID берём у сервера, подписку отдаём туда же. На телефоне уведомления
+   приходят только в установленное приложение (iOS 16.4+), поэтому про это честно
+   написано в интерфейсе. */
+
+const pushState = { key: '', supported: false, subscribed: false, devices: 0 };
+
+function setPushStatus(message) {
+  const node = document.querySelector('#push-status');
+  if (node) node.textContent = message;
+}
+
+function urlBase64ToUint8Array(base64) {
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
+}
+
+/* navigator.serviceWorker.ready не разрешается, если воркер не зарегистрирован
+   (например, во встроенном браузере) — поэтому с ограничением по времени. */
+async function pushRegistration() {
+  if (!('serviceWorker' in navigator)) return null;
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((resolve) => setTimeout(() => resolve(null), 2500)),
+  ]);
+}
+
+function renderPushState() {
+  const enableButton = document.querySelector('#push-enable');
+  const disableButton = document.querySelector('#push-disable');
+  const testButton = document.querySelector('#push-test');
+  if (pushState.subscribed) {
+    setPushStatus(pushState.devices > 1
+      ? `Уведомления включены · устройств: ${pushState.devices}`
+      : 'Уведомления включены на этом устройстве');
+  } else if (!pushState.supported) {
+    setPushStatus('Этот браузер не поддерживает уведомления');
+  } else {
+    setPushStatus('Уведомления на этом устройстве выключены');
+  }
+  if (enableButton) enableButton.hidden = pushState.subscribed || !pushState.supported;
+  if (disableButton) disableButton.hidden = !pushState.subscribed;
+  if (testButton) testButton.hidden = !pushState.subscribed;
+}
+
+async function refreshPushState() {
+  try {
+    const data = await api('/api/push/key');
+    pushState.key = data.key || '';
+    pushState.devices = Number(data.devices || 0);
+  } catch (error) {
+    setPushStatus(error.message);
+    return;
+  }
+  pushState.supported = window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window;
+  const registration = pushState.supported ? await pushRegistration() : null;
+  if (!registration) pushState.supported = false;
+  try {
+    const subscription = registration ? await registration.pushManager.getSubscription() : null;
+    pushState.subscribed = Boolean(subscription);
+  } catch (error) {
+    pushState.subscribed = false;
+  }
+  renderPushState();
+}
+
+async function enablePush() {
+  if (!pushState.supported) { setPushStatus('Этот браузер не поддерживает уведомления'); return; }
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') { setPushStatus('Разрешение на уведомления не выдано'); return; }
+    const registration = await pushRegistration();
+    if (!registration) { setPushStatus('Служебный воркер не готов — обновите страницу'); return; }
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(pushState.key),
+    });
+    await api('/api/push/subscribe', { method: 'POST', body: JSON.stringify(subscription.toJSON()) });
+    await refreshPushState();
+    showToast('Уведомления включены на этом устройстве');
+  } catch (error) {
+    setPushStatus(error.message);
+  }
+}
+
+async function disablePush() {
+  try {
+    const registration = await pushRegistration();
+    const subscription = registration ? await registration.pushManager.getSubscription() : null;
+    if (subscription) {
+      await api('/api/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: subscription.endpoint }) });
+      await subscription.unsubscribe();
+    }
+    await refreshPushState();
+    showToast('Уведомления на этом устройстве отключены');
+  } catch (error) {
+    setPushStatus(error.message);
+  }
+}
+
+/* Ссылка из уведомления: открываем нужный раздел и — если указан — анонс. */
+function applyDeepLink(url) {
+  try {
+    const params = new URL(url, window.location.origin).searchParams;
+    const announcement = params.get('announcement');
+    const view = params.get('view');
+    if (announcement) openAnnouncementCard(Number(announcement));
+    else if (view) setView(view);
+    else return;
+    // Убираем служебные параметры из адреса, чтобы они не тянулись за навигацией.
+    window.history.replaceState({}, '', window.location.pathname);
+  } catch (error) { /* некорректная ссылка — просто остаёмся на месте */ }
+}
+
 /* Открытие раздела = «я посмотрел ленту»: снимаем счётчик, но показываем
    непрочитанное в самом списке, чтобы не терять контекст. */
 async function openAnnouncements() {
@@ -1990,6 +2105,17 @@ function setupAnnouncements() {
   });
   document.querySelectorAll('#announcements-feed-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => feedDialog?.close()));
   feedDialog?.addEventListener('click', (event) => { if (event.target === feedDialog) feedDialog.close(); });
+
+  document.querySelector('#push-enable')?.addEventListener('click', enablePush);
+  document.querySelector('#push-disable')?.addEventListener('click', disablePush);
+  document.querySelector('#push-test')?.addEventListener('click', async () => {
+    setPushStatus('Отправляем…');
+    try {
+      const result = await api('/api/push/test', { method: 'POST' });
+      setPushStatus(`Уведомление отправлено на устройств: ${result.delivered}`);
+    } catch (error) { setPushStatus(error.message); }
+  });
+  refreshPushState();
 }
 
 function setupDashboard() {
@@ -2334,6 +2460,8 @@ function setupServiceWorker() {
     // Сервер вернул другую страницу входа (сессия истекла или наоборот) —
     // кеш показал бы не тот экран, поэтому перезагружаемся.
     if (event.data === 'reload') window.location.reload();
+    // Тап по push-уведомлению просит открыть раздел или конкретный анонс.
+    if (event.data && event.data.type === 'navigate') applyDeepLink(event.data.url);
   });
   navigator.serviceWorker.register(`/sw.js?v=${version}`, { scope: '/' }).catch(() => {
     // Не получилось — сайт работает как раньше, просто без мгновенного старта.
@@ -2342,5 +2470,7 @@ function setupServiceWorker() {
 
 setupServiceWorker();
 
-if (document.body.dataset.authenticated === 'true') setupDashboard();
-else setupTelegramWait();
+if (document.body.dataset.authenticated === 'true') {
+  setupDashboard();
+  applyDeepLink(window.location.href);
+} else setupTelegramWait();

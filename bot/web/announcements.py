@@ -344,21 +344,26 @@ def update(
     return True
 
 
-def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str, actor_id: int | None = None) -> None:
+def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str,
+                            actor_id: int | None = None) -> dict[str, Any] | None:
     """Создаёт записи ленты по итогам сохранения графика.
 
+    Возвращает созданную запись (для рассылки уведомлений) либо None.
     Вызывается из запроса сохранения, поэтому любые ошибки только логируются:
     лента не имеет права сломать публикацию графика.
     """
     try:
         if result.get("change_type") == "swap":
             lines = result.get("swap_lines") or []
-            if lines:
-                create(engine, "swap", f"Замены · {actor}", "\n".join(lines), actor_id, actor)
-            return
+            if not lines:
+                return None
+            title = f"Замены · {actor}"
+            body = "\n".join(lines)
+            return {"id": create(engine, "swap", title, body, actor_id, actor),
+                    "category": "swap", "title": title, "body": body}
 
         if not result.get("published"):
-            return
+            return None
 
         snapshots = result.get("snapshots") or []
         period_start, period_end = result.get("period_start"), result.get("period_end")
@@ -368,7 +373,7 @@ def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str, 
             title = "График смен опубликован"
         captions = [shot.get("caption") for shot in snapshots if shot.get("caption")]
         body = "\n".join(captions) if captions else f"Снимков: {len(snapshots)}"
-        create(
+        new_id = create(
             engine,
             "schedule",
             title,
@@ -377,8 +382,10 @@ def publish_schedule_events(engine: Engine, result: dict[str, Any], actor: str, 
             actor,
             {"snapshots": [shot.get("url") for shot in snapshots if shot.get("url")]},
         )
+        return {"id": new_id, "category": "schedule", "title": title, "body": body}
     except Exception as error:  # noqa: BLE001 — лента не должна ломать сохранение графика
         logger.warning("Не удалось создать анонс: %s", error)
+        return None
 
 
 def list_for_user(

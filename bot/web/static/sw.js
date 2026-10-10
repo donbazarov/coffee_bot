@@ -156,3 +156,42 @@ function withTimeout(promise, ms) {
     );
   });
 }
+
+/* — push-уведомления ———————————————————————————————————————————————————— */
+
+/* Показываем уведомление о новом анонсе. Payload приходит от сервера
+   (см. bot/web/push.py::notification_payload). */
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (error) {
+    payload = { title: 'НЕФТЬ', body: event.data ? event.data.text() : '' };
+  }
+  const options = {
+    body: payload.body || '',
+    icon: '/static/icons/favicon-96x96.png',
+    badge: '/static/icons/favicon-96x96.png',
+    tag: payload.tag || 'neft-announcement',
+    data: { url: payload.url || '/?view=announcements' },
+  };
+  event.waitUntil(self.registration.showNotification(payload.title || 'НЕФТЬ · Анонс', options));
+});
+
+/* Тап по уведомлению: фокусируем уже открытое окно и просим его открыть
+   нужный раздел; если окна нет — открываем новое. */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/?view=announcements';
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of windows) {
+      if (client.url.startsWith(self.location.origin)) {
+        await client.focus();
+        client.postMessage({ type: 'navigate', url: target });
+        return;
+      }
+    }
+    await self.clients.openWindow(target);
+  })());
+});

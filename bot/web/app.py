@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import access_code, announcements, avatars, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
@@ -187,6 +187,7 @@ def migrate_database():
     initialize_calendar_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
+    push.initialize_schema(engine)
     # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
     # ручной работы наставника по каждому человеку.
     access_code.ensure_active_codes(engine)
@@ -741,9 +742,11 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
     # которая заменяет каналы: снимки графика и строки замен видны в приложении.
     if result.get("swap_lines") or result.get("published"):
         await run_in_threadpool(telegram_publish.publish_schedule_events, engine, result, user["name"])
-        await run_in_threadpool(
+        created = await run_in_threadpool(
             announcements.publish_schedule_events, engine, result, user["name"], user["id"]
         )
+        if created:
+            notify_announcement_push(created, user["id"])
     return result
 
 
@@ -756,6 +759,59 @@ def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
 # --------------------------------------------------------------------------- #
 # Лента анонсов: расписание, замены, события и общая информация
 # --------------------------------------------------------------------------- #
+
+def notify_announcement_push(announcement: dict[str, Any], author_id: int | None) -> None:
+    """Рассылает уведомление в фоне: push не должен тормозить ответ на публикацию."""
+    try:
+        threading.Thread(
+            target=push.notify_category,
+            args=(engine, str(announcement.get("category") or ""), announcement, author_id),
+            daemon=True,
+        ).start()
+    except RuntimeError:
+        pass
+
+
+@app.get("/api/push/key")
+def push_key(user: dict[str, Any] = Depends(require_user)):
+    """Публичный VAPID-ключ и число устройств, подписанных этим сотрудником."""
+    return {"key": push.public_key(engine), "devices": len(push.user_endpoints(engine, user["id"]))}
+
+
+@app.post("/api/push/subscribe")
+async def push_subscribe(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    if not push.save_subscription(engine, user["id"], payload, request.headers.get("user-agent", "")):
+        raise HTTPException(status_code=422, detail="Некорректная подписка устройства")
+    return {"ok": True, "devices": len(push.user_endpoints(engine, user["id"]))}
+
+
+@app.delete("/api/push/subscribe")
+async def push_unsubscribe(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    push.delete_subscription(engine, user["id"], str(payload.get("endpoint") or ""))
+    return {"ok": True, "devices": len(push.user_endpoints(engine, user["id"]))}
+
+
+@app.post("/api/push/test")
+def push_test(user: dict[str, Any] = Depends(require_csrf)):
+    """Проверка доставки: шлём уведомление самому себе.
+
+    Это ещё и диагностика сети: если push-сервис с сервера недоступен, человек
+    увидит это сразу, а не будет гадать, почему уведомлений нет.
+    """
+    if not push.user_endpoints(engine, user["id"]):
+        raise HTTPException(status_code=409, detail="Это устройство ещё не подписано на уведомления")
+    delivered = push.send_to_user(engine, user["id"], {
+        "title": "НЕФТЬ · проверка уведомлений",
+        "body": "Если вы это видите, уведомления работают.",
+        "url": "/?view=announcements",
+        "tag": "push-test",
+    })
+    if not delivered:
+        raise HTTPException(status_code=502, detail="Push-сервис не принял уведомление — проверьте логи сервиса")
+    return {"ok": True, "delivered": delivered}
+
 
 @app.get("/api/announcements")
 def list_announcements(category: str | None = None, limit: int = 30, user: dict[str, Any] = Depends(require_user)):
@@ -812,6 +868,9 @@ async def create_announcement(request: Request, user: dict[str, Any] = Depends(r
     announcement_id = announcements.create(
         engine, category, title, body, user["id"], user["name"], None, start_at,
         bool(payload.get("pinned")),
+    )
+    notify_announcement_push(
+        {"id": announcement_id, "category": category, "title": title, "body": body}, user["id"]
     )
     return {"ok": True, "id": announcement_id}
 

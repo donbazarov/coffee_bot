@@ -667,6 +667,8 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .chip-toggle .icon { opacity: .4; }
 .chip-toggle.is-selected { color: var(--text); }
 .chip-toggle.is-selected .icon { opacity: 1; color: var(--accent); }
+.push-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 10px; }
+.push-status { color: var(--muted); font-size: 11px; }
 
 .announcements-panel { margin: 0 0 34px; padding: 19px 21px 16px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .announcement-list { display: grid; gap: 10px; }

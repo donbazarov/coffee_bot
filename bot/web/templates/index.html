@@ -177,7 +177,14 @@
         <section class="panel settings-panel" id="announcements-bell-panel">
           <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Что меня уведомляет</h3></div><span class="panel-index" id="announcements-unread-label">—</span></div>
           <div class="chip-row" id="announcements-bell" role="group" aria-label="Категории уведомлений"></div>
-          <p class="settings-hint">Отмеченные категории — это всё, что вас уведомляет: счётчик на иконке «Анонсы» и попадание анонсов с датой в календарь. Сам список показывает всё в любом случае.</p>
+          <div class="push-row">
+            <span class="push-status" id="push-status" role="status">Проверяем устройство…</span>
+            <button class="button button-quiet" type="button" id="push-enable">Включить на этом устройстве</button>
+            <button class="button button-quiet" type="button" id="push-disable" hidden>Отключить</button>
+            <button class="button button-quiet" type="button" id="push-test" hidden>Проверить</button>
+          </div>
+          <p class="settings-hint">Отмеченные категории — это всё, что вас уведомляет: счётчик на иконке «Анонсы», push на подписанные устройства и попадание анонсов с датой в календарь. Сам список показывает всё.
+            {% if user.role in ['senior', 'mentor'] %}Проверить доставку можно кнопкой выше: если push-сервис недоступен с сервера, увидите ошибку сразу.{% endif %}</p>
         </section>
         <div class="chip-row" id="announcements-filters" role="group" aria-label="Фильтр ленты"></div>
         <div class="announcement-list" id="announcements-list"></div>
