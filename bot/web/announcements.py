@@ -19,10 +19,14 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.announcements")
 
@@ -32,12 +36,17 @@ CATEGORIES = {
     "event": "Событие",
     "general": "Общая информация",
 }
-# Что включено в колокольчике по умолчанию: важное для работы, без «болталки».
+# Системные категории создаёт сам сервер (при сохранении графика), их нельзя
+# переименовать или убрать из настроек.
+SYSTEM_CATEGORIES = ("schedule", "swap")
+# Что включено в уведомлениях по умолчанию: важное для работы, без «болталки».
 DEFAULT_NOTIFY = ("schedule", "swap")
 
 MAX_TITLE = 120
 MAX_BODY = 2000
 MAX_LIST = 100
+# Формат хранения даты анонса (локальное время точки); совпадает с SQLite-строкой.
+STAMP = "%Y-%m-%d %H:%M"
 
 
 def initialize_schema(engine: Engine) -> None:
@@ -54,6 +63,9 @@ def initialize_schema(engine: Engine) -> None:
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
+        if engine.dialect.name == "sqlite":
+            # Дата анонса появилась позже самой ленты — докидываем в живые базы.
+            _ensure_columns(connection, "web_announcements", {"start_at": "TEXT"})
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_web_announcements_category
             ON web_announcements (category, created_at)
@@ -92,6 +104,42 @@ def _payload(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _local_iso(value: Any) -> str:
+    """«2026-10-12 15:00» → «2026-10-12T15:00:00»: браузеры читают это как локальное время."""
+    stamp = str(value or "").strip()
+    if not stamp:
+        return ""
+    normalized = stamp.replace(" ", "T")
+    return normalized if "T" in normalized and len(normalized) > 16 else normalized + ":00"
+
+
+def normalize_start_at(value: Any) -> str | None:
+    """Принимает «2026-10-12T15:00» из <input type="datetime-local"> либо пустое."""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        moment = datetime.fromisoformat(raw)
+    except ValueError as error:
+        raise ValueError("Дата и время должны быть в формате ГГГГ-ММ-ДД ЧЧ:ММ") from error
+    return moment.strftime(STAMP)
+
+
+def categories_payload() -> list[dict[str, Any]]:
+    """Категории для интерфейса: системные создаёт код, их нельзя настраивать."""
+    return [
+        {"key": key, "label": label, "system": key in SYSTEM_CATEGORIES}
+        for key, label in CATEGORIES.items()
+    ]
+
+
+def _ics_escape(value: Any) -> str:
+    """Экранирование по RFC 5545: запятые, точки с запятой и переводы строк."""
+    text_value = str(value or "")
+    text_value = text_value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
+    return text_value.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
+
+
 def create(
     engine: Engine,
     category: str,
@@ -100,13 +148,14 @@ def create(
     actor_id: int | None = None,
     actor_name: str = "",
     payload: dict[str, Any] | None = None,
+    start_at: str | None = None,
 ) -> int:
     if category not in CATEGORIES:
         raise ValueError(f"Неизвестная категория анонса: {category}")
     with engine.begin() as connection:
         result = connection.execute(text("""
-            INSERT INTO web_announcements (category, title, body, actor_user_id, actor_name, payload)
-            VALUES (:category, :title, :body, :actor_id, :actor_name, :payload)
+            INSERT INTO web_announcements (category, title, body, actor_user_id, actor_name, payload, start_at)
+            VALUES (:category, :title, :body, :actor_id, :actor_name, :payload, :start_at)
         """), {
             "category": category,
             "title": title.strip()[:MAX_TITLE] or CATEGORIES[category],
@@ -114,6 +163,7 @@ def create(
             "actor_id": actor_id,
             "actor_name": (actor_name or "").strip() or None,
             "payload": json.dumps(payload, ensure_ascii=False) if payload else None,
+            "start_at": normalize_start_at(start_at),
         })
         return int(result.lastrowid or 0)
 
@@ -165,7 +215,7 @@ def list_for_user(
     filter_sql = "WHERE a.category = :category" if category in CATEGORIES else ""
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
-            SELECT a.id, a.category, a.title, a.body, a.actor_name, a.payload, a.created_at,
+            SELECT a.id, a.category, a.title, a.body, a.actor_name, a.payload, a.created_at, a.start_at,
                    CASE WHEN r.user_id IS NULL THEN 0 ELSE 1 END AS is_read
             FROM web_announcements AS a
             LEFT JOIN web_announcement_reads AS r
@@ -184,11 +234,59 @@ def list_for_user(
             "body": row["body"] or "",
             "actor": row["actor_name"] or "",
             "created_at": _iso(row["created_at"]),
+            "start_at": _local_iso(row["start_at"]),
             "is_read": bool(row["is_read"]),
             "payload": _payload(row["payload"]),
         }
         for row in rows
     ]
+
+
+def build_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
+    """ICS-фид анонсов с датой.
+
+    В фид попадают только категории, включённые в уведомлениях: уведомления —
+    единая настройка для счётчика, push и календаря.
+    """
+    enabled = set(get_prefs(engine, user_id))
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT id, category, title, body, start_at
+            FROM web_announcements
+            WHERE start_at IS NOT NULL AND start_at != ''
+            ORDER BY start_at
+        """)).mappings().all()
+
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    lines = [
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Coffee Quality//Announcements//RU",
+        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+        "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
+        "X-PUBLISHED-TTL:PT1H",
+        "X-WR-CALNAME:Анонсы — НЕФТЬ",
+    ]
+    for row in rows:
+        if row["category"] not in enabled:
+            continue
+        try:
+            start_local = datetime.strptime(str(row["start_at"]).strip(), STAMP).replace(tzinfo=user_timezone)
+        except ValueError:
+            continue
+        start_utc = start_local.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        end_utc = (start_local + timedelta(hours=1)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        lines.extend([
+            "BEGIN:VEVENT",
+            f"UID:coffee-announcement-{row['id']}@coffee-quality.local",
+            f"DTSTAMP:{now}",
+            f"DTSTART:{start_utc}",
+            f"DTEND:{end_utc}",
+            f"SUMMARY:{_ics_escape(row['title'])}",
+            f"CATEGORIES:{_ics_escape(CATEGORIES.get(row['category'], row['category']))}",
+            f"DESCRIPTION:{_ics_escape(row['body'])}",
+            "END:VEVENT",
+        ])
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(lines) + "\r\n"
 
 
 def unread_counts(engine: Engine, user_id: int) -> dict[str, Any]:

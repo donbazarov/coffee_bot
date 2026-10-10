@@ -21,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
 from bot.web import access_code, announcements, avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
-from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
+from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
     apply_schedule_changes,
@@ -766,15 +766,35 @@ def list_announcements(category: str | None = None, limit: int = 30, user: dict[
             engine, user["id"], None if category in (None, "all") else category, limit
         ),
         "unread": announcements.unread_counts(engine, user["id"]),
-        "categories": [{"key": key, "label": label} for key, label in announcements.CATEGORIES.items()],
+        "categories": announcements.categories_payload(),
         "can_publish": user["role"] in {"senior", "mentor"},
     }
+
+
+@app.get("/api/announcements/feed-link")
+def announcements_feed_link(request: Request, user: dict[str, Any] = Depends(require_user)):
+    """Личная ссылка на календарь анонсов — отдельная от календаря смен."""
+    token = create_announcements_token(user["id"])
+    https_url = str(request.url_for("announcements_feed", token=token))
+    return {
+        "https_url": https_url,
+        "webcal_url": https_url.replace("https://", "webcal://", 1).replace("http://", "webcal://", 1),
+    }
+
+
+@app.get("/announcements/feed/{token}.ics", name="announcements_feed")
+def announcements_feed(token: str):
+    user_id = read_announcements_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=404, detail="Календарь не найден")
+    content = announcements.build_feed(engine, user_id, app_timezone())
+    return Response(content, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "private, no-cache"})
 
 
 @app.post("/api/announcements")
 async def create_announcement(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
     payload = await _read_json_object(request)
-    if set(payload) - {"category", "title", "body"}:
+    if set(payload) - {"category", "title", "body", "start_at"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля анонса")
     category = str(payload.get("category") or "")
     if category not in announcements.CATEGORIES:
@@ -785,7 +805,14 @@ async def create_announcement(request: Request, user: dict[str, Any] = Depends(r
     body = str(payload.get("body") or "").strip()
     if len(body) > announcements.MAX_BODY:
         raise HTTPException(status_code=422, detail="Текст слишком длинный")
-    return {"ok": True, "id": announcements.create(engine, category, title, body, user["id"], user["name"])}
+    try:
+        start_at = announcements.normalize_start_at(payload.get("start_at"))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    announcement_id = announcements.create(
+        engine, category, title, body, user["id"], user["name"], None, start_at
+    )
+    return {"ok": True, "id": announcement_id}
 
 
 @app.delete("/api/announcements/{announcement_id}")

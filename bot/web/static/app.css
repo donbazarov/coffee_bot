@@ -653,32 +653,68 @@ button.calendar-event:hover { filter: brightness(1.25); }
 /* --- Лента анонсов ------------------------------------------------------- */
 .nav-badge { position: absolute; top: -4px; right: -7px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font-size: 10px; line-height: 16px; text-align: center; font-family: var(--mono); }
 .nav-icon { position: relative; }
-.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.chip { padding: 6px 13px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
+.heading-with-icon { display: flex; align-items: center; gap: 8px; }
+.heading-with-icon .icon { width: 18px; height: 18px; color: var(--accent); }
+
+/* Категории листаются в одну строку — и на телефоне тоже, без переноса. */
+.chip-row { display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 0 16px; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.chip-row::-webkit-scrollbar { display: none; }
+.chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 13px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
 .chip:hover { border-color: var(--accent); color: var(--text); }
 .chip.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
-.announcement-list { display: grid; gap: 12px; }
-.announcement { padding: 14px 16px; border: 1px solid var(--line); border-left-width: 2px; background: var(--panel); }
-.announcement.is-unread { border-left-color: var(--accent); background: var(--accent-soft); }
+.chip .icon { width: 13px; height: 13px; }
+.chip-toggle { color: var(--muted); }
+.chip-toggle .icon { opacity: .4; }
+.chip-toggle.is-selected { color: var(--text); }
+.chip-toggle.is-selected .icon { opacity: 1; color: var(--accent); }
+
+.announcements-panel { margin: 0 0 34px; padding: 19px 21px 16px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+.announcement-list { display: grid; gap: 10px; }
+.announcement { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-left-width: 2px; background: var(--surface); }
+.announcement.is-unread { border-left-color: var(--accent); background: linear-gradient(140deg, var(--accent-soft), transparent 70%), var(--surface); }
 .announcement.chip-tone-schedule { border-left-color: var(--accent); }
 .announcement.chip-tone-swap { border-left-color: #59a07a; }
 .announcement.chip-tone-event { border-left-color: #c9a227; }
 .announcement.chip-tone-general { border-left-color: #7b8794; }
-.announcement-top { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.announcement-chip { padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-soft); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-.announcement-meta { color: var(--muted); font-size: 11px; }
-.announcement-title { margin: 9px 0 0; font-size: 15px; font-weight: 600; }
-.announcement-body { margin: 7px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.65; white-space: pre-line; }
+.announcement-top { display: flex; align-items: center; flex-wrap: nowrap; gap: 9px; overflow: hidden; }
+.announcement-chip { flex: 0 0 auto; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--text-soft); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.announcement-when { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: 10px; }
+.announcement-when .icon { width: 12px; height: 12px; }
+.announcement-meta { min-width: 0; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.announcement-title { margin: 9px 0 0; font-size: 15px; font-weight: 600; overflow-wrap: anywhere; }
+.announcement-body { margin: 7px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
 .announcement-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 .announcement-gallery img { width: 108px; height: 76px; object-fit: cover; border: 1px solid var(--line); }
 .announcement-remove { margin-top: 10px; color: var(--muted); }
 .announcement-remove:hover { color: var(--accent); }
+
+/* Лента на главной — компактная: строка на метаданные, строка на заголовок
+   и две строки на текст, лишнее обрезается многоточием. */
+.announcement-list.is-compact { gap: 8px; }
+.announcement-list.is-compact .announcement { padding: 11px 13px; }
+.announcement-list.is-compact .announcement-title,
+.announcement-list.is-compact .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.announcement-list.is-compact .announcement-title { -webkit-line-clamp: 1; margin-top: 6px; font-size: 14px; }
+.announcement-list.is-compact .announcement-body { -webkit-line-clamp: 2; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
+.announcement-list.is-compact .announcement-gallery,
+.announcement-list.is-compact .announcement-remove { display: none; }
 .announcement-list.is-compact .announcement:nth-child(n+4) { display: none; }
 @media (min-width: 1100px) {
   .announcement-list.is-compact .announcement:nth-child(n+4) { display: block; }
   .announcement-list.is-compact .announcement:nth-child(n+6) { display: none; }
 }
-.user-dialog textarea { min-height: 84px; padding: 10px 12px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); font-family: inherit; font-size: 14px; resize: vertical; }
+
+/* Категории в панели управления */
+.announcement-categories { display: grid; gap: 8px; margin-bottom: 12px; }
+.announcement-category { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }
+.announcement-category span { color: var(--dim); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.announcement-category.is-system { border-left: 2px solid var(--accent); }
+
+/* Поле ввода в диалоге: textarea выпадала из общего правила для input/select,
+   оставалась строчным элементом — метка вставала сбоку, а поле было крошечным. */
+.user-dialog textarea { display: block; width: 100%; min-height: 96px; margin-top: 7px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 0; background: var(--field-bg); color: var(--text); font-family: inherit; font-size: 14px; line-height: 1.6; resize: vertical; }
+.user-dialog textarea::placeholder { color: var(--dim); }
+.user-dialog .optional { color: var(--dim); }
 .login-alt { max-width: 430px; margin-top: 32px; padding-top: 15px; border-top: 1px solid var(--line); }
 .login-alt summary { color: var(--dim); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
 .login-alt summary:hover { color: var(--muted); }

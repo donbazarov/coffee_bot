@@ -173,23 +173,25 @@ def read_session(cookie_value: str | None) -> dict[str, Any] | None:
         return None
 
 
-def create_calendar_token(user_id: int) -> str:
+def _scoped_token(user_id: int, scope: str) -> str:
+    """Подписанная ссылка на фид. `scope` разделяет пространства токенов
+    (смены и анонсы), чтобы ссылка одного фида не открывала другой."""
     key = _session_key()
     if key is None:
         raise RuntimeError("Не задан WEB_SESSION_SECRET — нечем подписывать ссылки")
     payload = f"{user_id}.{int(time.time()) + CALENDAR_TOKEN_MAX_AGE}.{os.urandom(16).hex()}"
     encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
-    signature = hmac.new(key, f"calendar:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
+    signature = hmac.new(key, f"{scope}:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
     return f"{encoded}.{signature}"
 
 
-def read_calendar_token(token: str) -> int | None:
+def _read_scoped_token(token: str, scope: str) -> int | None:
     key = _session_key()
     if key is None:
         return None
     try:
         encoded, supplied_signature = token.rsplit(".", 1)
-        expected_signature = hmac.new(key, f"calendar:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
+        expected_signature = hmac.new(key, f"{scope}:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected_signature, supplied_signature):
             return None
         padded = encoded + "=" * (-len(encoded) % 4)
@@ -199,3 +201,20 @@ def read_calendar_token(token: str) -> int | None:
         return int(user_id)
     except (ValueError, TypeError, UnicodeDecodeError):
         return None
+
+
+def create_calendar_token(user_id: int) -> str:
+    return _scoped_token(user_id, "calendar")
+
+
+def read_calendar_token(token: str) -> int | None:
+    return _read_scoped_token(token, "calendar")
+
+
+def create_announcements_token(user_id: int) -> str:
+    """Ссылка на фид анонсов — отдельная от фида смен."""
+    return _scoped_token(user_id, "announcements")
+
+
+def read_announcements_token(token: str) -> int | None:
+    return _read_scoped_token(token, "announcements")

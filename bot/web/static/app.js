@@ -1066,7 +1066,7 @@ function setView(name) {
   if (name === 'team') loadUsers();
   if (name === 'announcements') openAnnouncements();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
-  if (name === 'control' && managerRole) loadStoriesAdmin();
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
   closeDrawer();
 }
 
@@ -1578,9 +1578,12 @@ function announcementMarkup(item, options = {}) {
   const remove = options.manage && announcementsState.canPublish
     ? `<button class="text-button announcement-remove" type="button" data-announcement-delete="${item.id}">Удалить</button>`
     : '';
+  const when = item.start_at
+    ? `<span class="announcement-when"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg>${escapeHtml(announcementTime(item.start_at))}</span>`
+    : '';
   return `
     <article class="announcement chip-tone-${escapeHtml(item.category)} ${item.is_read ? '' : 'is-unread'}" data-category="${escapeHtml(item.category)}">
-      <header class="announcement-top"><span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
+      <header class="announcement-top"><span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span>${when}<span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
       <h4 class="announcement-title">${escapeHtml(item.title)}</h4>
       ${item.body ? `<p class="announcement-body">${escapeHtml(item.body)}</p>` : ''}
       ${gallery}${remove}
@@ -1631,6 +1634,15 @@ function renderAnnouncements() {
   renderAnnouncementBadge();
 }
 
+function renderAnnouncementCategories() {
+  const node = document.querySelector('#announcements-categories');
+  if (!node) return;
+  const categories = announcementsState.categories || [];
+  node.innerHTML = categories.length
+    ? categories.map((item) => `<article class="announcement-category ${item.system ? 'is-system' : ''}"><strong>${escapeHtml(item.label)}</strong><span>${item.system ? 'системная' : 'ручная'}</span></article>`).join('')
+    : '<p class="empty-state">Категории не загружены</p>';
+}
+
 async function loadAnnouncements() {
   try {
     const data = await api('/api/announcements?limit=50');
@@ -1639,6 +1651,7 @@ async function loadAnnouncements() {
     announcementsState.categories = data.categories || [];
     announcementsState.canPublish = Boolean(data.can_publish);
     renderAnnouncements();
+    renderAnnouncementCategories();
   } catch (error) { showToast(error.message); }
 }
 
@@ -1712,6 +1725,30 @@ function setupAnnouncements() {
   });
   document.querySelectorAll('#announcement-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
   dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+
+  // Календарь анонсов: отдельная ссылка от личного календаря смен.
+  const feedDialog = document.querySelector('#announcements-feed-dialog');
+  document.querySelector('#announcements-subscribe')?.addEventListener('click', async () => {
+    try {
+      const links = await api('/api/announcements/feed-link');
+      const open = document.querySelector('#announcements-webcal-open');
+      if (open) open.href = links.webcal_url;
+      const copy = document.querySelector('#announcements-feed-copy');
+      if (copy) copy.dataset.url = links.https_url;
+      const status = document.querySelector('#announcements-feed-status');
+      if (status) status.textContent = '';
+      feedDialog?.showModal();
+    } catch (error) { showToast(error.message); }
+  });
+  document.querySelector('#announcements-feed-copy')?.addEventListener('click', async (event) => {
+    const status = document.querySelector('#announcements-feed-status');
+    try {
+      await navigator.clipboard.writeText(event.currentTarget.dataset.url);
+      if (status) status.textContent = 'Ссылка скопирована';
+    } catch { if (status) status.textContent = event.currentTarget.dataset.url || ''; }
+  });
+  document.querySelectorAll('#announcements-feed-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => feedDialog?.close()));
+  feedDialog?.addEventListener('click', (event) => { if (event.target === feedDialog) feedDialog.close(); });
 }
 
 function setupDashboard() {
