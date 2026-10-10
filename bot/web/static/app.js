@@ -164,7 +164,8 @@ function renderUsers(users) {
       <span class="user-detail user-iiko">${user.iiko_id ? `Iiko ${escapeHtml(user.iiko_id)}` : 'Iiko не указан'}</span>
       <span class="user-detail user-telegram">${user.telegram_username ? `@${escapeHtml(user.telegram_username)}` : 'Telegram не привязан'}</span>
       <span class="user-detail user-role">${roleNames[user.role] || escapeHtml(user.role)}</span>
-      <div class="user-actions"><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте роль через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает роль' : 'Выдать доступ'}</button></div>
+      <span class="user-detail user-code">${user.access_code ? `Код ${escapeHtml(user.access_code)}` : 'Кода нет'}</span>
+      <div class="user-actions"><button class="user-edit" type="button" data-rotate-code>Новый код</button><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте роль через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает роль' : 'Выдать доступ'}</button></div>
     </article>`; }).join('');
 }
 
@@ -1460,6 +1461,27 @@ function setupProfile() {
     try { await api('/api/profile/avatar', { method: 'DELETE' }); window.location.reload(); }
     catch (error) { setNote(error.message); }
   });
+
+  // Код доступа: смена не выкидывает текущее устройство (session_epoch не растёт),
+  // а «выйти на всех устройствах» — наоборот, гасит все остальные сессии.
+  const codeNode = document.querySelector('#access-code-value');
+  const codeNote = document.querySelector('#access-code-note');
+  const setCodeNote = (message) => { if (codeNote) codeNote.textContent = message; };
+  document.querySelector('#access-code-refresh')?.addEventListener('click', async () => {
+    setCodeNote('');
+    try {
+      const result = await api('/api/profile/code', { method: 'POST' });
+      if (codeNode) codeNode.textContent = result.code;
+      setCodeNote('Новый код сохранён. Старый больше не действует.');
+    } catch (error) { setCodeNote(error.message); }
+  });
+  document.querySelector('#logout-all')?.addEventListener('click', async () => {
+    setCodeNote('');
+    try {
+      await api('/api/session/logout-all', { method: 'POST' });
+      setCodeNote('Остальные устройства вышли из системы.');
+    } catch (error) { setCodeNote(error.message); }
+  });
 }
 
 /* --- Сэндвич-drawer ------------------------------------------------------ */
@@ -1577,6 +1599,16 @@ function setupDashboard() {
   });
 
   document.querySelector('#user-list')?.addEventListener('click', async (event) => {
+    const rotateButton = event.target.closest('[data-rotate-code]');
+    if (rotateButton) {
+      const row = rotateButton.closest('[data-user-id]');
+      try {
+        const result = await api(`/api/users/${row.dataset.userId}`, { method: 'PATCH', body: JSON.stringify({ regenerate_code: true }) });
+        await loadUsers();
+        showToast(`Новый код доступа: ${result.code}`);
+      } catch (error) { showToast(error.message); }
+      return;
+    }
     const editButton = event.target.closest('[data-edit]');
     if (editButton) {
       const row = editButton.closest('[data-user-id]');

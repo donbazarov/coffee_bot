@@ -77,9 +77,23 @@
       {% endif %}
 
       {% if not bot_login_enabled and not telegram_login_enabled %}
-      {# Telegram-вход выключен (AUTH_TELEGRAM_ENABLED=0); вход по коду доступа — отдельным релизом. #}
-      <p class="setup-notice">Обновляем способ входа — он появится здесь. Пока обратитесь к наставнику.</p>
+      {# Штатный вход: Iiko ID (или @username) + код доступа. Обычная форма, без JS. #}
+      <form class="login-actions login-form" method="post" action="/auth/login" autocomplete="off">
+        <label class="account-field">Iiko ID или @username
+          <span class="account-field-row">
+            <input name="login" inputmode="numeric" autocomplete="off" autocapitalize="off" spellcheck="false" required placeholder="1042">
+          </span>
+        </label>
+        <label class="account-field">Код доступа
+          <span class="account-field-row">
+            <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="4" pattern="[0-9]{4}" required placeholder="0000">
+          </span>
+        </label>
+        <button class="button button-primary button-login" type="submit">Войти</button>
+        <p class="login-hint">Код выдаёт наставник. Свой код можно поменять в личном кабинете.</p>
+      </form>
       {% endif %}
+      {% if login_error %}<p class="login-error" role="alert">{{ login_error }}</p>{% endif %}
       {% if auth_error %}<p class="login-error" role="alert">{{ auth_error }}</p>{% endif %}
     </section>
     <footer class="login-footer"><span>ВХОД ДЛЯ СОТРУДНИКОВ</span></footer>
@@ -198,6 +212,19 @@
             </label>
             <p class="account-note" id="account-note" role="status"></p>
           </div>
+        </section>
+        <section class="panel settings-panel" id="access-code-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ВХОД</p><h3>Код доступа</h3></div></div>
+          <div class="appearance-group">
+            <strong>Ваш код</strong>
+            <small>Вход на сайте: ваш Iiko ID и этот код. Код можно менять сколько угодно — вход на этом устройстве сохранится.</small>
+            <div class="account-field-row code-row">
+              <span class="code-chip" id="access-code-value">{{ user.access_code or '—' }}</span>
+              <button class="button button-quiet" type="button" id="access-code-refresh">Сменить код</button>
+              <button class="button button-quiet" type="button" id="logout-all">Выйти на всех устройствах</button>
+            </div>
+          </div>
+          <p class="account-note" id="access-code-note" role="status"></p>
         </section>
         <section class="panel settings-panel" id="appearance-panel">
           <div class="panel-heading"><div><p class="eyebrow">ОФОРМЛЕНИЕ</p><h3>Тема и акцент</h3></div></div>

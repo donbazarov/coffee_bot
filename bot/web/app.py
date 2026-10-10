@@ -4,9 +4,11 @@ import hashlib
 import logging
 import re
 import threading
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
@@ -18,8 +20,8 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
-from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
+from bot.web import access_code, avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
     apply_schedule_changes,
@@ -43,6 +45,18 @@ from bot.web.migrations import migrate_legacy_telegram_ids
 BASE_DIR = Path(__file__).resolve().parent
 ROLE_VALUES = {"barista", "senior", "mentor"}
 ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
+
+# Тексты ошибок входа. Формулировки для «нет такого сотрудника» и «неверный код»
+# намеренно разные только в одном: без кода нельзя понять, существует ли запись,
+# но подсказка «уточните у наставника» нужна в любом случае.
+LOGIN_ERRORS = {
+    "empty": "Введите Iiko ID и код доступа.",
+    "unknown": "Не нашли такой Iiko ID или username — уточните у наставника.",
+    "code": "Неверный код доступа.",
+    "locked": "Слишком много попыток. Попробуйте позже или попросите наставника обновить код.",
+    "inactive": "Доступ к аккаунту отключён. Обратитесь к наставнику.",
+    "nocode": "Для вашего аккаунта код ещё не выдан. Обратитесь к наставнику.",
+}
 ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 MAX_AVATAR_BYTES = 4 * 1024 * 1024
 SCORE_SQL = """
@@ -132,10 +146,16 @@ def _session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
         return None, None
     with engine.connect() as connection:
         user = connection.execute(text("""
-            SELECT id,name,display_name,role,avatar_rev,telegram_id FROM users
+            SELECT id,name,display_name,role,avatar_rev,telegram_id,access_code,session_epoch FROM users
             WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
         """), {"id": session["user_id"]}).mappings().first()
-    return (dict(user), session["csrf_token"]) if user else (None, None)
+    if not user:
+        return None, None
+    # Ротация кода наставником и «выйти на всех устройствах» поднимают
+    # session_epoch — выданные ранее куки после этого недействительны.
+    if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
+        return None, None
+    return dict(user), session["csrf_token"]
 
 
 def require_user(request: Request) -> dict[str, Any]:
@@ -165,6 +185,10 @@ def migrate_database():
     init_db()
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
+    access_code.initialize_access_schema(engine)
+    # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
+    # ручной работы наставника по каждому человеку.
+    access_code.ensure_active_codes(engine)
     telegram_login.initialize_login_schema(engine)
     # Раз в месяц (т.е. при ближайшем рестарте после рубежа) чистим старые снимки.
     schedule_snapshot.prune_snapshots(engine)
@@ -254,6 +278,30 @@ def reset_avatar(user: dict[str, Any] = Depends(require_csrf)):
     return {"ok": True}
 
 
+@app.post("/api/profile/code")
+def rotate_own_code(user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Сотрудник меняет свой код. Устройства не выкидываем — это его же техника."""
+    return {"ok": True, "code": access_code.set_access_code(engine, user["id"])}
+
+
+@app.post("/api/session/logout-all")
+def logout_all(request: Request, user: dict[str, Any] = Depends(require_csrf)) -> JSONResponse:
+    """«Выйти на всех устройствах»: поднимаем session_epoch, текущему выдаём новую куку."""
+    _, csrf_token = _session_user(request)
+    with engine.begin() as connection:
+        connection.execute(
+            text("UPDATE users SET session_epoch = session_epoch + 1 WHERE id = :id"),
+            {"id": user["id"]},
+        )
+        epoch = connection.execute(
+            text("SELECT session_epoch FROM users WHERE id = :id"), {"id": user["id"]}
+        ).scalar_one()
+    cookie_value, _ = create_session(int(user["id"]), int(epoch), csrf_token=csrf_token)
+    response = JSONResponse({"ok": True})
+    _set_session_cookie(response, cookie_value)
+    return response
+
+
 def _check_csrf(request: Request, csrf_token: str | None) -> None:
     supplied = request.headers.get("X-CSRF-Token")
     if not csrf_token or not supplied or not hmac.compare_digest(csrf_token, supplied):
@@ -312,12 +360,13 @@ def home(request: Request):
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "user": user,
             "tg_pending": tg_pending,
+            "login_error": LOGIN_ERRORS.get(request.query_params.get("login_error"), ""),
             "csrf_token": csrf_token or "",
             "bot_username": bot_username,
             "telegram_callback_url": telegram_callback_url,
@@ -341,6 +390,61 @@ def home(request: Request):
             "role_names": ROLE_NAMES,
         },
     )
+    # Скользящее продление: устройство, которым пользуются, не выходит никогда.
+    # CSRF берём прежний — отрисованная страница уже содержит его.
+    if user and csrf_token:
+        session = read_session(request.cookies.get(COOKIE_NAME))
+        if session and session["expires_at"] - int(time.time()) < SESSION_MAX_AGE - SESSION_RENEW_AFTER:
+            cookie_value, _ = create_session(
+                int(user["id"]), int(user.get("session_epoch") or 0), csrf_token=csrf_token
+            )
+            _set_session_cookie(response, cookie_value)
+    return response
+
+
+@app.post("/auth/login")
+async def login(request: Request):
+    """Вход по «iiko_id (или @username) + код доступа». Обычная форма, без JS."""
+    # Тело разбираем сами: `request.form()` требует python-multipart, а проект
+    # держит зависимости минимальными (тот же приём, что в загрузке аватара).
+    body = (await request.body()).decode("utf-8", "replace")
+    fields = dict(parse_qsl(body, keep_blank_values=True))
+    raw_login = str(fields.get("login") or "")
+    raw_code = str(fields.get("code") or "")
+    client_ip = request.client.host if request.client else ""
+    known_login = access_code.normalize_login(raw_login)
+
+    def deny(reason: str):
+        return RedirectResponse(f"/?login_error={reason}", status_code=303)
+
+    if not known_login or not raw_code.strip():
+        return deny("empty")
+
+    user = access_code.find_user_by_login(engine, raw_login)
+    if user is None:
+        access_code.record_attempt(engine, None, known_login, client_ip, False, "unknown")
+        return deny("unknown")
+
+    if access_code.throttle_reason(engine, user, client_ip):
+        access_code.record_attempt(engine, int(user["id"]), known_login, client_ip, False, "locked")
+        return deny("locked")
+
+    if not access_code.is_staff(user) or not user.get("access_code"):
+        reason = "nocode" if access_code.is_staff(user) else "inactive"
+        access_code.record_attempt(engine, int(user["id"]), known_login, client_ip, False, reason)
+        return deny(reason)
+
+    if not access_code.code_matches(user, raw_code):
+        access_code.register_failure(engine, user)
+        access_code.record_attempt(engine, int(user["id"]), known_login, client_ip, False, "code")
+        return deny("code")
+
+    access_code.register_success(engine, int(user["id"]))
+    access_code.record_attempt(engine, int(user["id"]), known_login, client_ip, True, None)
+    cookie_value, _ = create_session(int(user["id"]), int(user.get("session_epoch") or 0))
+    response = RedirectResponse("/", status_code=303)
+    _set_session_cookie(response, cookie_value)
+    return response
 
 
 @app.get("/auth/telegram/callback", name="telegram_callback")
@@ -707,7 +811,7 @@ def dashboard(period: str = "30d", _: dict[str, Any] = Depends(require_user)):
 def list_users(_: dict[str, Any] = Depends(require_manager)):
     with engine.connect() as connection:
         users = connection.execute(text("""
-            SELECT id, name, display_name, avatar_rev, iiko_id, telegram_username, role, is_active, telegram_id
+            SELECT id, name, display_name, avatar_rev, iiko_id, telegram_username, role, is_active, telegram_id, access_code
             FROM users ORDER BY is_active DESC, COALESCE(display_name, name) COLLATE NOCASE
         """)).mappings().all()
     role_names = {**ROLE_NAMES, "guest": "Ожидает доступа"}
@@ -773,10 +877,14 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
 
 @app.patch("/api/users/{user_id}")
 async def update_user(user_id: int, request: Request, manager: dict[str, Any] = Depends(require_manager_csrf)):
-    values = _validate_user_payload(await request.json(), partial=True)
-    if not values:
+    payload = await request.json()
+    # Выдача нового кода — отдельное действие: наставник видит код и отдаёт его лично.
+    regenerate = bool(isinstance(payload, dict) and payload.pop("regenerate_code", False))
+    values = _validate_user_payload(payload, partial=True)
+    if not values and not regenerate:
         raise HTTPException(status_code=422, detail="Нет полей для обновления")
     assignments = ", ".join(f"{key} = :{key}" for key in values)
+    has_fields = bool(assignments)
     values["user_id"] = user_id
     with engine.begin() as connection:
         current_user = connection.execute(
@@ -801,11 +909,14 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
             if not other_managers:
                 raise HTTPException(status_code=400, detail="Нельзя убрать последнего активного менеджера")
         try:
-            result = connection.execute(text(f"UPDATE users SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"), values)
+            if has_fields:
+                result = connection.execute(text(f"UPDATE users SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"), values)
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Пользователь не найден")
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
-        if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if regenerate:
+        return {"ok": True, "code": access_code.set_access_code(engine, user_id)}
     return {"ok": True}
 
 

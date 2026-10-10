@@ -12,7 +12,11 @@ from bot.config import BotConfig
 from bot.database.models import engine
 
 COOKIE_NAME = "coffee_session"
-SESSION_MAX_AGE = 60 * 60 * 24 * 7
+# Устройства «помнят» вход: полгода со скользящим продлением (см. `home()`).
+# Телефон баристы не должен просить вход каждую неделю.
+SESSION_MAX_AGE = 60 * 60 * 24 * 180
+# Продлеваем, когда прошла половина срока — активное устройство не выходит никогда.
+SESSION_RENEW_AFTER = SESSION_MAX_AGE // 2
 LOGIN_MAX_AGE = 60 * 5
 CALENDAR_TOKEN_MAX_AGE = 60 * 60 * 24 * 365 * 5
 
@@ -118,16 +122,21 @@ def register_or_find_telegram_user(telegram_data: dict[str, Any]) -> tuple[dict[
         return None, "conflict"
 
 
-def create_session(user_id: int) -> tuple[str, str]:
+def create_session(user_id: int, epoch: int = 0, csrf_token: str | None = None) -> tuple[str, str]:
+    """Подписанная сессия. `epoch` сверяется с `users.session_epoch`.
+
+    `csrf_token` можно передать готовым: при скользящем продлении страница уже
+    отрисована со старым токеном, и подмена сломала бы все POST-запросы с неё.
+    """
     key = _session_key()
     if key is None:
-        raise RuntimeError("Telegram bot token is not configured")
+        raise RuntimeError("Не задан WEB_SESSION_SECRET — нечем подписывать сессии")
 
-    csrf_token = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
-    payload = f"{user_id}.{int(time.time()) + SESSION_MAX_AGE}.{csrf_token}"
+    token = csrf_token or base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+    payload = f"{user_id}.{int(time.time()) + SESSION_MAX_AGE}.{int(epoch)}.{token}"
     encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
     signature = hmac.new(key, encoded.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"{encoded}.{signature}", csrf_token
+    return f"{encoded}.{signature}", token
 
 
 def read_session(cookie_value: str | None) -> dict[str, Any] | None:
@@ -141,10 +150,25 @@ def read_session(cookie_value: str | None) -> dict[str, Any] | None:
         if not hmac.compare_digest(expected_signature, supplied_signature):
             return None
         padded = encoded + "=" * (-len(encoded) % 4)
-        user_id, expires_at, csrf_token = base64.urlsafe_b64decode(padded).decode("utf-8").split(".", 2)
-        if int(expires_at) < int(time.time()):
+        parts = base64.urlsafe_b64decode(padded).decode("utf-8").split(".")
+        # 4 части — формат с session_epoch; 3 части — куки, выданные до его
+        # появления. Старые не выбрасываем: устройства должны остаться в системе.
+        if len(parts) == 4:
+            user_id, expires_at, epoch, csrf_token = parts
+        elif len(parts) == 3:
+            user_id, expires_at, csrf_token = parts
+            epoch = "0"
+        else:
             return None
-        return {"user_id": int(user_id), "csrf_token": csrf_token}
+        expires = int(expires_at)
+        if expires < int(time.time()):
+            return None
+        return {
+            "user_id": int(user_id),
+            "csrf_token": csrf_token,
+            "epoch": int(epoch),
+            "expires_at": expires,
+        }
     except (ValueError, TypeError, UnicodeDecodeError):
         return None
 
@@ -152,7 +176,7 @@ def read_session(cookie_value: str | None) -> dict[str, Any] | None:
 def create_calendar_token(user_id: int) -> str:
     key = _session_key()
     if key is None:
-        raise RuntimeError("Telegram bot token is not configured")
+        raise RuntimeError("Не задан WEB_SESSION_SECRET — нечем подписывать ссылки")
     payload = f"{user_id}.{int(time.time()) + CALENDAR_TOKEN_MAX_AGE}.{os.urandom(16).hex()}"
     encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
     signature = hmac.new(key, f"calendar:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()

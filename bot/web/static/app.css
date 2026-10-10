@@ -643,6 +643,12 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .button-login { min-height: 46px; padding-inline: 22px; }
 .login-hint { max-width: 430px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
 .login-hint strong { color: var(--text); font-weight: 600; }
+
+/* Вход по коду доступа и код в интерфейсе */
+.login-form { max-width: 340px; }
+.login-form .account-field { color: var(--muted); }
+.code-chip { display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); font-family: var(--mono); font-size: 17px; letter-spacing: .22em; }
+.code-row { align-items: center; }
 .login-alt { max-width: 430px; margin-top: 32px; padding-top: 15px; border-top: 1px solid var(--line); }
 .login-alt summary { color: var(--dim); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; cursor: pointer; }
 .login-alt summary:hover { color: var(--muted); }
