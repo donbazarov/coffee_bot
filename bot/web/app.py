@@ -70,6 +70,17 @@ SCORE_SQL = """
     END
 """
 
+# Логи домена "bot.web" uvicorn по умолчанию не показывает: он настраивает только
+# свои логгеры, а корневой остаётся на WARNING. Заводим собственный обработчик,
+# чтобы информационные события (запуск из ярлыка PWA, миграции) были видны в логах.
+logger = logging.getLogger("bot.web")
+if not logger.handlers:
+    _log_handler = logging.StreamHandler()
+    _log_handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+    logger.addHandler(_log_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
 app = FastAPI(title="Coffee Quality", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -83,7 +94,7 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "pwa-install.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:
@@ -196,7 +207,7 @@ def migrate_database():
     schedule_snapshot.prune_snapshots(engine)
     stories_migration = stories_service.migrate_from_prototype()
     if stories_migration["photos"] or stories_migration["removed_key"]:
-        logging.getLogger("bot.web").info(
+        logger.info(
             "Истории гостей: перенесено фото %s, ключ модерации удалён: %s",
             stories_migration["photos"],
             bool(stories_migration["removed_key"]),
@@ -331,6 +342,13 @@ def home(request: Request):
     user, csrf_token = _session_user(request)
     tg_pending = False
 
+    # Запуск из ярлыка PWA: манифест ставит start_url="/?utm_source=pwa".
+    # Логируем такие заходы, чтобы видеть, сколько сессий приходит из
+    # установленного приложения, а не из браузера.
+    utm_source = request.query_params.get("utm_source")
+    if utm_source == "pwa":
+        logger.info("PWA-запуск (utm_source=pwa): user=%s", user["id"] if user else "anon")
+
     # Сотрудник вернулся на сайт после подтверждения в Telegram — входим сразу,
     # без повторного нажатия кнопки. При выключенном Telegram-входе заявки не
     # разбираем вообще: подтверждать их некому, бот не работает.
@@ -368,6 +386,7 @@ def home(request: Request):
         context={
             "user": user,
             "tg_pending": tg_pending,
+            "utm_source": utm_source or "",
             "login_error": LOGIN_ERRORS.get(request.query_params.get("login_error"), ""),
             "csrf_token": csrf_token or "",
             "bot_username": bot_username,

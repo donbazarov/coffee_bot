@@ -17,8 +17,9 @@
   <link rel="stylesheet" href="/static/fonts.css?v={{ static_version }}">
   <link rel="stylesheet" href="/static/app.css?v={{ static_version }}">
   <script src="/static/app.js?v={{ static_version }}" defer></script>
+  <script src="/static/pwa-install.js?v={{ static_version }}" defer></script>
 </head>
-<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}">
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}" data-pwa-launch="{{ 'true' if utm_source == 'pwa' else 'false' }}">
   {# Инлайновый спрайт иконок: SVG с currentColor вместо эмодзи-символов. #}
   <svg class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
     <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/></symbol>
@@ -37,6 +38,8 @@
     <symbol id="i-calendar-plus" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M8 2v4M16 2v4M3 10h18M12 13v5M9.5 15.5h5"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></symbol>
     <symbol id="i-pin" viewBox="0 0 24 24"><path d="M7 3h10v18l-5-4-5 4z"/></symbol>
+    <symbol id="i-install" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M5 21h14"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></symbol>
   </svg>
   {% if not user %}
   <main class="login-screen">
@@ -389,6 +392,26 @@
   <dialog class="user-dialog feed-dialog" id="feed-dialog"><div class="dialog-top"><div><p class="eyebrow">ЛИЧНЫЕ СОБЫТИЯ</p><h2>Мой календарь</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="feed-actions"><a class="button button-primary" id="webcal-open" href="#">Подключить календарь</a><button class="button button-quiet" id="feed-copy" type="button">Копировать ссылку</button></div><p class="feed-status" id="feed-status" role="status"></p></dialog>
   <dialog class="user-dialog feed-dialog" id="announcements-feed-dialog"><div class="dialog-top"><div><p class="eyebrow">КАЛЕНДАРЬ АНОНСОВ</p><h2>События с датой</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="feed-actions"><a class="button button-primary" id="announcements-webcal-open" href="#">Подключить календарь</a><button class="button button-quiet" id="announcements-feed-copy" type="button">Копировать ссылку</button></div><p class="feed-status" id="announcements-feed-status" role="status"></p><p class="settings-hint">В календарь попадают анонсы с указанной датой из категорий, отмеченных в уведомлениях.</p></dialog>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  {# PWA: баннер установки на домашний экран. Рендерится только для авторизованных
+     (личный кабинет), по умолчанию скрыт. Показ — в static/pwa-install.js. #}
+  <div class="pwa-install" id="pwa-install" hidden role="dialog" aria-modal="true" aria-labelledby="pwa-install-title">
+    <div class="pwa-install-card">
+      <button class="icon-button pwa-install-close" type="button" id="pwa-install-close" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
+      <span class="pwa-install-logo" aria-hidden="true"></span>
+      <p class="pwa-install-kicker">ПРИЛОЖЕНИЕ НЕФТЬ</p>
+      <h2 class="pwa-install-title" id="pwa-install-title">Установите на телефон</h2>
+      <p class="pwa-install-copy">Запуск с домашнего экрана — в один тап, как обычное приложение. Без браузера и лишних окон.</p>
+      <div class="pwa-install-steps" id="pwa-install-steps" hidden>
+        <p class="pwa-install-step"><span class="pwa-install-step-num">1</span><span>Нажмите <strong>Поделиться</strong> <svg class="icon pwa-install-inline-icon" aria-hidden="true"><use href="#i-share"></use></svg> внизу экрана.</span></p>
+        <p class="pwa-install-step"><span class="pwa-install-step-num">2</span><span>Прокрутите и выберите <strong>«На экран Домой»</strong> <svg class="icon pwa-install-inline-icon" aria-hidden="true"><use href="#i-install"></use></svg>.</span></p>
+        <p class="pwa-install-step"><span class="pwa-install-step-num">3</span><span>Нажмите <strong>«Добавить»</strong> — иконка появится на экране.</span></p>
+      </div>
+      <div class="pwa-install-actions">
+        <button class="button button-primary pwa-install-accept" type="button" id="pwa-install-accept"><svg class="icon" aria-hidden="true"><use href="#i-install"></use></svg>Установить приложение</button>
+        <button class="button button-quiet pwa-install-dismiss" type="button" id="pwa-install-dismiss">Позже</button>
+      </div>
+    </div>
+  </div>
   {% endif %}
 </body>
 </html>

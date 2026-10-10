@@ -3,7 +3,8 @@
   "short_name": "НЕФТЬ",
   "description": "Рабочее пространство кофейной команды НЕФТЬ",
   "lang": "ru",
-  "start_url": "/",
+  "start_url": "/?utm_source=pwa",
+  "id": "/",
   "scope": "/",
   "icons": [
     {
