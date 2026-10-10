@@ -1051,6 +1051,7 @@ function setView(name) {
         name === 'team' ? 'Управление командой' :
         name === 'calendar' ? 'График смен' :
         name === 'control' ? 'Панель управления' :
+        name === 'announcements' ? 'Анонсы' :
         name === 'profile' ? 'Личный кабинет' :
         `Добрый день, ${title.dataset.name}`;
     }
@@ -1063,6 +1064,7 @@ function setView(name) {
     apply();
   }
   if (name === 'team') loadUsers();
+  if (name === 'announcements') openAnnouncements();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) loadStoriesAdmin();
   closeDrawer();
@@ -1544,11 +1546,181 @@ function setupDrawer() {
   window.addEventListener('resize', () => { if (window.innerWidth > 760) closeDrawer(); });
 }
 
+/* --- Лента анонсов -------------------------------------------------------
+   Категории: расписание, замены, событие, общая информация. Записи о графике и
+   заменах создаёт сервер при сохранении, остальные публикует наставник.
+   «Колокольчик» — набор категорий, которые считаются в счётчике непрочитанного. */
+
+const announcementsState = {
+  items: [],
+  unread: { total: 0, by_category: {}, enabled: [] },
+  categories: [],
+  canPublish: false,
+  filter: 'all',
+};
+
+function announcementCategoryLabel(key) {
+  const found = (announcementsState.categories || []).find((item) => item.key === key);
+  return found ? found.label : key;
+}
+
+function announcementTime(iso) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function announcementMarkup(item, options = {}) {
+  const snapshots = ((item.payload || {}).snapshots || []).slice(0, 6);
+  const gallery = snapshots.length
+    ? `<div class="announcement-gallery">${snapshots.map((url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer"><img src="${escapeHtml(url)}" alt="" loading="lazy"></a>`).join('')}</div>`
+    : '';
+  const remove = options.manage && announcementsState.canPublish
+    ? `<button class="text-button announcement-remove" type="button" data-announcement-delete="${item.id}">Удалить</button>`
+    : '';
+  return `
+    <article class="announcement chip-tone-${escapeHtml(item.category)} ${item.is_read ? '' : 'is-unread'}" data-category="${escapeHtml(item.category)}">
+      <header class="announcement-top"><span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><span class="announcement-meta">${escapeHtml(announcementTime(item.created_at))}${item.actor ? ` · ${escapeHtml(item.actor)}` : ''}</span></header>
+      <h4 class="announcement-title">${escapeHtml(item.title)}</h4>
+      ${item.body ? `<p class="announcement-body">${escapeHtml(item.body)}</p>` : ''}
+      ${gallery}${remove}
+    </article>`;
+}
+
+function visibleAnnouncements(limit) {
+  const items = announcementsState.filter === 'all'
+    ? announcementsState.items
+    : announcementsState.items.filter((item) => item.category === announcementsState.filter);
+  return limit ? items.slice(0, limit) : items;
+}
+
+function renderAnnouncementBadge() {
+  const total = Number((announcementsState.unread || {}).total || 0);
+  document.querySelectorAll('.nav-badge').forEach((badge) => {
+    badge.hidden = total === 0;
+    badge.textContent = total > 99 ? '99+' : String(total);
+  });
+  const label = document.querySelector('#announcements-unread-label');
+  if (label) label.textContent = total ? `Непрочитанных: ${total}` : 'Всё прочитано';
+  const enabled = (announcementsState.unread || {}).enabled || [];
+  document.querySelectorAll('[data-ann-bell]').forEach((button) => {
+    const on = enabled.includes(button.dataset.annBell);
+    button.classList.toggle('is-selected', on);
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
+
+function renderAnnouncements() {
+  const list = document.querySelector('#announcements-list');
+  if (list) {
+    const items = visibleAnnouncements(0);
+    list.innerHTML = items.length
+      ? items.map((item) => announcementMarkup(item, { manage: true })).join('')
+      : '<p class="empty-state">Анонсов пока нет</p>';
+  }
+  const preview = document.querySelector('#announcements-preview-list');
+  if (preview) {
+    const items = visibleAnnouncements(5);
+    preview.innerHTML = items.length
+      ? items.map((item) => announcementMarkup(item)).join('')
+      : '<p class="empty-state">Пока пусто</p>';
+  }
+  document.querySelectorAll('[data-ann-filter]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.annFilter === announcementsState.filter);
+  });
+  renderAnnouncementBadge();
+}
+
+async function loadAnnouncements() {
+  try {
+    const data = await api('/api/announcements?limit=50');
+    announcementsState.items = data.items || [];
+    announcementsState.unread = data.unread || announcementsState.unread;
+    announcementsState.categories = data.categories || [];
+    announcementsState.canPublish = Boolean(data.can_publish);
+    renderAnnouncements();
+  } catch (error) { showToast(error.message); }
+}
+
+async function markAnnouncementsRead() {
+  try {
+    const data = await api('/api/announcements/read', { method: 'POST', body: JSON.stringify({}) });
+    if (data.unread) { announcementsState.unread = data.unread; renderAnnouncementBadge(); }
+  } catch (error) { showToast(error.message); }
+}
+
+/* Открытие раздела = «я посмотрел ленту»: снимаем счётчик, но показываем
+   непрочитанное в самом списке, чтобы не терять контекст. */
+async function openAnnouncements() {
+  await loadAnnouncements();
+  if (Number((announcementsState.unread || {}).total || 0) > 0) await markAnnouncementsRead();
+}
+
+function setupAnnouncements() {
+  document.addEventListener('click', async (event) => {
+    const filter = event.target.closest('[data-ann-filter]');
+    if (filter) {
+      announcementsState.filter = filter.dataset.annFilter;
+      renderAnnouncements();
+      return;
+    }
+
+    const bell = event.target.closest('[data-ann-bell]');
+    if (bell) {
+      const enabled = new Set((announcementsState.unread || {}).enabled || []);
+      const name = bell.dataset.annBell;
+      if (enabled.has(name)) enabled.delete(name); else enabled.add(name);
+      try {
+        const data = await api('/api/announcements/settings', { method: 'PATCH', body: JSON.stringify({ enabled: [...enabled] }) });
+        if (data.unread) { announcementsState.unread = data.unread; renderAnnouncementBadge(); }
+      } catch (error) { showToast(error.message); }
+      return;
+    }
+
+    const remove = event.target.closest('[data-announcement-delete]');
+    if (remove) {
+      try {
+        await api(`/api/announcements/${remove.dataset.announcementDelete}`, { method: 'DELETE' });
+        await loadAnnouncements();
+        showToast('Анонс удалён');
+      } catch (error) { showToast(error.message); }
+      return;
+    }
+
+    if (event.target.closest('#announcements-read-all')) await markAnnouncementsRead();
+  });
+
+  const dialog = document.querySelector('#announcement-dialog');
+  const form = document.querySelector('#announcement-form');
+  const errorNode = document.querySelector('#announcement-form-error');
+  document.querySelector('#announcements-add')?.addEventListener('click', () => {
+    form?.reset();
+    if (errorNode) errorNode.hidden = true;
+    dialog?.showModal();
+  });
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      await api('/api/announcements', { method: 'POST', body: JSON.stringify(payload) });
+      dialog?.close();
+      await loadAnnouncements();
+      showToast('Анонс опубликован');
+    } catch (error) {
+      if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
+    }
+  });
+  document.querySelectorAll('#announcement-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
+  dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+}
+
 function setupDashboard() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
   setupAppearance();
   setupDrawer();
   setupProfile();
+  setupAnnouncements();
+  loadAnnouncements();
   document.querySelectorAll('[data-period]').forEach((button) => button.addEventListener('click', () => {
     document.querySelectorAll('[data-period]').forEach((item) => item.classList.toggle('is-selected', item === button));
     loadDashboard(button.dataset.period);

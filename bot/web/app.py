@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import access_code, announcements, avatars, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_calendar_token, create_session, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.calendar_service import (
     app_timezone,
@@ -186,6 +186,7 @@ def migrate_database():
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
     access_code.initialize_access_schema(engine)
+    announcements.initialize_schema(engine)
     # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
     # ручной работы наставника по каждому человеку.
     access_code.ensure_active_codes(engine)
@@ -735,9 +736,14 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
         raise HTTPException(status_code=409, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    # Уведомления в Telegram — после успешного сохранения, отдельно от транзакции.
+    # Уведомления — после успешного сохранения, отдельно от транзакции.
+    # Telegram (выключен флагом и недоступен с этого сервера) плюс лента анонсов,
+    # которая заменяет каналы: снимки графика и строки замен видны в приложении.
     if result.get("swap_lines") or result.get("published"):
         await run_in_threadpool(telegram_publish.publish_schedule_events, engine, result, user["name"])
+        await run_in_threadpool(
+            announcements.publish_schedule_events, engine, result, user["name"], user["id"]
+        )
     return result
 
 
@@ -745,6 +751,80 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
 def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
     response.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict")
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Лента анонсов: расписание, замены, события и общая информация
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/announcements")
+def list_announcements(category: str | None = None, limit: int = 30, user: dict[str, Any] = Depends(require_user)):
+    if category not in (None, "all") and category not in announcements.CATEGORIES:
+        raise HTTPException(status_code=422, detail="Неизвестная категория")
+    return {
+        "items": announcements.list_for_user(
+            engine, user["id"], None if category in (None, "all") else category, limit
+        ),
+        "unread": announcements.unread_counts(engine, user["id"]),
+        "categories": [{"key": key, "label": label} for key, label in announcements.CATEGORIES.items()],
+        "can_publish": user["role"] in {"senior", "mentor"},
+    }
+
+
+@app.post("/api/announcements")
+async def create_announcement(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+    payload = await _read_json_object(request)
+    if set(payload) - {"category", "title", "body"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля анонса")
+    category = str(payload.get("category") or "")
+    if category not in announcements.CATEGORIES:
+        raise HTTPException(status_code=422, detail="Неизвестная категория")
+    title = str(payload.get("title") or "").strip()
+    if not title or len(title) > announcements.MAX_TITLE:
+        raise HTTPException(status_code=422, detail="Заголовок должен быть от 1 до 120 символов")
+    body = str(payload.get("body") or "").strip()
+    if len(body) > announcements.MAX_BODY:
+        raise HTTPException(status_code=422, detail="Текст слишком длинный")
+    return {"ok": True, "id": announcements.create(engine, category, title, body, user["id"], user["name"])}
+
+
+@app.delete("/api/announcements/{announcement_id}")
+def delete_announcement(announcement_id: int, _: dict[str, Any] = Depends(require_manager_csrf)):
+    if not announcements.delete(engine, announcement_id):
+        raise HTTPException(status_code=404, detail="Анонс не найден")
+    return {"ok": True}
+
+
+@app.post("/api/announcements/read")
+async def read_announcements(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    if set(payload) - {"ids", "category"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля")
+    ids = payload.get("ids")
+    if ids is not None and (not isinstance(ids, list) or any(not isinstance(value, int) for value in ids)):
+        raise HTTPException(status_code=422, detail="ids должен быть списком чисел")
+    category = payload.get("category")
+    if category is not None and category not in announcements.CATEGORIES:
+        raise HTTPException(status_code=422, detail="Неизвестная категория")
+    announcements.mark_read(engine, user["id"], ids, category)
+    return {"ok": True, "unread": announcements.unread_counts(engine, user["id"])}
+
+
+@app.get("/api/announcements/settings")
+def announcement_settings(user: dict[str, Any] = Depends(require_user)):
+    return {"enabled": announcements.get_prefs(engine, user["id"])}
+
+
+@app.patch("/api/announcements/settings")
+async def update_announcement_settings(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    payload = await _read_json_object(request)
+    if set(payload) != {"enabled"} or not isinstance(payload.get("enabled"), list):
+        raise HTTPException(status_code=422, detail="Ожидался список категорий")
+    for value in payload["enabled"]:
+        if value not in announcements.CATEGORIES:
+            raise HTTPException(status_code=422, detail="Неизвестная категория")
+    enabled = announcements.set_prefs(engine, user["id"], payload["enabled"])
+    return {"ok": True, "enabled": enabled, "unread": announcements.unread_counts(engine, user["id"])}
 
 
 @app.get("/api/dashboard")
