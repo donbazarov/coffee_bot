@@ -1052,6 +1052,7 @@ function setView(name) {
         name === 'calendar' ? 'График смен' :
         name === 'control' ? 'Панель управления' :
         name === 'announcements' ? 'Анонсы' :
+        name === 'chat' ? 'Чат' :
         name === 'profile' ? 'Личный кабинет' :
         `Добрый день, ${title.dataset.name}`;
     }
@@ -1064,6 +1065,7 @@ function setView(name) {
     apply();
   }
   if (name === 'team') loadUsers();
+  if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
@@ -1824,6 +1826,20 @@ async function markAnnouncementsRead() {
 
 const pushState = { key: '', supported: false, subscribed: false, devices: 0 };
 
+/* Сайт открыт как установленное приложение (standalone), а не во вкладке браузера.
+   Та же проверка, что в static/pwa-install.js — баннер установки показывается
+   ровно наоборот, поэтому они не пересекаются. */
+function isStandaloneMode() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.matchMedia('(display-mode: fullscreen)').matches
+    || window.matchMedia('(display-mode: minimal-ui)').matches
+    || navigator.standalone === true;
+}
+
+function pushPermissionGranted() {
+  return typeof Notification !== 'undefined' && Notification.permission === 'granted';
+}
+
 function setPushStatus(message) {
   const node = document.querySelector('#push-status');
   if (node) node.textContent = message;
@@ -1849,6 +1865,7 @@ function renderPushState() {
   const enableButton = document.querySelector('#push-enable');
   const disableButton = document.querySelector('#push-disable');
   const testButton = document.querySelector('#push-test');
+  const granted = pushPermissionGranted();
   if (pushState.subscribed) {
     setPushStatus(pushState.devices > 1
       ? `Уведомления включены · устройств: ${pushState.devices}`
@@ -1858,9 +1875,11 @@ function renderPushState() {
   } else {
     setPushStatus('Уведомления на этом устройстве выключены');
   }
-  if (enableButton) enableButton.hidden = pushState.subscribed || !pushState.supported;
+  // «Включить» держим в панели анонсов, только пока разрешение ещё не выдано.
+  if (enableButton) enableButton.hidden = pushState.subscribed || !pushState.supported || granted;
   if (disableButton) disableButton.hidden = !pushState.subscribed;
   if (testButton) testButton.hidden = !pushState.subscribed;
+  renderPushEntryPoints();
 }
 
 async function refreshPushState() {
@@ -1916,6 +1935,57 @@ async function disablePush() {
   } catch (error) {
     setPushStatus(error.message);
   }
+}
+
+/* --- PWA-баннер и кнопка в профиле: включение уведомлений -----------------
+   Показываем только когда сайт запущен как приложение (standalone) и пока
+   уведомления не включены. С баннером установки не пересекается: тот, наоборот,
+   предлагает установить приложение ВНЕ standalone. */
+
+const PUSH_PROMPT_KEY = 'neft-push-prompt-dismissed';
+
+function pushPromptDismissed() {
+  try { return localStorage.getItem(PUSH_PROMPT_KEY) === '1'; } catch (error) { return false; }
+}
+
+function hidePushPrompt() {
+  const prompt = document.querySelector('#push-prompt');
+  if (prompt) prompt.hidden = true;
+}
+
+function dismissPushPrompt() {
+  // «Позже» помним: баннер показываем один раз, дальше — кнопка в анонсах и профиле.
+  try { localStorage.setItem(PUSH_PROMPT_KEY, '1'); } catch (error) { /* приватный режим */ }
+  hidePushPrompt();
+}
+
+function renderPushEntryPoints() {
+  const standalone = isStandaloneMode();
+  const granted = pushPermissionGranted();
+  const enabled = pushState.subscribed;
+  const ready = standalone && pushState.supported;
+
+  const panel = document.querySelector('#profile-push-panel');
+  const enableProfile = document.querySelector('#push-enable-profile');
+  const disableProfile = document.querySelector('#push-disable-profile');
+  const statusProfile = document.querySelector('#push-status-profile');
+  if (panel) panel.hidden = !ready;
+  if (enableProfile) enableProfile.hidden = enabled || granted;
+  if (disableProfile) disableProfile.hidden = !enabled;
+  if (statusProfile) {
+    statusProfile.textContent = enabled
+      ? (pushState.devices > 1
+        ? `Уведомления включены · устройств: ${pushState.devices}`
+        : 'Уведомления включены на этом устройстве')
+      : 'Уведомления на этом устройстве выключены';
+  }
+
+  const prompt = document.querySelector('#push-prompt');
+  if (!prompt) return;
+  // Не показываем поверх баннера установки (страховка на случай странной детекции режима).
+  const installBanner = document.querySelector('#pwa-install');
+  const installVisible = Boolean(installBanner && !installBanner.hidden);
+  prompt.hidden = !(ready && !enabled && !granted && !pushPromptDismissed() && !installVisible);
 }
 
 /* Ссылка из уведомления: открываем нужный раздел и — если указан — анонс. */
@@ -2114,6 +2184,19 @@ function setupAnnouncements() {
       const result = await api('/api/push/test', { method: 'POST' });
       setPushStatus(`Уведомление отправлено на устройств: ${result.delivered}`);
     } catch (error) { setPushStatus(error.message); }
+  });
+  // Профиль и PWA-баннер про уведомления (показываются только в standalone).
+  document.querySelector('#push-enable-profile')?.addEventListener('click', enablePush);
+  document.querySelector('#push-disable-profile')?.addEventListener('click', disablePush);
+  document.querySelector('#push-prompt-enable')?.addEventListener('click', enablePush);
+  document.querySelector('#push-prompt-later')?.addEventListener('click', dismissPushPrompt);
+  document.querySelector('#push-prompt-close')?.addEventListener('click', dismissPushPrompt);
+  document.querySelector('#push-prompt')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) dismissPushPrompt();
+  });
+  document.addEventListener('keydown', (event) => {
+    const prompt = document.querySelector('#push-prompt');
+    if (event.key === 'Escape' && prompt && !prompt.hidden) dismissPushPrompt();
   });
   refreshPushState();
 }
@@ -2467,6 +2550,26 @@ function setupServiceWorker() {
     // Не получилось — сайт работает как раньше, просто без мгновенного старта.
   });
 }
+
+/* Мини-API для отдельных модулей (chat.js, touch.js): общие помощники в одном
+   месте, чтобы не дублировать их в отдельных файлах. */
+window.Neft = {
+  api,
+  showToast,
+  escapeHtml,
+  avatarMarkup,
+  setView,
+  closeDrawer,
+  get user() {
+    return {
+      id: Number(document.body.dataset.userId || 0),
+      name: document.body.dataset.userName || '',
+      role: document.body.dataset.role || '',
+      label: document.body.dataset.roleLabel || '',
+      manager: document.body.dataset.manager === 'true',
+    };
+  },
+};
 
 setupServiceWorker();
 

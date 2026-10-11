@@ -1,5 +1,4 @@
 import os
-import hmac
 import hashlib
 import logging
 import re
@@ -20,12 +19,14 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import access_code, announcements, avatars, chat, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
+from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
     app_timezone,
     apply_schedule_changes,
     build_calendar_feed,
+    CHAT_NOTIFY_VALUES,
     create_shift_template,
     delete_shift_template,
     get_app_settings,
@@ -83,6 +84,9 @@ if not logger.handlers:
 
 app = FastAPI(title="Coffee Quality", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+# Чат вынесен в отдельный роутер (bot/web/chat.py): общий канал, личные сообщения,
+# загрузка изображений и WebSocket реального времени.
+app.include_router(chat.chat_router)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
@@ -94,7 +98,7 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "pwa-install.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "pwa-install.js", "chat.js", "touch.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:
@@ -151,43 +155,6 @@ async def add_security_headers(request: Request, call_next):
     return response
 
 
-def _session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
-    session = read_session(request.cookies.get(COOKIE_NAME))
-    if not session:
-        return None, None
-    with engine.connect() as connection:
-        user = connection.execute(text("""
-            SELECT id,name,display_name,role,avatar_rev,telegram_id,access_code,session_epoch FROM users
-            WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
-        """), {"id": session["user_id"]}).mappings().first()
-    if not user:
-        return None, None
-    # Ротация кода наставником и «выйти на всех устройствах» поднимают
-    # session_epoch — выданные ранее куки после этого недействительны.
-    if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
-        return None, None
-    return dict(user), session["csrf_token"]
-
-
-def require_user(request: Request) -> dict[str, Any]:
-    user, _ = _session_user(request)
-    if not user:
-        raise HTTPException(status_code=401, detail="Требуется авторизация")
-    return user
-
-
-def require_manager(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    if user["role"] not in {"senior", "mentor"}:
-        raise HTTPException(status_code=403, detail="Недостаточно прав")
-    return user
-
-
-def require_csrf(request: Request, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    _, csrf_token = _session_user(request)
-    _check_csrf(request, csrf_token)
-    return user
-
-
 @app.on_event("startup")
 def migrate_database():
     # Сначала создаём недостающие таблицы. Приложение обязано подниматься на
@@ -199,6 +166,7 @@ def migrate_database():
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
     push.initialize_schema(engine)
+    chat.initialize_schema(engine)
     # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
     # ручной работы наставника по каждому человеку.
     access_code.ensure_active_codes(engine)
@@ -229,7 +197,7 @@ def preferences(user: dict[str, Any] = Depends(require_user)):
 @app.patch("/api/preferences")
 async def update_preferences(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     payload = await _read_json_object(request)
-    allowed = {"quality_enabled", "calendar_enabled", "theme", "accent"}
+    allowed = {"quality_enabled", "calendar_enabled", "theme", "accent", "chat_notify"}
     if not payload or set(payload) - allowed:
         raise HTTPException(status_code=422, detail="Неизвестные настройки")
     for key, value in payload.items():
@@ -239,6 +207,8 @@ async def update_preferences(request: Request, user: dict[str, Any] = Depends(re
             raise HTTPException(status_code=422, detail="Неизвестная тема оформления")
         if key == "accent" and not (isinstance(value, str) and ACCENT_RE.match(value)):
             raise HTTPException(status_code=422, detail="Акцент должен быть цветом вида #rrggbb")
+        if key == "chat_notify" and value not in CHAT_NOTIFY_VALUES:
+            raise HTTPException(status_code=422, detail="Неизвестный режим уведомлений чата")
     return save_user_preferences(engine, user["id"], payload)
 
 
@@ -313,18 +283,6 @@ def logout_all(request: Request, user: dict[str, Any] = Depends(require_csrf)) -
     response = JSONResponse({"ok": True})
     _set_session_cookie(response, cookie_value)
     return response
-
-
-def _check_csrf(request: Request, csrf_token: str | None) -> None:
-    supplied = request.headers.get("X-CSRF-Token")
-    if not csrf_token or not supplied or not hmac.compare_digest(csrf_token, supplied):
-        raise HTTPException(status_code=403, detail="Недействительный CSRF-токен")
-
-
-def require_manager_csrf(request: Request, user: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
-    _, csrf_token = _session_user(request)
-    _check_csrf(request, csrf_token)
-    return user
 
 
 async def _read_json_object(request: Request) -> dict[str, Any]:

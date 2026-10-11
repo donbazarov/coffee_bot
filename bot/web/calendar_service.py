@@ -22,6 +22,9 @@ MAX_PUBLISH_DAYS = 92
 # Оформление аккаунта: тема и акцентный цвет (по умолчанию мягкий коралл).
 DEFAULT_ACCENT = "#f47369"
 THEME_VALUES = {"system", "light", "dark"}
+# Кого уведомлять о сообщениях чата: все | только ЛС и упоминания | ничего.
+CHAT_NOTIFY_VALUES = {"all", "dm_mentions", "none"}
+DEFAULT_CHAT_NOTIFY = "dm_mentions"
 _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 # Каналы Telegram для публикаций. Стартуют из окружения, потом правятся в панели управления.
 DEFAULT_ANNOUNCE_CHAT = os.getenv("TELEGRAM_ANNOUNCE_CHAT_ID", "@nefttest1")
@@ -94,6 +97,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 calendar_enabled INTEGER NOT NULL DEFAULT 1,
                 theme TEXT NOT NULL DEFAULT 'system',
                 accent TEXT NOT NULL DEFAULT '#f47369',
+                chat_notify TEXT NOT NULL DEFAULT 'dm_mentions',
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
@@ -102,6 +106,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
             _ensure_columns(connection, "web_user_preferences", {
                 "theme": "TEXT NOT NULL DEFAULT 'system'",
                 "accent": "TEXT NOT NULL DEFAULT '#f47369'",
+                "chat_notify": "TEXT NOT NULL DEFAULT 'dm_mentions'",
             })
             _ensure_columns(connection, "users", {
                 "display_name": "TEXT",
@@ -714,16 +719,18 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
 def get_user_preferences(engine: Engine, user_id: int) -> dict[str, Any]:
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT quality_enabled, calendar_enabled, theme, accent
+            SELECT quality_enabled, calendar_enabled, theme, accent, chat_notify
             FROM web_user_preferences WHERE user_id=:user_id
         """), {"user_id": user_id}).mappings().first()
     theme = row["theme"] if row and row["theme"] in THEME_VALUES else "system"
     accent = row["accent"] if row and _HEX_COLOR.match(row["accent"] or "") else DEFAULT_ACCENT
+    chat_notify = row["chat_notify"] if row and row["chat_notify"] in CHAT_NOTIFY_VALUES else DEFAULT_CHAT_NOTIFY
     return {
         "quality_enabled": bool(row["quality_enabled"]) if row else True,
         "calendar_enabled": bool(row["calendar_enabled"]) if row else True,
         "theme": theme,
         "accent": accent,
+        "chat_notify": chat_notify,
     }
 
 
@@ -732,14 +739,17 @@ def save_user_preferences(engine: Engine, user_id: int, values: dict[str, Any]) 
     updated = {**current, **values}
     with engine.begin() as connection:
         connection.execute(text("""
-            INSERT INTO web_user_preferences (user_id, quality_enabled, calendar_enabled, theme, accent, updated_at)
-            VALUES (:user_id, :quality, :calendar, :theme, :accent, CURRENT_TIMESTAMP)
+            INSERT INTO web_user_preferences
+                (user_id, quality_enabled, calendar_enabled, theme, accent, chat_notify, updated_at)
+            VALUES (:user_id, :quality, :calendar, :theme, :accent, :chat_notify, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id) DO UPDATE SET quality_enabled=excluded.quality_enabled,
                 calendar_enabled=excluded.calendar_enabled, theme=excluded.theme,
-                accent=excluded.accent, updated_at=CURRENT_TIMESTAMP
+                accent=excluded.accent, chat_notify=excluded.chat_notify,
+                updated_at=CURRENT_TIMESTAMP
         """), {"user_id": user_id, "quality": int(updated["quality_enabled"]),
                "calendar": int(updated["calendar_enabled"]),
-               "theme": updated["theme"], "accent": updated["accent"]})
+               "theme": updated["theme"], "accent": updated["accent"],
+               "chat_notify": updated.get("chat_notify", DEFAULT_CHAT_NOTIFY)})
     return updated
 
 
