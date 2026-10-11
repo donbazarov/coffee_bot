@@ -45,6 +45,7 @@
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12z"/></symbol>
     <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="M21 12.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l9-9a3.4 3.4 0 0 1 4.8 4.8l-9 9a1.7 1.7 0 0 1-2.4-2.4l8.2-8.2"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="M4 12l16-8-6 16-2.6-6.4L4 12z"/></symbol>
+    <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 3L7 21M17 3l-2 18M4 9h16M3 15h16"/></symbol>
   </svg>
   {% if not user %}
   <main class="login-screen">
@@ -202,23 +203,28 @@
       <section class="view" id="chat-view" hidden>
         <div class="section-heading chat-heading">
           <div><p class="eyebrow">КОМАНДА / СВЯЗЬ</p><h2>Чат</h2></div>
-          <div class="chat-tabs" role="tablist" aria-label="Каналы чата">
-            <button class="chat-tab is-selected" type="button" role="tab" aria-selected="true" data-chat-tab="general">Общий</button>
-            <button class="chat-tab" type="button" role="tab" aria-selected="false" data-chat-tab="dm">Личные</button>
+          <div class="chat-tabs" role="tablist" aria-label="Тип чатов">
+            <button class="chat-tab is-selected" type="button" role="tab" aria-selected="true" data-chat-tab="dm">Личные</button>
+            <button class="chat-tab" type="button" role="tab" aria-selected="false" data-chat-tab="room">Общие</button>
           </div>
         </div>
-        <div class="chat-layout">
-          <aside class="chat-peers" id="chat-peers" hidden aria-label="Сотрудники"></aside>
-          <div class="chat-main">
+        <div class="chat-layout" id="chat-layout">
+          <aside class="chat-list" id="chat-list" aria-label="Список чатов"></aside>
+          <div class="chat-main" id="chat-main">
+            <div class="chat-thread-head">
+              <button class="icon-button chat-back" type="button" id="chat-back" aria-label="К списку" title="К списку"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button>
+              <span class="chat-thread-title" id="chat-thread-title">Выберите чат</span>
+              <button class="icon-button chat-rename" type="button" id="chat-rename" hidden aria-label="Переименовать тему" title="Переименовать тему"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></button>
+            </div>
             <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-relevant="additions"></div>
-            <div class="chat-state" id="chat-state" role="status">Подключаемся…</div>
+            <div class="chat-state" id="chat-state" role="status"></div>
             <form class="chat-composer" id="chat-form" autocomplete="off">
               <button class="icon-button chat-attach" type="button" id="chat-attach" aria-label="Прикрепить изображение" title="Прикрепить изображение"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg></button>
               <input type="file" id="chat-file" accept="image/*" hidden>
               <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Сообщение…" aria-label="Текст сообщения"></textarea>
               <button class="icon-button chat-send" type="submit" id="chat-send" aria-label="Отправить" title="Отправить"><svg class="icon" aria-hidden="true"><use href="#i-send"></use></svg></button>
             </form>
-            <p class="chat-hint" id="chat-peer-hint" hidden>Выберите сотрудника, чтобы открыть личную переписку.</p>
+            <p class="chat-hint" id="chat-peer-hint" hidden>Выберите чат</p>
           </div>
         </div>
       </section>
@@ -390,6 +396,12 @@
           <div class="section-heading-inline"><p class="settings-hint">Системные категории создаёт сам сервис при публикации графика — их нельзя переименовать, перекрасить или удалить. Цветом отмечаются анонсы, флажок «важное» решает, попадать ли категории в блок «Важное» на главной.</p><button class="button button-quiet" type="button" id="announcements-category-add">Новая категория</button></div>
           <div class="announcement-categories" id="announcements-categories"></div>
         </section>
+        <section class="panel settings-panel" id="chat-rooms-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ЧАТ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg>Темы общего чата</h3></div><button class="button button-quiet" type="button" id="chat-room-add"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая тема</button></div>
+          <p class="settings-hint">Темы — это каналы общего чата. Сотрудники видят их в разделе «Общие» и могут писать в любую.</p>
+          <div class="room-list" id="chat-room-list"></div>
+          <p class="account-note" id="chat-room-note" role="status"></p>
+        </section>
         <section class="panel settings-panel" id="stories-admin-panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИИ ГОСТЕЙ</p><h3>Модерация</h3></div><span class="panel-index" id="stories-admin-stats">—</span></div>
           <p class="settings-hint">Гостевая страница живёт по прямой ссылке <a href="/stories" target="_blank" rel="noopener">/stories</a> — в навигации её нет. В карусель попадают только опубликованные истории.</p>
@@ -415,6 +427,13 @@
       <footer class="app-footer"><span>НЕФТЬ / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
     </main>
   </div>
+
+  <nav class="dock" id="dock" aria-label="Быстрая навигация">
+    <button class="dock-item is-active" type="button" data-view="overview"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
+    <button class="dock-item" type="button" data-chat-open="dm"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg></span><span>Личные</span></button>
+    <button class="dock-item" type="button" data-chat-open="room"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg></span><span>Общие</span></button>
+    <button class="dock-item" type="button" data-view="calendar"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>Календарь</span></button>
+  </nav>
 
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
   <aside class="drawer" id="drawer" aria-label="Меню" aria-hidden="true">
@@ -444,6 +463,7 @@
   {% if user.role in ['senior', 'mentor'] %}
   <dialog class="user-dialog" id="announcement-dialog"><form id="announcement-form"><div class="dialog-top"><div><p class="eyebrow" id="announcement-dialog-kicker">НОВОЕ ОБЪЯВЛЕНИЕ</p><h2 id="announcement-dialog-title">Анонс</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Категория<select name="category"></select></label><label>Заголовок<input name="title" maxlength="120" required placeholder="Например: Собрание команды"></label><label>Текст <span class="optional">необязательно</span><textarea name="body" rows="5" maxlength="2000" placeholder="Что нужно знать команде"></textarea></label><label>Дата и время <span class="optional">необязательно — без них анонс не попадёт в календарь</span><input name="start_at" type="datetime-local"></label><label class="checkbox-row"><input name="pinned" type="checkbox"><span>Закрепить — анонс всегда вверху, даже через неделю</span></label><p class="dialog-error" id="announcement-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-submit" type="submit">Опубликовать</button></div></form></dialog>
   <dialog class="user-dialog" id="announcement-category-dialog"><form id="announcement-category-form"><div class="dialog-top"><div><p class="eyebrow">КАТЕГОРИЯ АНОНСОВ</p><h2 id="announcement-category-title">Новая категория</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="label" maxlength="60" required placeholder="Например: Обучение"></label><label>Цвет<input name="color" type="color" value="#7b8794"></label><label class="checkbox-row"><input name="important" type="checkbox" checked><span>Показывать в «Важном» на главной</span></label><p class="dialog-error" id="announcement-category-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-category-submit" type="submit">Создать</button></div></form></dialog>
+  <dialog class="user-dialog" id="room-dialog"><form id="room-form"><div class="dialog-top"><div><p class="eyebrow" id="room-dialog-kicker">НОВАЯ ТЕМА</p><h2 id="room-dialog-title">Тема общего чата</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="name" maxlength="60" required placeholder="Например: Смены и замены"></label><p class="dialog-error" id="room-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   {% endif %}
   <dialog class="user-dialog shift-dialog" id="shift-dialog"><form id="shift-form"><div class="dialog-top"><div><p class="eyebrow" id="shift-dialog-kicker">РАСПИСАНИЕ</p><h2 id="shift-dialog-title">Смена</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Бариста<select name="user_id" id="shift-employee" required></select></label><label>Дата<input name="date" type="date" required></label><div class="time-fields"><label>Приход<input name="start_time" type="time" required></label><label>Уход<input name="end_time" type="time" required></label></div><fieldset class="point-picker"><legend>Точка</legend><label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required><span><i class="point-swatch point-uy"></i>УЯ</span></label><label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label></fieldset><p class="dialog-error" id="shift-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet" id="delete-shift-button" type="button">Выходной</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Готово</button></div></form></dialog>
   <dialog class="user-dialog publish-dialog" id="publish-dialog"><form id="publish-form"><div class="dialog-top"><div><p class="eyebrow">ПУБЛИКАЦИЯ РАСПИСАНИЯ</p><h2>Диапазон снимков</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="publish-presets"><button class="button button-quiet" type="button" data-publish-preset="first">1–15</button><button class="button button-quiet" type="button" data-publish-preset="second">15–конец месяца</button></div><div class="time-fields"><label>С какого числа<input name="publish_start" type="date" required></label><label>По какое число<input name="publish_end" type="date" required></label></div><p class="publish-preview" id="publish-preview" role="status"></p><p class="dialog-error" id="publish-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Опубликовать</button></div></form></dialog>

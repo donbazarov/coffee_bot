@@ -1040,6 +1040,8 @@ function setView(name) {
   if (name === 'control' && !managerRole) name = 'profile';
   const apply = () => {
     document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
+    // Нижний док: пункты чата подсвечивает сам chat.js, при уходе с чата гасим их.
+    if (name !== 'chat') document.querySelectorAll('[data-chat-open]').forEach((button) => button.classList.remove('is-active'));
     document.querySelectorAll('.view').forEach((view) => {
       const active = view.id === `${name}-view`;
       view.classList.toggle('is-visible', active);

@@ -1,14 +1,14 @@
 /* МОБИЛЬНЫЕ ТАЧ-ЖЕСТЫ.
  *
- *   • Открытие сэндвич-меню свайпом от левого края (clientX < 30) и закрытие
- *     свайпом влево. Меню «следует» за пальцем, отпускание доводит его до
- *     состояния через CSS-transition.
- *   • Pull-to-Refresh: собственный индикатор, потому что в iOS-PWA нативного
- *     обновления нет. Жест работает только когда страница в самом верху
- *     (window.scrollY === 0) и меню закрыто.
+ *   • В чате (открытая переписка) свайп от левого края возвращает к списку
+ *     чатов: тред «съезжает» вправо, показывая контакты/темы. Сэндвич-меню
+ *     открывается только кнопкой (свайпом — нет).
+ *   • Сэндвич-меню закрывается свайпом влево (по нему же).
+ *   • Pull-to-Refresh — собственный индикатор (в iOS-PWA нативного нет);
+ *     работает только когда страница в самом верху и чат не открыт.
  *
- * Файл самостоятельный: использует только DOM и global `Neft.closeDrawer`
- * (если доступен). На устройствах без тача ничего не делает.
+ * Файл самостоятельный: использует DOM и `NeftChat.back()` (если есть).
+ * На устройствах без тача ничего не делает.
  */
 (function () {
   'use strict';
@@ -17,19 +17,25 @@
   if (!touchCapable) return;
 
   const EDGE = 30;             // «горячая зона» у левого края
-  const OPEN_FRACTION = 0.33;  // доля ширины меню, после которой оно открывается
-  const CLOSE_DISTANCE = 60;   // свайп влево, достаточный для закрытия
-  const PTR_TRIGGER = 84;      // натяжение, после которого страница обновляется
+  const CHAT_OPEN_FRACTION = 0.3;
+  const CLOSE_DISTANCE = 60;   // свайп влево, достаточный для закрытия меню
+  const PTR_TRIGGER = 84;
   const PTR_MAX = 140;
-  const DRAWER_TRANSITION_MS = 320;
+  const MOBILE_QUERY = '(max-width: 760px)';
 
   const drawer = document.getElementById('drawer');
   const backdrop = document.getElementById('drawer-backdrop');
+  const chatView = document.getElementById('chat-view');
+  const chatMain = document.getElementById('chat-main');
 
   const drawerWidth = () => (drawer ? drawer.getBoundingClientRect().width || 320 : 320);
   const isDrawerOpen = () => Boolean(drawer && drawer.classList.contains('is-open'));
   const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
   const inMatrix = (target) => Boolean(target && target.closest && target.closest('.matrix-scroll'));
+  const isMobile = () => window.matchMedia(MOBILE_QUERY).matches;
+  const chatVisible = () => Boolean(chatView && !chatView.hidden && chatView.classList.contains('is-visible'));
+  const chatThreadOpen = () => chatVisible() && isMobile()
+    && Boolean(chatView && chatView.classList.contains('is-thread-open'));
 
   /* --- Индикатор Pull-to-Refresh ----------------------------------------- */
 
@@ -43,7 +49,6 @@
     document.body.appendChild(ptr);
   }
   const spinner = ptr.querySelector('.ptr-spinner');
-
   let pull = 0;
 
   function showPtr(value) {
@@ -61,7 +66,7 @@
     if (spinner) spinner.style.transform = '';
   }
 
-  /* --- Предпросмотр меню во время свайпа --------------------------------- */
+  /* --- Сэндвич-меню: предпросмотр свайпом влево (закрытие) ---------------- */
 
   function previewDrawer(progress) {
     if (!drawer) return;
@@ -79,39 +84,57 @@
     drawer.classList.remove('is-dragging');
     if (open) {
       drawer.style.transform = 'translateX(0)';
-      // Открытие делает штатный обработчик app.js (класс + backdrop + фокус).
       document.getElementById('drawer-open')?.click();
       setTimeout(() => {
         drawer.style.transform = '';
         if (backdrop) { backdrop.style.opacity = ''; backdrop.style.pointerEvents = ''; }
-      }, DRAWER_TRANSITION_MS);
+      }, 320);
     } else {
       drawer.style.transform = '';
       if (backdrop) { backdrop.style.opacity = ''; backdrop.style.pointerEvents = ''; }
     }
   }
 
+  /* --- Чат: свайп к списку ------------------------------------------------ */
+
+  function previewChat(offset) {
+    if (!chatMain) return;
+    chatMain.classList.add('is-dragging');
+    chatMain.style.transform = `translateX(${Math.max(0, offset)}px)`;
+  }
+
+  function settleChat(open) {
+    if (!chatMain) return;
+    chatMain.classList.remove('is-dragging');
+    if (open) {
+      // back() снимает класс треда и инлайновый сдвиг — тред уезжает вправо.
+      window.NeftChat?.back?.();
+    } else {
+      chatMain.style.transform = 'translateX(0)';
+      setTimeout(() => { chatMain.style.transform = ''; }, 330);
+    }
+  }
+
   /* --- Жесты -------------------------------------------------------------- */
 
-  let mode = null;   // 'drawer' | 'drawer-close' | 'ptr' | 'ptr-maybe'
+  let mode = null;   // 'drawer-close' | 'chat' | 'ptr' | 'ptr-maybe'
   let startX = 0;
   let startY = 0;
   let lastX = 0;
-  let lastY = 0;
 
   document.addEventListener('touchstart', (event) => {
     if (event.touches.length !== 1) { mode = null; return; }
     const touch = event.touches[0];
     startX = lastX = touch.clientX;
-    startY = lastY = touch.clientY;
-    if (dialogOpen() || !drawer) { mode = null; return; }
+    startY = touch.clientY;
+    if (dialogOpen()) { mode = null; return; }
 
     if (isDrawerOpen()) {
-      mode = drawer.contains(event.target) ? 'drawer-close' : null;
+      mode = drawer && drawer.contains(event.target) ? 'drawer-close' : null;
       return;
     }
-    if (startX < EDGE) { mode = 'drawer'; return; }
-    if (window.scrollY <= 0 && !inMatrix(event.target)) { mode = 'ptr-maybe'; return; }
+    if (startX < EDGE && chatThreadOpen()) { mode = 'chat'; return; }
+    if (!chatVisible() && window.scrollY <= 0 && !inMatrix(event.target)) { mode = 'ptr-maybe'; return; }
     mode = null;
   }, { passive: true });
 
@@ -121,12 +144,11 @@
     const dx = touch.clientX - startX;
     const dy = touch.clientY - startY;
     lastX = touch.clientX;
-    lastY = touch.clientY;
 
-    if (mode === 'drawer') {
-      if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) return; // влево/вертикально — не наше
+    if (mode === 'chat') {
+      if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) return;
       event.preventDefault();
-      previewDrawer(dx / (drawerWidth() * 0.9));
+      previewChat(dx);
       return;
     }
     if (mode === 'drawer-close') {
@@ -149,8 +171,8 @@
   }, { passive: false });
 
   document.addEventListener('touchend', () => {
-    if (mode === 'drawer') {
-      settleDrawer(lastX - startX > drawerWidth() * OPEN_FRACTION);
+    if (mode === 'chat') {
+      settleChat(lastX - startX > window.innerWidth * CHAT_OPEN_FRACTION);
     } else if (mode === 'drawer-close') {
       if (startX - lastX > CLOSE_DISTANCE) window.Neft?.closeDrawer?.();
       else settleDrawer(false);
@@ -167,7 +189,8 @@
 
   document.addEventListener('touchcancel', () => {
     if (mode === 'ptr') hidePtr();
-    if (mode === 'drawer' || mode === 'drawer-close') settleDrawer(isDrawerOpen());
+    if (mode === 'drawer-close') settleDrawer(false);
+    if (mode === 'chat') settleChat(false);
     mode = null;
   }, { passive: true });
 })();

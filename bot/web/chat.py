@@ -40,7 +40,7 @@ from bot.database.models import engine
 from bot.web import push
 from bot.web.auth import COOKIE_NAME, read_session
 from bot.web.calendar_service import get_user_preferences
-from bot.web.deps import require_csrf, require_user
+from bot.web.deps import require_csrf, require_manager_csrf, require_user
 
 logger = logging.getLogger("bot.web.chat")
 
@@ -56,6 +56,8 @@ MAX_WIDTH = 1600
 WEBP_QUALITY = 75
 DEFAULT_PAGE = 30
 MAX_PAGE = 100
+MAX_ROOM_NAME = 60
+DEFAULT_ROOM_NAME = "Общий чат"
 STAFF_ROLES = ("barista", "senior", "mentor")
 
 # Путь картинки, который мы сами выдаём в /chat/upload. По нему же валидируем
@@ -77,9 +79,30 @@ def uploads_dir() -> Path:
     return _uploads_dir
 
 
+def _ensure_column(connection: Any, table: str, column: str, ddl: str) -> None:
+    """Идемпотентно добавляет колонку в существующую базу."""
+    existing = {row[1] for row in connection.execute(text(f"PRAGMA table_info({table})"))}
+    if column not in existing:
+        connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+
+
 def initialize_schema(db: Engine) -> None:
-    """Идемпотентно создаёт таблицу сообщений и индексы."""
+    """Идемпотентно создаёт таблицы чата и переносит общий чат в тему.
+
+    Раньше общий чат был один (`recipient_id IS NULL`). Теперь тем может быть
+    много: у сообщения появляется `room_id`, а старые «общие» сообщения
+    переносятся в тему по умолчанию, чтобы история не пропала.
+    """
     with db.begin() as connection:
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS chat_rooms (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                created_by INTEGER REFERENCES users(id),
+                created_at DATETIME NOT NULL,
+                order_index INTEGER NOT NULL DEFAULT 0
+            )
+        """))
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,12 +113,57 @@ def initialize_schema(db: Engine) -> None:
                 created_at DATETIME NOT NULL
             )
         """))
+        _ensure_column(connection, "chat_messages", "room_id", "INTEGER")
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_chat_recipient ON chat_messages (recipient_id, id)
         """))
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_chat_sender_recipient ON chat_messages (sender_id, recipient_id, id)
         """))
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_chat_room ON chat_messages (room_id, id)
+        """))
+
+        room_id = connection.execute(
+            text("SELECT id FROM chat_rooms ORDER BY order_index, id LIMIT 1")
+        ).scalar()
+        if room_id is None:
+            connection.execute(text("""
+                INSERT INTO chat_rooms (name, created_at, order_index) VALUES (:name, :now, 0)
+            """), {"name": DEFAULT_ROOM_NAME, "now": _utcnow_iso()})
+            room_id = connection.execute(
+                text("SELECT id FROM chat_rooms ORDER BY order_index, id LIMIT 1")
+            ).scalar()
+        # Старые сообщения общего чата уходят в тему по умолчанию.
+        connection.execute(text("""
+            UPDATE chat_messages SET room_id = :room WHERE recipient_id IS NULL AND room_id IS NULL
+        """), {"room": int(room_id)})
+
+
+def default_room_id() -> int:
+    with engine.connect() as connection:
+        value = connection.execute(
+            text("SELECT id FROM chat_rooms ORDER BY order_index, id LIMIT 1")
+        ).scalar()
+    return int(value) if value is not None else 0
+
+
+def _room_exists(room_id: int) -> bool:
+    with engine.connect() as connection:
+        found = connection.execute(
+            text("SELECT 1 FROM chat_rooms WHERE id = :id"), {"id": int(room_id)}
+        ).first()
+    return found is not None
+
+
+def _room_name(room_id: Any) -> str:
+    if room_id is None:
+        return DEFAULT_ROOM_NAME
+    with engine.connect() as connection:
+        value = connection.execute(
+            text("SELECT name FROM chat_rooms WHERE id = :id"), {"id": int(room_id)}
+        ).scalar()
+    return str(value) if value else DEFAULT_ROOM_NAME
 
 
 # --- Изображения ------------------------------------------------------------ #
@@ -138,6 +206,7 @@ def _row_to_message(row: Any) -> dict[str, Any]:
         "id": int(row["id"]),
         "sender_id": int(row["sender_id"]),
         "recipient_id": int(row["recipient_id"]) if row["recipient_id"] is not None else None,
+        "room_id": int(row["room_id"]) if row["room_id"] is not None else None,
         "text": row["text"] or "",
         "image_url": row["image_url"],
         "created_at": row["created_at"],
@@ -145,25 +214,27 @@ def _row_to_message(row: Any) -> dict[str, Any]:
 
 
 def store_message(sender_id: int, recipient_id: int | None, text_value: str | None,
-                  image_url: str | None) -> dict[str, Any]:
+                  image_url: str | None, room_id: int | None = None) -> dict[str, Any]:
     created = _utcnow_iso()
     with engine.begin() as connection:
         result = connection.execute(text("""
-            INSERT INTO chat_messages (sender_id, recipient_id, text, image_url, created_at)
-            VALUES (:s, :r, :t, :i, :c)
-        """), {"s": sender_id, "r": recipient_id, "t": text_value, "i": image_url, "c": created})
+            INSERT INTO chat_messages (sender_id, recipient_id, room_id, text, image_url, created_at)
+            VALUES (:s, :r, :room, :t, :i, :c)
+        """), {"s": sender_id, "r": recipient_id, "room": room_id,
+               "t": text_value, "i": image_url, "c": created})
         new_id = int(result.lastrowid)
     return {
         "id": new_id,
         "sender_id": sender_id,
         "recipient_id": recipient_id,
+        "room_id": room_id,
         "text": text_value or "",
         "image_url": image_url,
         "created_at": created,
     }
 
 
-def fetch_messages(channel: str, user_id: int, peer_id: int | None,
+def fetch_messages(channel: str, user_id: int, peer_id: int | None, room_id: int | None,
                    before_id: int | None, limit: int) -> tuple[list[dict[str, Any]], bool]:
     """Страница сообщений (по возрастанию id) и признак «есть ещё старее»."""
     params: dict[str, Any] = {"limit": limit + 1}
@@ -172,13 +243,14 @@ def fetch_messages(channel: str, user_id: int, peer_id: int | None,
                  "((sender_id = :me AND recipient_id = :peer) OR (sender_id = :peer AND recipient_id = :me))")
         params.update({"me": user_id, "peer": peer_id})
     else:
-        where = "recipient_id IS NULL"
+        where = "recipient_id IS NULL AND room_id = :room"
+        params["room"] = room_id
     if before_id is not None:
         where += " AND id < :before_id"
         params["before_id"] = before_id
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
-            SELECT id, sender_id, recipient_id, text, image_url, created_at
+            SELECT id, sender_id, recipient_id, room_id, text, image_url, created_at
             FROM chat_messages WHERE {where}
             ORDER BY id DESC LIMIT :limit
         """), params).mappings().all()
@@ -335,10 +407,14 @@ def _notify_chat_push(author: dict[str, Any], message: dict[str, Any]) -> None:
                 continue
             if not is_dm and user_id not in mentioned and mode != "all":
                 continue
-            kind = "Личное сообщение" if is_dm else ("Упоминание" if user_id in mentioned else "Общий чат")
-            url = f"/?view=chat&peer={author_id}" if is_dm else "/?view=chat"
+            if is_dm:
+                title = f"{author_name} · Личное сообщение"
+                url = f"/?view=chat&peer={author_id}"
+            else:
+                title = f"{author_name} · {_room_name(message.get('room_id'))}"
+                url = f"/?view=chat&room={message.get('room_id')}"
             push.send_to_user(engine, user_id, {
-                "title": f"{author_name} · {kind}",
+                "title": title,
                 "body": preview,
                 "url": url,
                 "tag": f"chat-{message.get('id')}",
@@ -350,41 +426,144 @@ def _notify_chat_push(author: dict[str, Any], message: dict[str, Any]) -> None:
 # --- HTTP ------------------------------------------------------------------- #
 
 
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Некорректный JSON") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="Ожидался JSON-объект")
+    return payload
+
+
 @chat_router.get("/users")
 def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Список сотрудников для вкладки «Личные» (кроме себя)."""
+    """Собеседники для личных чатов: сначала те, с кем писали недавно."""
+    me = int(user["id"])
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT id, name, display_name, role, avatar_rev FROM users
-            WHERE is_active = 1 AND role IN ('barista','senior','mentor') AND id != :me
-            ORDER BY COALESCE(display_name, name) COLLATE NOCASE
-        """), {"me": int(user["id"])}).mappings().all()
-    return {"users": [
-        {
+            SELECT u.id, u.name, u.display_name, u.role, u.avatar_rev,
+                   (SELECT MAX(m.created_at) FROM chat_messages m
+                     WHERE m.recipient_id IS NOT NULL
+                       AND ((m.sender_id = u.id AND m.recipient_id = :me)
+                            OR (m.sender_id = :me AND m.recipient_id = u.id))) AS last_at,
+                   (SELECT COALESCE(NULLIF(TRIM(m.text), ''), 'Фото') FROM chat_messages m
+                     WHERE m.recipient_id IS NOT NULL
+                       AND ((m.sender_id = u.id AND m.recipient_id = :me)
+                            OR (m.sender_id = :me AND m.recipient_id = u.id))
+                     ORDER BY m.id DESC LIMIT 1) AS last_text
+            FROM users u
+            WHERE u.is_active = 1 AND u.role IN ('barista','senior','mentor') AND u.id != :me
+        """), {"me": me}).mappings().all()
+    users = []
+    for row in rows:
+        preview = str(row["last_text"] or "").strip().replace("\n", " ")
+        if len(preview) > 80:
+            preview = preview[:79].rstrip() + "…"
+        users.append({
             "id": int(row["id"]),
             "name": row["name"],
             "display_name": row["display_name"],
             "role": row["role"],
             "avatar_rev": int(row["avatar_rev"] or 0),
-        }
-        for row in rows
-    ]}
+            "last_at": row["last_at"],
+            "last_text": preview,
+        })
+    active = sorted([u for u in users if u["last_at"]], key=lambda item: item["last_at"], reverse=True)
+    empty = sorted([u for u in users if not u["last_at"]],
+                   key=lambda item: str(item["display_name"] or item["name"] or "").lower())
+    return {"users": active + empty}
+
+
+@chat_router.get("/rooms")
+def chat_room_list(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Темы общего чата: сначала те, где писали недавно, пустые — по алфавиту."""
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT r.id, r.name,
+                   (SELECT m.created_at FROM chat_messages m
+                     WHERE m.room_id = r.id ORDER BY m.id DESC LIMIT 1) AS last_at,
+                   (SELECT COALESCE(NULLIF(TRIM(m.text), ''), 'Фото') FROM chat_messages m
+                     WHERE m.room_id = r.id ORDER BY m.id DESC LIMIT 1) AS last_text,
+                   (SELECT COALESCE(u.display_name, u.name) FROM chat_messages m
+                      JOIN users u ON u.id = m.sender_id
+                     WHERE m.room_id = r.id ORDER BY m.id DESC LIMIT 1) AS last_sender
+            FROM chat_rooms r ORDER BY r.order_index, r.id
+        """)).mappings().all()
+    rooms = []
+    for row in rows:
+        preview = str(row["last_text"] or "").strip().replace("\n", " ")
+        if len(preview) > 80:
+            preview = preview[:79].rstrip() + "…"
+        rooms.append({
+            "id": int(row["id"]),
+            "name": row["name"],
+            "last_at": row["last_at"],
+            "last_text": preview,
+            "last_sender": row["last_sender"],
+        })
+    active = sorted([r for r in rooms if r["last_at"]], key=lambda item: item["last_at"], reverse=True)
+    empty = sorted([r for r in rooms if not r["last_at"]], key=lambda item: str(item["name"]).lower())
+    return {"rooms": active + empty}
+
+
+@chat_router.post("/rooms")
+async def chat_room_create(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    payload = await _json_object(request)
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > MAX_ROOM_NAME:
+        raise HTTPException(status_code=422, detail=f"Название темы — от 1 до {MAX_ROOM_NAME} символов")
+    with engine.begin() as connection:
+        next_order = connection.execute(
+            text("SELECT COALESCE(MAX(order_index), -1) + 1 FROM chat_rooms")
+        ).scalar_one()
+        result = connection.execute(text("""
+            INSERT INTO chat_rooms (name, created_by, created_at, order_index)
+            VALUES (:name, :author, :now, :order_index)
+        """), {"name": name, "author": int(user["id"]), "now": _utcnow_iso(),
+               "order_index": int(next_order)})
+        room_id = int(result.lastrowid)
+    return {"ok": True, "room": {"id": room_id, "name": name, "last_at": None, "last_text": "", "last_sender": None}}
+
+
+@chat_router.patch("/rooms/{room_id}")
+async def chat_room_rename(room_id: int, request: Request,
+                           user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    payload = await _json_object(request)
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > MAX_ROOM_NAME:
+        raise HTTPException(status_code=422, detail=f"Название темы — от 1 до {MAX_ROOM_NAME} символов")
+    with engine.begin() as connection:
+        result = connection.execute(
+            text("UPDATE chat_rooms SET name = :name WHERE id = :id"),
+            {"name": name, "id": int(room_id)},
+        )
+    if not result.rowcount:
+        raise HTTPException(status_code=404, detail="Тема не найдена")
+    return {"ok": True, "room": {"id": int(room_id), "name": name}}
 
 
 @chat_router.get("/messages")
-def chat_messages(channel: str = "general", peer_id: int | None = None,
+def chat_messages(channel: str = "room", peer_id: int | None = None, room_id: int | None = None,
                   before_id: int | None = None, limit: int = DEFAULT_PAGE,
                   user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    if channel not in {"general", "dm"}:
+    """История: личные (`channel=dm&peer_id`) или тема (`channel=room&room_id`)."""
+    if channel not in {"room", "dm"}:
         raise HTTPException(status_code=422, detail="Неизвестный канал")
+    peer = None
+    room = None
     if channel == "dm":
         if peer_id is None or int(peer_id) == int(user["id"]):
             raise HTTPException(status_code=422, detail="Некорректный собеседник")
         if not _active_staff(int(peer_id)):
             raise HTTPException(status_code=404, detail="Сотрудник не найден")
+        peer = int(peer_id)
+    else:
+        room = int(room_id) if room_id is not None else default_room_id()
+        if not _room_exists(room):
+            raise HTTPException(status_code=404, detail="Тема не найдена")
     page = max(1, min(int(limit), MAX_PAGE))
-    messages, has_more = fetch_messages(channel, int(user["id"]),
-                                        int(peer_id) if peer_id is not None else None,
+    messages, has_more = fetch_messages(channel, int(user["id"]), peer, room,
                                         int(before_id) if before_id is not None else None, page)
     return {"messages": messages, "has_more": has_more}
 
@@ -463,11 +642,21 @@ async def _handle_incoming(author: dict[str, Any], payload: dict[str, Any]) -> N
         if recipient_id is not None and (recipient_id == int(author["id"]) or not _active_staff(recipient_id)):
             recipient_id = None
 
+    room_id: int | None = None
+    if recipient_id is None:
+        raw_room = payload.get("room_id")
+        try:
+            room_id = int(raw_room) if raw_room is not None else default_room_id()
+        except (TypeError, ValueError):
+            room_id = default_room_id()
+        if not _room_exists(room_id):
+            room_id = default_room_id()
+
     if not text_value and not image_url:
         await manager.send_to_user(int(author["id"]), {"type": "error", "detail": "Пустое сообщение"})
         return
 
-    message = store_message(int(author["id"]), recipient_id, text_value or None, image_url)
+    message = store_message(int(author["id"]), recipient_id, text_value or None, image_url, room_id)
     envelope = {"type": "message", "message": message}
     if recipient_id is None:
         await manager.broadcast(envelope)
@@ -506,4 +695,5 @@ async def chat_socket(websocket: WebSocket) -> None:
         manager.disconnect(int(user["id"]), websocket)
 
 
-__all__ = ["chat_router", "router", "initialize_schema", "manager", "compress_image", "uploads_dir"]
+__all__ = ["chat_router", "router", "initialize_schema", "manager", "compress_image",
+           "uploads_dir", "default_room_id"]
