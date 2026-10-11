@@ -35,6 +35,7 @@
     form: document.getElementById('chat-form'),
     input: document.getElementById('chat-input'),
     attach: document.getElementById('chat-attach'),
+    pasteButton: document.getElementById('chat-paste'),
     file: document.getElementById('chat-file'),
     hint: document.getElementById('chat-peer-hint'),
     back: document.getElementById('chat-back'),
@@ -1087,29 +1088,87 @@
       }
     });
     el.attach.addEventListener('click', () => el.file.click());
+    el.pasteButton?.addEventListener('click', pasteFromClipboard);
+    // Кнопка «вставить» есть только там, где браузер даёт читать буфер (Safari/iOS в том числе).
+    if (el.pasteButton && navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+      el.pasteButton.hidden = false;
+    }
     el.file.addEventListener('change', async () => {
       const file = el.file.files && el.file.files[0];
       el.file.value = '';
-      if (!file) return;
-      if (!file.type.startsWith('image/')) { showToast('Можно прикрепить только изображение'); return; }
-      if (file.size > MAX_IMAGE_BYTES) { showToast('Изображение больше 8 МБ'); return; }
-      if (!state.threadOpen) { showToast('Сначала выберите чат'); return; }
-      setStatus('Отправляем изображение…');
-      try {
-        const uploaded = await api('/chat/upload', {
-          method: 'POST',
-          body: file,
-          headers: { 'Content-Type': file.type || 'application/octet-stream' },
-        });
-        sendMessage('', uploaded.url);
-        setStatus('');
-      } catch (error) {
-        setStatus('');
-        showToast(error.message);
-      }
+      if (file) await uploadAndSend(file);
     });
     el.log.addEventListener('scroll', () => {
       if (el.log.scrollTop <= 24 && state.hasMore && !state.loading) loadMessages({ older: true });
+    });
+  }
+
+  /* --- Картинки: скрепка, буфер обмена ------------------------------------- */
+
+  async function uploadAndSend(file) {
+    if (!file) return false;
+    if (!state.threadOpen) { showToast('Сначала выберите чат'); return false; }
+    const type = file.type || '';
+    if (type && !type.startsWith('image/')) { showToast('Можно прикрепить только изображение'); return false; }
+    if (file.size > MAX_IMAGE_BYTES) { showToast('Изображение больше 8 МБ'); return false; }
+    setStatus('Отправляем изображение…');
+    try {
+      const uploaded = await api('/chat/upload', {
+        method: 'POST',
+        body: file,
+        headers: { 'Content-Type': type || 'application/octet-stream' },
+      });
+      const sent = sendMessage('', uploaded.url, null);
+      setStatus('');
+      return sent;
+    } catch (error) {
+      setStatus('');
+      showToast(error.message);
+      return false;
+    }
+  }
+
+  async function pasteFromClipboard() {
+    if (!state.threadOpen) { showToast('Сначала выберите чат'); return; }
+    if (!navigator.clipboard || typeof navigator.clipboard.read !== 'function') {
+      showToast('Браузер не даёт доступ к буферу — вставьте через Ctrl+V');
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = (item.types || []).find((value) => value.startsWith('image/'));
+        if (!type) continue;
+        const blob = await item.getType(type);
+        await uploadAndSend(new File([blob], 'clipboard', { type }));
+        return;
+      }
+      showToast('В буфере нет изображения');
+    } catch (error) {
+      showToast('Не получилось прочитать буфер — попробуйте Ctrl+V');
+    }
+  }
+
+  function clipboardImage(transfer) {
+    if (!transfer) return null;
+    const files = Array.from(transfer.files || []);
+    const fromFiles = files.find((file) => (file.type || '').startsWith('image/'));
+    if (fromFiles) return fromFiles;
+    const items = Array.from(transfer.items || []);
+    const entry = items.find((item) => item.kind === 'file' && (item.type || '').startsWith('image/'));
+    return entry ? entry.getAsFile() : null;
+  }
+
+  function wirePaste() {
+    // Вставка из буфера: Ctrl/Cmd+V и «Вставить» из меню на телефоне.
+    document.addEventListener('paste', (event) => {
+      if (!state.threadOpen) return;
+      const target = event.target;
+      if (!target || typeof target.closest !== 'function' || !target.closest('#chat-form, #chat-view')) return;
+      const file = clipboardImage(event.clipboardData);
+      if (!file) return;
+      event.preventDefault();
+      uploadAndSend(file);
     });
   }
 
@@ -1393,6 +1452,7 @@
     });
 
     wireComposer();
+    wirePaste();
     wireMessageMenu();
     wirePolls();
     wirePollDialog();
