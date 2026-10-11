@@ -585,8 +585,10 @@
     const shrink = Math.max(window.innerHeight - visible, idleVisible - visible);
     const keyboardOpen = inputFocused && shrink > 120;
     root.classList.toggle('is-keyboard', keyboardOpen);
-    // Если iOS всё-таки сдвинул видимую область, подтягиваем за ней шапку и чат.
-    root.style.setProperty('--vv-top', `${keyboardOpen ? Math.round(offset) : 0}px`);
+    // Документ держим ровно по видимой области и позицию страницы — в нуле:
+    // тогда iOS нечего прокручивать под клавиатуру, и шапка с названием
+    // контакта не двигаются (двигается только низ чата за клавиатурой).
+    root.style.setProperty('--vv-h', `${Math.round(visible)}px`);
     if (visible && topbarHeight) {
       const base = visible - topbarHeight - (keyboardOpen ? 0 : dockHeight);
       root.style.setProperty('--chat-h', `${Math.max(180, Math.round(base))}px`);
@@ -597,8 +599,7 @@
       `topbar ${topbarHeight}  dock ${dockVisible ? dockHeight : 'скрыт'}  kb ${keyboardOpen ? 'да' : 'нет'}`,
       `chatH ${getComputedStyle(root).getPropertyValue('--chat-h').trim()}  scrollY ${Math.round(window.scrollY)}`,
       `chat ${Math.round(chatBox.top)}…${Math.round(chatBox.bottom)}  dockTop ${dockVisible ? Math.round(dock.getBoundingClientRect().top) : '—'}`,
-    ].join('\n'));
-  }
+    ].join('\n'));  }
 
   function scheduleChromeMeasure() {
     // Клавиатура iOS выезжает с анимацией и часть событий приходит раньше времени.
@@ -616,11 +617,12 @@
     if (!viewport) return;
     const apply = () => {
       measureChrome();
-      if (state.threadOpen && document.activeElement === el.input) {
-        // Поле ввода и так видно — если документ сам уехал, возвращаем его.
-        if (window.scrollY) window.scrollTo(0, 0);
-        scrollToBottom();
+      // Страница в режиме чата не прокручивается: если iOS всё-таки сдвинул её,
+      // пока выезжала клавиатура, — возвращаем на место и держим последние сообщения.
+      if (document.documentElement.classList.contains('is-chat-open') && window.scrollY !== 0) {
+        window.scrollTo(0, 0);
       }
+      if (state.threadOpen && document.activeElement === el.input) scrollToBottom();
     };
     viewport.addEventListener('resize', apply);
     viewport.addEventListener('scroll', apply);
