@@ -96,6 +96,23 @@ else
   sudo systemctl restart "$SERVICE"
 fi
 
+# --- 2b. nginx ---------------------------------------------------------------
+# Конфиг сайта лежит в репозитории (deploy/nginx.conf), но установленную копию
+# обновляем здесь: иначе правки вроде WebSocket-локации остаются только в git и
+# молча не работают на сервере. Трогаем только если сайт уже подключён в nginx
+# (файл существует) и мы root — на хосте без nginx шаг просто пропускается.
+NGINX_SITE="${NGINX_SITE:-/etc/nginx/sites-available/coffee-bot}"
+if [ "$(id -u)" = "0" ] && [ -f "$APP_DIR/deploy/nginx.conf" ] && [ -f "$NGINX_SITE" ]; then
+  if ! cmp -s "$APP_DIR/deploy/nginx.conf" "$NGINX_SITE"; then
+    echo "==> Обновляю конфиг nginx ($NGINX_SITE)"
+    cp "$APP_DIR/deploy/nginx.conf" "$NGINX_SITE"
+    nginx -t
+    systemctl reload nginx
+  else
+    echo "==> Конфиг nginx без изменений"
+  fi
+fi
+
 # --- 3. Проверка, что приложение ожило ---------------------------------------
 echo "==> Жду ответа приложения на $HEALTH_URL"
 for _ in $(seq 1 45); do
