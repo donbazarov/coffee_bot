@@ -541,6 +541,20 @@
 
   const mobileQuery = window.matchMedia ? window.matchMedia('(max-width: 760px)') : null;
   const isMobile = () => Boolean(mobileQuery && mobileQuery.matches);
+  // Диагностика раскладки: открыть с ?chatdebug=1 и прислать скриншот.
+  const CHAT_DEBUG = new URLSearchParams(window.location.search).has('chatdebug');
+  let debugNode = null;
+  let idleVisible = 0;   // высота видимой области без клавиатуры
+
+  function showDebug(text) {
+    if (!CHAT_DEBUG) return;
+    if (!debugNode) {
+      debugNode = document.createElement('div');
+      debugNode.className = 'chat-debug';
+      document.body.append(debugNode);
+    }
+    debugNode.textContent = text;
+  }
 
   function measureChrome() {
     const root = document.documentElement;
@@ -552,39 +566,65 @@
     }
     let dockHeight = 0;
     const dock = document.getElementById('dock');
-    if (dock && getComputedStyle(dock).display !== 'none') {
+    const dockVisible = Boolean(dock) && getComputedStyle(dock).display !== 'none';
+    if (dock && dockVisible) {
       dockHeight = Math.round(dock.getBoundingClientRect().height);
       if (dockHeight > 0) root.style.setProperty('--dock-h', `${dockHeight}px`);
     }
-    // Высоту чата считаем от реально видимой области. Пока клавиатура открыта,
-    // чат занимает всё место над доком: шапка в этот момент и так уехала вверх
-    // (iOS сдвигает страницу, чтобы показать поле ввода).
+    // Всё положение считаем от видимой области (visualViewport): на iOS она
+    // укорачивается клавиатурой, а документ при этом не меняется.
     const viewport = window.visualViewport;
     const visible = viewport ? viewport.height : window.innerHeight;
-    const keyboardOpen = window.innerHeight - visible > 60;
+    const offset = viewport ? viewport.offsetTop : 0;
+    const active = document.activeElement;
+    const inputFocused = Boolean(active) && /^(input|textarea)$/i.test(active.tagName || '');
+    if (!inputFocused) idleVisible = visible;
+    // Клавиатура = фокус в поле ввода + заметно укоратившаяся видимая область
+    // (на iOS укорачивается visualViewport, в Chrome — innerHeight). Порог 120px
+    // отсекает схлопывание панели Safari (там разница ~50–90px).
+    const shrink = Math.max(window.innerHeight - visible, idleVisible - visible);
+    const keyboardOpen = inputFocused && shrink > 120;
+    root.classList.toggle('is-keyboard', keyboardOpen);
+    // Если iOS всё-таки сдвинул видимую область, подтягиваем за ней шапку и чат.
+    root.style.setProperty('--vv-top', `${keyboardOpen ? Math.round(offset) : 0}px`);
     if (visible && topbarHeight) {
-      const base = keyboardOpen ? visible - dockHeight : visible - topbarHeight - dockHeight;
-      root.style.setProperty('--chat-h', `${Math.max(220, Math.round(base))}px`);
+      const base = visible - topbarHeight - (keyboardOpen ? 0 : dockHeight);
+      root.style.setProperty('--chat-h', `${Math.max(180, Math.round(base))}px`);
     }
+    const chatBox = view.getBoundingClientRect();
+    showDebug([
+      `innerH ${Math.round(window.innerHeight)}  vvH ${Math.round(visible)}  vvTop ${Math.round(offset)}`,
+      `topbar ${topbarHeight}  dock ${dockVisible ? dockHeight : 'скрыт'}  kb ${keyboardOpen ? 'да' : 'нет'}`,
+      `chatH ${getComputedStyle(root).getPropertyValue('--chat-h').trim()}  scrollY ${Math.round(window.scrollY)}`,
+      `chat ${Math.round(chatBox.top)}…${Math.round(chatBox.bottom)}  dockTop ${dockVisible ? Math.round(dock.getBoundingClientRect().top) : '—'}`,
+    ].join('\n'));
+  }
+
+  function scheduleChromeMeasure() {
+    // Клавиатура iOS выезжает с анимацией и часть событий приходит раньше времени.
+    measureChrome();
+    [80, 200, 420, 750].forEach((delay) => setTimeout(measureChrome, delay));
   }
 
   function setupKeyboard() {
     measureChrome();
-    window.addEventListener('resize', measureChrome);
+    window.addEventListener('resize', scheduleChromeMeasure);
+    document.addEventListener('focusin', scheduleChromeMeasure);
+    document.addEventListener('focusout', scheduleChromeMeasure);
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(measureChrome).catch(() => {});
     const viewport = window.visualViewport;
     if (!viewport) return;
     const apply = () => {
       measureChrome();
       if (state.threadOpen && document.activeElement === el.input) {
-        // Поле ввода и так видно над клавиатурой — если страница сама уехала, возвращаем её.
+        // Поле ввода и так видно — если документ сам уехал, возвращаем его.
         if (window.scrollY) window.scrollTo(0, 0);
         scrollToBottom();
       }
     };
     viewport.addEventListener('resize', apply);
     viewport.addEventListener('scroll', apply);
-    window.addEventListener('orientationchange', () => setTimeout(apply, 150));
+    window.addEventListener('orientationchange', () => { idleVisible = 0; setTimeout(scheduleChromeMeasure, 150); });
     apply();
   }
 
