@@ -14,6 +14,9 @@ jinja2==3.1.6
 sqlalchemy==2.0.23
 python-dotenv==1.0.1
 
+# Разбор multipart/form-data — нужен только точке приёма «Поделиться» (POST /chat/share)
+python-multipart==0.0.20
+
 # Часовые пояса для zoneinfo: нужен на Windows и в минимальном образе Linux
 tzdata==2025.2
 

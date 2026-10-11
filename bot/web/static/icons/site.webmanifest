@@ -6,6 +6,22 @@
   "start_url": "/?utm_source=pwa",
   "id": "/",
   "scope": "/",
+  "share_target": {
+    "action": "/chat/share",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "images",
+          "accept": ["image/jpeg", "image/png", "image/webp"]
+        }
+      ]
+    }
+  },
   "icons": [
     {
       "src": "/static/icons/web-app-manifest-192x192.png",

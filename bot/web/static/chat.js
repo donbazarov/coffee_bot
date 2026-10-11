@@ -21,6 +21,11 @@
   const MANAGER = Boolean(window.Neft.user.manager);
   const PAGE = 30;
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+  // Файлы из системного меню «Поделиться»: app.js разбирает адрес раньше нас и
+  // оставляет в нём `share`/`share_error` — читаем их до любых await.
+  const bootParams = new URLSearchParams(window.location.search);
+  const bootShareToken = bootParams.get('share');
+  const bootShareError = bootParams.get('share_error');
 
   const el = {
     list: document.getElementById('chat-list'),
@@ -56,6 +61,13 @@
   const pollOptions = document.getElementById('poll-options');
   const pollError = document.getElementById('poll-form-error');
 
+  const shareDialog = document.getElementById('share-dialog');
+  const shareForm = document.getElementById('share-form');
+  const sharePreview = document.getElementById('share-preview');
+  const shareTargets = document.getElementById('share-targets');
+  const shareError = document.getElementById('share-form-error');
+  const shareSubmit = document.getElementById('share-submit');
+
   const state = {
     channel: 'dm',     // 'dm' (личные) | 'room' (темы)
     peerId: null,
@@ -75,6 +87,8 @@
     mentionItems: [],
     mentionIndex: 0,
     roomVisibility: 'all',
+    share: null,          // заявка «Поделиться» -> {token, files, text}
+    shareTarget: null,    // выбранный чат -> {type, id}
     longPress: null,
     longPressStart: null,
     hasMore: false,
@@ -1204,6 +1218,143 @@
     }
   }
 
+  /* --- Файлы из «Поделиться» ---------------------------------------------- */
+
+  function shareErrorText(code) {
+    if (code === 'auth') return 'Войдите, чтобы отправить изображение';
+    if (code === 'size') return 'Изображение больше 8 МБ';
+    if (code === 'form') return 'Не удалось прочитать файлы';
+    return 'Не удалось принять изображение';
+  }
+
+  function clearShareParams() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('share');
+    url.searchParams.delete('share_error');
+    const tail = url.searchParams.toString();
+    window.history.replaceState({}, '', url.pathname + (tail ? `?${tail}` : ''));
+  }
+
+  function shareOptions() {
+    const rooms = state.rooms.map((room) => ({
+      type: 'room', id: Number(room.id), name: room.name,
+      kind: room.visibility === 'selected' ? 'ЗАКРЫТАЯ ТЕМА' : 'ТЕМА',
+    }));
+    const people = state.contacts.map((person) => ({
+      type: 'dm', id: Number(person.id), name: person.display_name || person.name,
+      kind: 'ЛИЧНЫЙ ЧАТ', person,
+    }));
+    return rooms.concat(people);
+  }
+
+  function renderShareTargets() {
+    if (!shareTargets) return;
+    const items = shareOptions();
+    if (!items.length) {
+      shareTargets.innerHTML = '<p class="empty-state">Нет доступных чатов</p>';
+      return;
+    }
+    shareTargets.innerHTML = items.map((item) => {
+      const on = Boolean(state.shareTarget)
+        && state.shareTarget.type === item.type
+        && Number(state.shareTarget.id) === Number(item.id);
+      const icon = item.type === 'room'
+        ? '<span class="chat-avatar chat-avatar-room"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg></span>'
+        : `<span class="chat-avatar">${avatarMarkup(item.id, item.person.avatar_rev, item.name)}</span>`;
+      return `<button class="share-target${on ? ' is-selected' : ''}" type="button" role="radio" aria-checked="${on ? 'true' : 'false'}" data-share-type="${item.type}" data-share-id="${item.id}">${icon}<span class="share-target-name">${escapeHtml(item.name)}</span><span class="share-target-kind">${item.kind}</span></button>`;
+    }).join('');
+  }
+
+  function shareFail(message) {
+    if (!shareError) return;
+    shareError.textContent = message;
+    shareError.hidden = false;
+  }
+
+  async function startShare(token) {
+    if (!shareDialog || !shareForm) return;
+    let data;
+    try {
+      data = await api(`/chat/share/${token}`);
+    } catch (error) {
+      showToast(error.message);
+      clearShareParams();
+      return;
+    }
+    state.share = data;
+    state.shareTarget = null;
+    await safe(loadContacts);
+    await safe(loadRooms);
+    if (sharePreview) {
+      sharePreview.innerHTML = (data.files || []).map((file) => `<a href="${escapeHtml(file.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(file.url)}" alt="${escapeHtml(file.name)}" loading="lazy"></a>`).join('');
+    }
+    shareForm.reset();
+    if (data.text) shareForm.elements.caption.value = data.text;
+    renderShareTargets();
+    if (shareError) shareError.hidden = true;
+    shareDialog.showModal();
+    showToast((data.files || []).length > 1
+      ? `Получено изображений: ${data.files.length} — выберите чат`
+      : 'Выберите чат, куда отправить изображение');
+  }
+
+  async function submitShare(event) {
+    event.preventDefault();
+    const share = state.share;
+    const target = state.shareTarget;
+    if (!share) return;
+    if (shareError) shareError.hidden = true;
+    if (!target) { shareFail('Выберите чат'); return; }
+    const caption = shareForm.elements.caption.value.trim();
+    if (shareSubmit) shareSubmit.disabled = true;
+    try {
+      const data = await api(`/chat/share/${share.token}/send`, {
+        method: 'POST',
+        body: JSON.stringify({ target_type: target.type, target_id: target.id, text: caption }),
+      });
+      state.share = null;
+      state.shareTarget = null;
+      shareDialog.close();
+      clearShareParams();
+      const opened = target.type === 'room' ? await openThread({ roomId: target.id }) : await openThread({ peerId: target.id });
+      const count = (data.messages || []).length;
+      showToast(count > 1 ? `Отправлено изображений: ${count}` : 'Изображение отправлено');
+      return opened;
+    } catch (error) {
+      shareFail(error.message);
+      return undefined;
+    } finally {
+      if (shareSubmit) shareSubmit.disabled = false;
+    }
+  }
+
+  async function dismissShare() {
+    const share = state.share;
+    state.share = null;
+    state.shareTarget = null;
+    if (shareDialog && shareDialog.open) shareDialog.close();
+    clearShareParams();
+    if (share) await safe(() => api(`/chat/share/${share.token}`, { method: 'DELETE' }));
+  }
+
+  function wireShareDialog() {
+    shareForm?.addEventListener('submit', submitShare);
+    shareTargets?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-share-type]');
+      if (!button) return;
+      state.shareTarget = { type: button.dataset.shareType, id: Number(button.dataset.shareId) };
+      if (shareError) shareError.hidden = true;
+      renderShareTargets();
+    });
+    document.querySelectorAll('#share-dialog .dialog-close').forEach((button) => {
+      button.addEventListener('click', () => { dismissShare(); });
+    });
+    shareDialog?.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      dismissShare();
+    });
+  }
+
   /* --- Разметка и события ------------------------------------------------- */
 
   function wireUi() {
@@ -1245,6 +1396,7 @@
     wireMessageMenu();
     wirePolls();
     wirePollDialog();
+    wireShareDialog();
     setupKeyboard();
     document.addEventListener('visibilitychange', () => { if (!document.hidden) connect(); });
     window.addEventListener('online', connect);
@@ -1252,25 +1404,42 @@
 
   /* --- Открытие ----------------------------------------------------------- */
 
-  function deepLink() {
+  function deepLink(source) {
     const params = new URLSearchParams(window.location.search);
-    const peer = params.get('peer');
-    const room = params.get('room');
+    const peer = params.get('peer') || source.peer;
+    const room = params.get('room') || source.room;
     if (peer && Number(peer) !== ME) return { peerId: Number(peer) };
     if (room) return { roomId: Number(room) };
     return null;
   }
 
+  function takeDeepLink() {
+    const link = (window.Neft && window.Neft.deepLink) || null;
+    if (window.Neft) window.Neft.deepLink = null;
+    return link || {};
+  }
+
   async function open() {
     connect();
+    const link = takeDeepLink();
+    const shareToken = link.share || bootShareToken;
+    const shareProblem = link.shareError || bootShareError;
+    if (shareProblem) {
+      showToast(shareErrorText(shareProblem));
+      clearShareParams();
+    }
+    if (shareToken && !state.share) {
+      await startShare(shareToken);
+      return;
+    }
     if (!state.initialized) {
       state.initialized = true;
       await safe(loadContacts);   // каталог нужен и для имён авторов в темах
     }
     if (MANAGER) safe(renderRoomAdmin);
-    const link = deepLink();
-    if (link) {
-      await openThread(link);
+    const target = deepLink(link);
+    if (target) {
+      await openThread(target);
       return;
     }
     if (!state.threadOpen && !state.listedOnce) await openList(state.channel);
@@ -1280,6 +1449,12 @@
   // Слушатели ставим сразу: нижний док должен открывать чат ещё до первого захода.
   wireUi();
   setupNotifySwitch();
+  // app.js разбирает адрес раньше, чем загрузится этот файл (defer), и зовёт
+  // NeftChat.open() ещё до его появления — открываем раздел сами, если он активен.
+  const startupLink = (window.Neft && window.Neft.deepLink) || null;
+  if ((startupLink && startupLink.view === 'chat') || bootShareToken || view.classList.contains('is-visible')) {
+    open();
+  }
 
   window.NeftChat = { open, back, openList, openThread };
 })();

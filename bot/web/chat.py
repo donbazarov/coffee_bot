@@ -27,12 +27,12 @@ import random
 import re
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, ImageOps
 from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
@@ -67,6 +67,12 @@ MIN_POLL_OPTIONS = 2
 MAX_POLL_QUESTION = 200
 MAX_POLL_OPTION = 100
 STAFF_ROLES = ("barista", "senior", "mentor")
+# Приём файлов из системного меню «Поделиться» (Web Share Target из манифеста):
+# файлы складываются в uploads, а в базу пишется заявка с токеном — страница
+# открывается с `?share=<токен>` и предлагает выбрать чат.
+SHARE_TTL_HOURS = 24
+MAX_SHARE_FILES = 10
+SHARE_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
 
 # Путь картинки, который мы сами выдаём в /chat/upload. По нему же валидируем
 # `image_url` из WebSocket, чтобы нельзя было подсунуть чужой/внешний URL.
@@ -164,6 +170,16 @@ def initialize_schema(db: Engine) -> None:
             )
         """))
         connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS chat_share_uploads (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                title TEXT,
+                text TEXT,
+                files TEXT NOT NULL,
+                created_at DATETIME NOT NULL
+            )
+        """))
+        connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_chat_poll_msg ON chat_polls (message_id)
         """))
         connection.execute(text("""
@@ -190,6 +206,8 @@ def initialize_schema(db: Engine) -> None:
         connection.execute(text("""
             UPDATE chat_messages SET room_id = :room WHERE recipient_id IS NULL AND room_id IS NULL
         """), {"room": int(room_id)})
+    # Заявки из «Поделиться», которые так и не отправили, живут сутки.
+    _prune_share_uploads()
 
 
 def default_room_id() -> int:
@@ -697,6 +715,247 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return payload
 
 
+def _user_from_cookie(cookie_value: str | None) -> dict[str, Any] | None:
+    """Активный сотрудник по cookie сессии (для WS и приёма «Поделиться»)."""
+    session = read_session(cookie_value)
+    if not session:
+        return None
+    with engine.connect() as connection:
+        user = connection.execute(text("""
+            SELECT id, name, display_name, role, session_epoch FROM users
+            WHERE id = :id AND is_active = 1 AND role IN ('barista','senior','mentor')
+        """), {"id": session["user_id"]}).mappings().first()
+    if not user:
+        return None
+    if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
+        return None
+    return dict(user)
+
+
+# --- Файлы из системного меню «Поделиться» ---------------------------------- #
+
+
+def _share_files(files: Any) -> list[dict[str, str]]:
+    """Нормализует список файлов заявки (из JSON в базе или из запроса)."""
+    result: list[dict[str, str]] = []
+    for item in files or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "")
+        if not IMAGE_URL_RE.match(url):
+            continue
+        result.append({"url": url, "name": _safe_share_filename(item.get("name"))})
+    return result
+
+
+def _safe_share_filename(value: Any) -> str:
+    name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    name = "".join(char for char in name if char.isprintable())[:80]
+    return name or "image"
+
+
+def _delete_share_files(files: Any) -> None:
+    """Удаляет картинки заявки: если её отменили, в uploads они не нужны."""
+    for item in files or []:
+        url = str((item or {}).get("url") or "") if isinstance(item, dict) else ""
+        if not IMAGE_URL_RE.match(url):
+            continue
+        path = uploads_dir() / url.rsplit("/", 1)[-1]
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:  # noqa: BLE001 — мусор не должен ломать запрос
+            logger.warning("Чат: не удалось удалить файл заявки %s: %s", path.name, error)
+
+
+def _prune_share_uploads() -> None:
+    """Заявки старше суток убираются вместе с их файлами."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=SHARE_TTL_HOURS))
+    cutoff_iso = cutoff.isoformat(timespec="seconds").replace("+00:00", "Z")
+    try:
+        with engine.begin() as connection:
+            rows = connection.execute(text(
+                "SELECT token, files FROM chat_share_uploads WHERE created_at < :cutoff"
+            ), {"cutoff": cutoff_iso}).mappings().all()
+            if not rows:
+                return
+            connection.execute(text(
+                "DELETE FROM chat_share_uploads WHERE created_at < :cutoff"
+            ), {"cutoff": cutoff_iso})
+    except Exception as error:  # noqa: BLE001 — чистка не должна ломать старт
+        logger.warning("Чат: не удалось почистить заявки «Поделиться»: %s", error)
+        return
+    for row in rows:
+        try:
+            _delete_share_files(json.loads(row["files"]))
+        except ValueError:
+            continue
+
+
+def _share_row(token: str, user_id: int | None = None) -> dict[str, Any] | None:
+    if not SHARE_TOKEN_RE.match(token or ""):
+        return None
+    query = "SELECT token, user_id, title, text, files, created_at FROM chat_share_uploads WHERE token = :token"
+    params: dict[str, Any] = {"token": token}
+    if user_id is not None:
+        query += " AND user_id = :user"
+        params["user"] = int(user_id)
+    with engine.connect() as connection:
+        row = connection.execute(text(query), params).mappings().first()
+    return dict(row) if row else None
+
+
+def _drop_share(token: str) -> None:
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM chat_share_uploads WHERE token = :token"),
+                           {"token": token})
+
+
+@chat_router.post("/share")
+async def chat_share_target(request: Request):
+    """Точка приёма `share_target` из манифеста: файлы из меню «Поделиться».
+
+    Браузер присылает обычный POST с `multipart/form-data` и переходит по
+    ответу, поэтому здесь не JSON, а редирект на чат с токеном заявки.
+    """
+    user = _user_from_cookie(request.cookies.get(COOKIE_NAME))
+    if user is None:
+        return RedirectResponse("/?share_error=auth", status_code=303)
+    try:
+        form = await request.form()
+    except Exception as error:  # noqa: BLE001 — битый multipart не должен давать 500
+        logger.warning("Чат: не разобрал «Поделиться» от %s: %s", user["id"], error)
+        return RedirectResponse("/?view=chat&share_error=form", status_code=303)
+
+    uploads = [value for _, value in form.multi_items()
+               if getattr(value, "filename", None) and hasattr(value, "read")]
+    saved: list[dict[str, str]] = []
+    oversized = False
+    for item in uploads[:MAX_SHARE_FILES]:
+        try:
+            data = await item.read()
+        except Exception as error:  # noqa: BLE001 — один битый файл не роняет остальные
+            logger.warning("Чат: файл из «Поделиться» не прочитан: %s", error)
+            continue
+        if not data:
+            continue
+        if len(data) > MAX_IMAGE_BYTES:
+            oversized = True
+            continue
+        compressed = compress_image(data)
+        if compressed is None:
+            continue
+        name = f"{uuid.uuid4().hex}.webp"
+        (uploads_dir() / name).write_bytes(compressed)
+        saved.append({"url": f"/chat/uploads/{name}", "name": _safe_share_filename(item.filename)})
+
+    if not saved:
+        return RedirectResponse(f"/?view=chat&share_error={'size' if oversized else 'empty'}",
+                                status_code=303)
+
+    token = uuid.uuid4().hex
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO chat_share_uploads (token, user_id, title, text, files, created_at)
+            VALUES (:token, :user, :title, :text, :files, :now)
+        """), {
+            "token": token,
+            "user": int(user["id"]),
+            "title": str(form.get("title") or "").strip()[:200],
+            "text": str(form.get("text") or "").strip()[:MAX_TEXT],
+            "files": json.dumps(saved, ensure_ascii=False),
+            "now": _utcnow_iso(),
+        })
+    logger.info("Чат: «Поделиться» принято (%s файлов, user=%s)", len(saved), user["id"])
+    return RedirectResponse(f"/?view=chat&share={token}", status_code=303)
+
+
+@chat_router.get("/share/{token}")
+def chat_share_get(token: str, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Заявка из «Поделиться» — для окна выбора чата."""
+    row = _share_row(token, int(user["id"]))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    files = _share_files(json.loads(row["files"]))
+    if not files:
+        _drop_share(token)
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    return {
+        "token": row["token"],
+        "title": row["title"] or "",
+        "text": row["text"] or "",
+        "files": files,
+        "created_at": row["created_at"],
+    }
+
+
+@chat_router.post("/share/{token}/send")
+async def chat_share_send(token: str, request: Request,
+                          user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Отправляет принятые изображения в выбранный чат."""
+    payload = await _json_object(request)
+    row = _share_row(token, int(user["id"]))
+    if row is None:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+    files = _share_files(json.loads(row["files"]))
+    if not files:
+        _drop_share(token)
+        raise HTTPException(status_code=422, detail="Изображения не найдены")
+
+    target_type = str(payload.get("target_type") or "room")
+    try:
+        target_id = int(payload.get("target_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Выберите чат") from None
+
+    recipient_id: int | None = None
+    room_id: int | None = None
+    if target_type == "dm":
+        if target_id == int(user["id"]) or not _active_staff(target_id):
+            raise HTTPException(status_code=422, detail="Некорректный собеседник")
+        recipient_id = target_id
+    else:
+        room_id = target_id or default_room_id()
+        if not _room_exists(room_id):
+            raise HTTPException(status_code=404, detail="Тема не найдена")
+        if not _can_access_room(room_id, int(user["id"])):
+            raise HTTPException(status_code=403, detail="Нет доступа к теме")
+
+    text_value = str(payload.get("text") or row["text"] or "").strip()[:MAX_TEXT]
+    channel_row = {"sender_id": int(user["id"]), "recipient_id": recipient_id, "room_id": room_id}
+    created: list[dict[str, Any]] = []
+    for index, item in enumerate(files):
+        message = store_message(int(user["id"]), recipient_id,
+                                text_value if index == 0 and text_value else None,
+                                item["url"], room_id, None)
+        await _emit(channel_row, {"type": "message", "message": message})
+        threading.Thread(target=_notify_chat_push, args=(user, message), daemon=True).start()
+        created.append(message)
+
+    # Файлы теперь живут в сообщениях — заявка больше не нужна.
+    _drop_share(token)
+    return {
+        "ok": True,
+        "messages": created,
+        "target": {"type": "dm" if recipient_id is not None else "room",
+                   "id": recipient_id if recipient_id is not None else room_id},
+    }
+
+
+@chat_router.delete("/share/{token}")
+def chat_share_cancel(token: str, user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Отмена: заявка и её файлы удаляются."""
+    row = _share_row(token, int(user["id"]))
+    if row is None:
+        return {"ok": True}
+    try:
+        files = json.loads(row["files"])
+    except ValueError:
+        files = []
+    _drop_share(token)
+    _delete_share_files(files)
+    return {"ok": True}
+
+
 @chat_router.get("/users")
 def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Собеседники для личных чатов: сначала те, с кем писали недавно."""
@@ -1076,19 +1335,7 @@ def chat_upload_file(filename: str, user: dict[str, Any] = Depends(require_user)
 
 
 def _ws_user(websocket: WebSocket) -> dict[str, Any] | None:
-    session = read_session(websocket.cookies.get(COOKIE_NAME))
-    if not session:
-        return None
-    with engine.connect() as connection:
-        user = connection.execute(text("""
-            SELECT id, name, display_name, role, session_epoch FROM users
-            WHERE id = :id AND is_active = 1 AND role IN ('barista','senior','mentor')
-        """), {"id": session["user_id"]}).mappings().first()
-    if not user:
-        return None
-    if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
-        return None
-    return dict(user)
+    return _user_from_cookie(websocket.cookies.get(COOKIE_NAME))
 
 
 def _origin_ok(websocket: WebSocket) -> bool:

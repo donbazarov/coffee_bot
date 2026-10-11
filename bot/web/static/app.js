@@ -1039,6 +1039,11 @@ function setView(name) {
   if (name === 'calendar' && !modulePreferences.calendar_enabled) name = 'profile';
   if (name === 'control' && !managerRole) name = 'profile';
   const apply = () => {
+    const isChat = name === 'chat';
+    // Пока открыт чат, страница не скроллится: иначе браузер прокручивает документ,
+    // чтобы показать поле ввода над клавиатурой, и чат уезжает вместе с шапкой.
+    if (isChat) window.scrollTo({ top: 0, behavior: 'auto' });
+    document.documentElement.classList.toggle('is-chat-open', isChat);
     document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
     // Нижний док: пункты чата подсвечивает сам chat.js, при уходе с чата гасим их.
     if (name !== 'chat') document.querySelectorAll('[data-chat-open]').forEach((button) => button.classList.remove('is-active'));
@@ -1059,7 +1064,7 @@ function setView(name) {
         `Добрый день, ${title.dataset.name}`;
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
     document.startViewTransition(apply);
@@ -1996,11 +2001,30 @@ function applyDeepLink(url) {
     const params = new URL(url, window.location.origin).searchParams;
     const announcement = params.get('announcement');
     const view = params.get('view');
+    const share = params.get('share');
+    const shareError = params.get('share_error');
+    // chat.js грузится после app.js, поэтому запоминаем разобранную ссылку для него
+    // (адрес к этому моменту уже очищен).
+    if (window.Neft) {
+      window.Neft.deepLink = {
+        view: view || '',
+        announcement: announcement ? Number(announcement) : null,
+        peer: params.get('peer') || '',
+        room: params.get('room') || '',
+        share: share || '',
+        shareError: shareError || '',
+      };
+    }
     if (announcement) openAnnouncementCard(Number(announcement));
     else if (view) setView(view);
-    else return;
+    else if (!share && !shareError) return;
     // Убираем служебные параметры из адреса, чтобы они не тянулись за навигацией.
-    window.history.replaceState({}, '', window.location.pathname);
+    // Заявку из «Поделиться» оставляем: её читает chat.js (он грузится после app.js).
+    const keep = new URLSearchParams();
+    if (share) keep.set('share', share);
+    if (shareError) keep.set('share_error', shareError);
+    const tail = keep.toString();
+    window.history.replaceState({}, '', window.location.pathname + (tail ? `?${tail}` : ''));
   } catch (error) { /* некорректная ссылка — просто остаёмся на месте */ }
 }
 
