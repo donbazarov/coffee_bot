@@ -993,6 +993,14 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-editing[hidden] { display: none; }
 .chat-editing span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Одна кнопка вложений: изображение, опрос, вставка из буфера. */
+.chat-attach-menu { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; display: flex; min-width: 196px; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-1); }
+.chat-attach-menu[hidden] { display: none; }
+.chat-attach-item { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 0; border-radius: 10px; background: none; color: var(--text); font: 500 13px var(--sans); text-align: left; cursor: pointer; }
+.chat-attach-item:hover { background: var(--accent-soft); }
+.chat-attach-item[hidden] { display: none; }
+.chat-attach[aria-expanded="true"] { border-color: var(--accent-line); color: var(--accent); }
+
 /* Автокомплит упоминаний: всплывает над полем ввода. */
 .chat-mentions { position: absolute; z-index: 6; right: 0; bottom: calc(100% + 8px); left: 0; display: flex; max-height: 232px; flex-direction: column; gap: 2px; overflow-y: auto; padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-1); }
 .chat-mentions[hidden] { display: none; }
@@ -1073,7 +1081,10 @@ body { transition: background-color .3s ease, color .3s ease; }
   /* Пока открыт чат, страница не скроллится: иначе браузер прокручивает документ,
      чтобы показать поле ввода над клавиатурой, и чат уезжает вместе с шапкой. */
   html.is-chat-open, html.is-chat-open body { height: 100%; overflow: hidden; }
-  #chat-view.is-visible { position: fixed; z-index: 20; top: var(--topbar-h); right: 0; left: 0; display: flex; flex-direction: column; height: calc(100svh - var(--topbar-h) - var(--dock-h)); height: var(--chat-h, calc(100dvh - var(--topbar-h) - var(--dock-h))); padding-top: 12px; }
+  /* Привязка СНИЗУ, а не через top: на iOS fixed-элемент с bottom держится за
+     нижнюю кромку видимой области и остаётся над клавиатурой (так же ведёт себя док),
+     а элемент с top при автосдвиге страницы уезжает вверх вместе с документом. */
+  #chat-view.is-visible { position: fixed; z-index: 20; right: 0; bottom: var(--dock-h); left: 0; display: flex; flex-direction: column; height: calc(100svh - var(--topbar-h) - var(--dock-h)); height: var(--chat-h, calc(100dvh - var(--topbar-h) - var(--dock-h))); padding-top: 12px; }
   /* 16px — порог, ниже которого iOS приближает страницу при фокусе на поле.
      Перечисляем и «свои» правила для полей: у них специфичность выше. */
   input, select, textarea,

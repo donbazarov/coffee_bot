@@ -35,7 +35,7 @@
     form: document.getElementById('chat-form'),
     input: document.getElementById('chat-input'),
     attach: document.getElementById('chat-attach'),
-    pasteButton: document.getElementById('chat-paste'),
+    attachMenu: document.getElementById('chat-attach-menu'),
     file: document.getElementById('chat-file'),
     hint: document.getElementById('chat-peer-hint'),
     back: document.getElementById('chat-back'),
@@ -43,7 +43,6 @@
     rename: document.getElementById('chat-rename'),
     tabs: Array.from(document.querySelectorAll('[data-chat-tab]')),
     dockItems: Array.from(document.querySelectorAll('[data-chat-open]')),
-    poll: document.getElementById('chat-poll'),
     mentions: document.getElementById('chat-mentions'),
     editing: document.getElementById('chat-editing'),
     editCancel: document.getElementById('chat-edit-cancel'),
@@ -88,6 +87,7 @@
     mentionItems: [],
     mentionIndex: 0,
     roomVisibility: 'all',
+    attachMenuOpen: false,
     share: null,          // заявка «Поделиться» -> {token, files, text}
     shareTarget: null,    // выбранный чат -> {type, id}
     longPress: null,
@@ -150,7 +150,7 @@
 
   function linkify(text) {
     return escapeHtml(text)
-      .replace(/(@[\p{L}\p{N}_.\-]{1,64})/gu, '<span class="chat-mention">$1</span>')
+      .replace(/(@[\p{L}\p{N}_.-]{1,64})/gu, '<span class="chat-mention">$1</span>')
       .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   }
 
@@ -293,7 +293,7 @@
   function mentionQuery() {
     const value = el.input.value;
     const caret = el.input.selectionStart == null ? value.length : el.input.selectionStart;
-    const match = /(?:^|\s)@([\p{L}\p{N}_.\-]*)$/u.exec(value.slice(0, caret));
+    const match = /(?:^|\s)@([\p{L}\p{N}_.-]*)$/u.exec(value.slice(0, caret));
     if (!match) return null;
     return { query: match[1], start: caret - match[1].length - 1, caret };
   }
@@ -556,14 +556,15 @@
       dockHeight = Math.round(dock.getBoundingClientRect().height);
       if (dockHeight > 0) root.style.setProperty('--dock-h', `${dockHeight}px`);
     }
-    // Высоту чата считаем от реально видимой области: так поле ввода остаётся
-    // над клавиатурой (она укорачивает visualViewport), а горизонтальный
-    // скроллбар или адресная строка не отрезают низ.
+    // Высоту чата считаем от реально видимой области. Пока клавиатура открыта,
+    // чат занимает всё место над доком: шапка в этот момент и так уехала вверх
+    // (iOS сдвигает страницу, чтобы показать поле ввода).
     const viewport = window.visualViewport;
     const visible = viewport ? viewport.height : window.innerHeight;
+    const keyboardOpen = window.innerHeight - visible > 60;
     if (visible && topbarHeight) {
-      const height = Math.max(220, Math.round(visible - topbarHeight - dockHeight));
-      root.style.setProperty('--chat-h', `${height}px`);
+      const base = keyboardOpen ? visible - dockHeight : visible - topbarHeight - dockHeight;
+      root.style.setProperty('--chat-h', `${Math.max(220, Math.round(base))}px`);
     }
   }
 
@@ -575,7 +576,11 @@
     if (!viewport) return;
     const apply = () => {
       measureChrome();
-      if (state.threadOpen && document.activeElement === el.input) scrollToBottom();
+      if (state.threadOpen && document.activeElement === el.input) {
+        // Поле ввода и так видно над клавиатурой — если страница сама уехала, возвращаем её.
+        if (window.scrollY) window.scrollTo(0, 0);
+        scrollToBottom();
+      }
     };
     viewport.addEventListener('resize', apply);
     viewport.addEventListener('scroll', apply);
@@ -660,7 +665,6 @@
   }
 
   function wirePollDialog() {
-    el.poll?.addEventListener('click', openPollDialog);
     document.getElementById('poll-add-option')?.addEventListener('click', () => {
       if (pollOptions.children.length >= POLL_MAX) { showToast(`Максимум ${POLL_MAX} вариантов`); return; }
       const row = pollOptionRow();
@@ -784,6 +788,7 @@
     state.roomId = null;
     stopEdit();
     closeMentions();
+    closeAttachMenu();
     closeMessageMenu();
     view.classList.remove('is-thread-open');
     el.main.style.transform = '';
@@ -810,6 +815,7 @@
     state.threadOpen = false;
     stopEdit();
     closeMentions();
+    closeAttachMenu();
     closeMessageMenu();
     view.classList.remove('is-thread-open');
     el.main.style.transform = '';
@@ -829,6 +835,7 @@
 
     stopEdit();
     closeMentions();
+    closeAttachMenu();
     closeMessageMenu();
     state.threadOpen = true;
     view.classList.add('is-thread-open');
@@ -1087,12 +1094,8 @@
         if (isMobile()) el.input.blur();
       }
     });
-    el.attach.addEventListener('click', () => el.file.click());
-    el.pasteButton?.addEventListener('click', pasteFromClipboard);
-    // Кнопка «вставить» есть только там, где браузер даёт читать буфер (Safari/iOS в том числе).
-    if (el.pasteButton && navigator.clipboard && typeof navigator.clipboard.read === 'function') {
-      el.pasteButton.hidden = false;
-    }
+    el.attach.addEventListener('click', () => toggleAttachMenu());
+    wireAttachMenu();
     el.file.addEventListener('change', async () => {
       const file = el.file.files && el.file.files[0];
       el.file.value = '';
@@ -1103,7 +1106,48 @@
     });
   }
 
-  /* --- Картинки: скрепка, буфер обмена ------------------------------------- */
+  /* --- Вложения: одно меню на картинку, опрос и буфер ---------------------- */
+
+  function closeAttachMenu() {
+    state.attachMenuOpen = false;
+    if (el.attachMenu) el.attachMenu.hidden = true;
+    el.attach?.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleAttachMenu(force) {
+    const next = force === undefined ? !state.attachMenuOpen : Boolean(force);
+    if (!next || !el.attachMenu) { closeAttachMenu(); return; }
+    if (!state.threadOpen) { showToast('Сначала выберите чат'); return; }
+    state.attachMenuOpen = true;
+    el.attachMenu.hidden = false;
+    el.attach.setAttribute('aria-expanded', 'true');
+    closeMentions();
+  }
+
+  function wireAttachMenu() {
+    // «Вставить из буфера» — только там, где браузер даёт читать буфер (Safari/iOS в том числе).
+    const clipboardItem = el.attachMenu?.querySelector('[data-attach="clipboard"]');
+    if (clipboardItem && navigator.clipboard && typeof navigator.clipboard.read === 'function') {
+      clipboardItem.hidden = false;
+    }
+    el.attachMenu?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-attach]');
+      if (!button) return;
+      closeAttachMenu();
+      if (button.dataset.attach === 'image') el.file.click();
+      else if (button.dataset.attach === 'poll') openPollDialog();
+      else if (button.dataset.attach === 'clipboard') pasteFromClipboard();
+    });
+    document.addEventListener('click', (event) => {
+      if (!state.attachMenuOpen) return;
+      if (el.attachMenu && el.attachMenu.contains(event.target)) return;
+      if (el.attach && el.attach.contains(event.target)) return;
+      closeAttachMenu();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.attachMenuOpen) closeAttachMenu();
+    });
+  }
 
   async function uploadAndSend(file) {
     if (!file) return false;

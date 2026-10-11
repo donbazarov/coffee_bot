@@ -229,9 +229,12 @@
             </div>
             <form class="chat-composer" id="chat-form" autocomplete="off">
               <div class="chat-mentions" id="chat-mentions" role="listbox" aria-label="Упоминания" hidden></div>
-              <button class="icon-button chat-attach" type="button" id="chat-poll" aria-label="Опрос" title="Опрос"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg></button>
-              <button class="icon-button chat-attach" type="button" id="chat-attach" aria-label="Прикрепить изображение" title="Прикрепить изображение"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg></button>
-              <button class="icon-button chat-attach" type="button" id="chat-paste" aria-label="Вставить изображение из буфера" title="Вставить изображение из буфера" hidden><svg class="icon" aria-hidden="true"><use href="#i-clipboard"></use></svg></button>
+              <div class="chat-attach-menu" id="chat-attach-menu" role="menu" aria-label="Что добавить" hidden>
+                <button class="chat-attach-item" type="button" role="menuitem" data-attach="image"><svg class="icon" aria-hidden="true"><use href="#i-paperclip"></use></svg>Изображение</button>
+                <button class="chat-attach-item" type="button" role="menuitem" data-attach="poll"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg>Опрос</button>
+                <button class="chat-attach-item" type="button" role="menuitem" data-attach="clipboard" hidden><svg class="icon" aria-hidden="true"><use href="#i-clipboard"></use></svg>Вставить из буфера</button>
+              </div>
+              <button class="icon-button chat-attach" type="button" id="chat-attach" aria-label="Добавить вложение, опрос или вставку" title="Добавить" aria-haspopup="true" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>
               <input type="file" id="chat-file" accept="image/*" hidden>
               <textarea id="chat-input" rows="1" maxlength="2000" placeholder="Сообщение…" aria-label="Текст сообщения"></textarea>
               <button class="icon-button chat-send" type="submit" id="chat-send" aria-label="Отправить" title="Отправить"><svg class="icon" aria-hidden="true"><use href="#i-send"></use></svg></button>
