@@ -236,6 +236,7 @@ function renderUpcoming(shifts) {
 
 function updateEditControls() {
   if (!editMode) activeTemplate = null;
+  if (!editMode && shiftDrag) cancelShiftDrag();
   document.body.classList.toggle('calendar-editing', editMode);
   const swapsEntry = document.querySelector('#edit-swaps-toggle');
   const scheduleEntry = document.querySelector('#edit-schedule-toggle');
@@ -286,6 +287,124 @@ function describeChange(row) {
   if (row.action === 'created') return `${date} · ${row.employee_name}: ${row.new_start_time}–${row.new_end_time}, ${row.new_point}`;
   if (row.action === 'deleted') return `${date} · ${row.employee_name}: выходной (было ${row.old_start_time}–${row.old_end_time}, ${row.old_point})`;
   return `${date} · ${row.employee_name}: ${row.old_start_time}–${row.old_end_time}, ${row.old_point} → ${row.new_start_time}–${row.new_end_time}, ${row.new_point}`;
+}
+
+/* --- Перенос смен перетаскиванием ----------------------------------------
+   Работает в режиме правок («Замены» и «Расписание») при режиме «Ячейка».
+   Тянем заполненную ячейку на любую другую (другой человек или другой день):
+
+     * цель пустая — смена переезжает, исходная становится выходным;
+     * цель занята — смены меняются людьми (обмен).
+
+   Правки идут в тот же черновик, что и обычные клики: на сервер они уходят
+   только после «Сохранить»/«Сохранить изменения».
+   На тач-устройствах перенос начинается с долгого нажатия, и пока смена
+   «в руке», страница не прокручивается.
+*/
+const DRAG_HOLD_MS = 350;
+const DRAG_TOUCH_SLOP = 12;
+const DRAG_MOUSE_SLOP = 6;
+
+let shiftDrag = null;
+let suppressCellClick = false;
+
+function employeeNameById(id) {
+  return calendarState?.employees?.find((person) => person.id === id)?.name || '—';
+}
+
+function startShiftDrag(event, cell) {
+  const source = { employeeId: Number(cell.dataset.employeeId), date: cell.dataset.cellDate };
+  const shift = getEffectiveShift(source.employeeId, source.date);
+  if (!shift) return false;
+  const ghost = document.createElement('div');
+  ghost.className = 'shift-drag-ghost';
+  ghost.innerHTML = `<strong>${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</strong><span>${escapeHtml(shift.point)}</span>`;
+  ghost.hidden = true;
+  document.body.appendChild(ghost);
+  shiftDrag = {
+    source, ghost, sourceEl: cell, targetEl: null, active: false,
+    pointerId: event.pointerId, pointerType: event.pointerType,
+    originX: event.clientX, originY: event.clientY, holdTimer: 0,
+  };
+  // Тач: перенос только после удержания, иначе это обычный скролл.
+  if (event.pointerType === 'touch') {
+    shiftDrag.holdTimer = window.setTimeout(() => {
+      if (shiftDrag && !shiftDrag.active) activateShiftDrag();
+    }, DRAG_HOLD_MS);
+  }
+  return true;
+}
+
+function activateShiftDrag() {
+  if (!shiftDrag) return;
+  shiftDrag.active = true;
+  shiftDrag.ghost.hidden = false;
+  shiftDrag.sourceEl?.classList.add('is-drag-source');
+  document.body.classList.add('shift-dragging');
+  const status = document.querySelector('#matrix-status');
+  if (status) status.textContent = 'Перенос смены: отпустите на нужной ячейке, Esc — отмена';
+  if (navigator.vibrate) { try { navigator.vibrate(15); } catch (error) { /* не критично */ } }
+}
+
+function cancelShiftDrag() {
+  const drag = shiftDrag;
+  shiftDrag = null;
+  if (!drag) return;
+  window.clearTimeout(drag.holdTimer);
+  drag.ghost.remove();
+  drag.sourceEl?.classList.remove('is-drag-source');
+  drag.targetEl?.classList.remove('is-drop-target');
+  document.body.classList.remove('shift-dragging');
+}
+
+function updateDropTarget(x, y) {
+  if (!shiftDrag) return;
+  const cell = document.elementFromPoint(x, y)?.closest('[data-matrix-cell]') || null;
+  if (shiftDrag.targetEl === cell) return;
+  shiftDrag.targetEl?.classList.remove('is-drop-target');
+  shiftDrag.targetEl = cell;
+  cell?.classList.add('is-drop-target');
+}
+
+function finishShiftDrag(commit) {
+  const drag = shiftDrag;
+  if (!drag) return false;
+  const wasActive = drag.active;
+  const source = drag.source;
+  const target = drag.targetEl
+    ? { employeeId: Number(drag.targetEl.dataset.employeeId), date: drag.targetEl.dataset.cellDate }
+    : null;
+  cancelShiftDrag();
+  if (!commit || !wasActive) return false;
+  // Клик, который браузер шлёт после отпускания, не должен открывать окно смены.
+  suppressCellClick = true;
+  window.setTimeout(() => { suppressCellClick = false; }, 400);
+  return target ? applyShiftDrop(source, target) : false;
+}
+
+function applyShiftDrop(source, target) {
+  if (!calendarState) return false;
+  if (source.employeeId === target.employeeId && source.date === target.date) return false;
+  const from = getEffectiveShift(source.employeeId, source.date);
+  if (!from) return false;
+  const to = getEffectiveShift(target.employeeId, target.date);
+  setDraftCell(target.employeeId, target.date,
+    { start_time: from.start, end_time: from.end, point: from.point }, false);
+  if (to) {
+    setDraftCell(source.employeeId, source.date,
+      { start_time: to.start, end_time: to.end, point: to.point }, false);
+  } else {
+    setDraftCell(source.employeeId, source.date, null, false);
+  }
+  renderCalendar(calendarState);
+  updateEditControls();
+  const fromWho = `${employeeNameById(source.employeeId)} ${displayDate(source.date)}`;
+  const toWho = `${employeeNameById(target.employeeId)} ${displayDate(target.date)}`;
+  const status = document.querySelector('#matrix-status');
+  if (status) status.textContent = to
+    ? `Обмен сменами: ${fromWho} ⇄ ${toWho}`
+    : `Перенос смены: ${fromWho} → ${toWho}`;
+  return true;
 }
 
 async function loadShiftHistory() {
@@ -2383,8 +2502,53 @@ function setupDashboard() {
     updateMatrixSelection();
   });
   document.addEventListener('pointerup', () => { matrixPointerDown = false; });
+  // --- Перенос смен ---
+  matrix?.addEventListener('pointerdown', (event) => {
+    // Только в режиме ячейки, только с заполненной ячейки, только левая кнопка.
+    if (!editMode || matrixMode !== 'edit' || event.button > 0) return;
+    const cell = event.target.closest('[data-matrix-cell]');
+    if (!cell) return;
+    if (!startShiftDrag(event, cell)) return;
+    try {
+      matrix.setPointerCapture(event.pointerId);
+    } catch (error) { /* указателя уже нет — перенос отработает на pointermove/up */ }
+  });
+  matrix?.addEventListener('pointermove', (event) => {
+    const drag = shiftDrag;
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const dx = Math.abs(event.clientX - drag.originX);
+    const dy = Math.abs(event.clientY - drag.originY);
+    if (!drag.active) {
+      if (drag.pointerType === 'touch') {
+        // Палец сдвинулся до удержания — это скролл, а не перенос.
+        if (Math.max(dx, dy) > DRAG_TOUCH_SLOP) cancelShiftDrag();
+        return;
+      }
+      if (Math.max(dx, dy) < DRAG_MOUSE_SLOP) return;
+      activateShiftDrag();
+    }
+    event.preventDefault();
+    drag.ghost.style.left = `${event.clientX}px`;
+    drag.ghost.style.top = `${event.clientY}px`;
+    updateDropTarget(event.clientX, event.clientY);
+  });
+  matrix?.addEventListener('pointerup', (event) => {
+    if (!shiftDrag || event.pointerId !== shiftDrag.pointerId) return;
+    finishShiftDrag(true);
+  });
+  matrix?.addEventListener('pointercancel', () => { if (shiftDrag) finishShiftDrag(false); });
+  // Пока смена «в руке», окно зафиксировано: прокрутки нет (в т.ч. на мобильных).
+  document.addEventListener('touchmove', (event) => {
+    if (shiftDrag?.active) event.preventDefault();
+  }, { passive: false });
+  document.addEventListener('contextmenu', (event) => {
+    if (shiftDrag?.active) event.preventDefault();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && shiftDrag) finishShiftDrag(false);
+  });
   matrix?.addEventListener('click', (event) => {
-    if (!editMode) return;
+    if (!editMode || suppressCellClick) return;
     const status = document.querySelector('#matrix-status');
     const cell = event.target.closest('[data-cell-date]');
     if (!cell) {
@@ -2414,7 +2578,7 @@ function setupDashboard() {
     const status = document.querySelector('#matrix-status');
     if (status) status.textContent = matrixMode === 'select'
       ? 'Выделите диапазон, затем нажмите шаблон или ячейку'
-      : 'Нажмите ячейку, чтобы изменить смену';
+      : 'Нажмите ячейку или перетащите смену на другую';
   }));
   document.querySelector('#matrix-copy')?.addEventListener('click', copyMatrixSelection);
   document.querySelector('#matrix-paste')?.addEventListener('click', pasteMatrixSelection);
@@ -2437,6 +2601,10 @@ function setupDashboard() {
   }, { passive: false });
   let pinchStartDistance = 0;
   let pinchStartDayWidth = 0;
+  // Второй палец — это зум, а не перенос: снимаем незапущенный перенос.
+  scroll?.addEventListener('touchstart', (event) => {
+    if (event.touches.length === 2 && shiftDrag && !shiftDrag.active) cancelShiftDrag();
+  }, { passive: true });
   scroll?.addEventListener('touchstart', (event) => {
     if (event.touches.length !== 2) return;
     pinchStartDistance = touchDistance(event.touches);

@@ -492,6 +492,16 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .matrix-shift-extra { position: absolute; top: 1px; right: 2px; color: var(--text); font: 7px var(--mono); }
 .matrix-cell.is-selected { z-index: 1; outline: 2px solid var(--accent); outline-offset: -2px; background-color: var(--accent-soft); }
 .matrix-cell.is-pending { box-shadow: inset 0 0 0 2px var(--accent); }
+/* Перетаскивание смен: источник, цель и «чип» смены под пальцем/курсором */
+.matrix-cell { -webkit-touch-callout: none; }
+.matrix-cell.is-drag-source { opacity: .35; }
+.matrix-cell.is-drop-target { z-index: 2; outline: 2px dashed var(--accent); outline-offset: -3px; }
+.shift-drag-ghost { position: fixed; z-index: 60; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--accent); background: var(--surface-raised); color: var(--text); font: 600 11px var(--sans); white-space: nowrap; pointer-events: none; transform: translate(-50%, -150%); box-shadow: var(--shadow-1); }
+.shift-drag-ghost span { color: var(--muted); font-weight: 400; }
+.shift-drag-ghost[hidden] { display: none; }
+body.shift-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+body.shift-dragging .matrix-scroll { touch-action: none; }
+body.shift-dragging .matrix-cell { cursor: grabbing; }
 .matrix-no-employees { height: 84px; padding: 14px !important; color: var(--muted); font-size: 12px; text-align: center; }
 .calendar-editing .matrix-cell { cursor: pointer; }
 .calendar-editing .matrix-cell.is-empty::after { opacity: .45; }
