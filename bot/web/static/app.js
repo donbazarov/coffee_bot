@@ -1671,10 +1671,12 @@ function renderAnnouncementBell() {
     </button>`).join('');
 }
 
-/* Закреплённые держим всегда, остальное — за последнюю неделю. */
+/* Закреплённые держим всегда, остальное — за последнюю неделю.
+   Превью на «Обзоре» — та же лента, поэтому сначала уважаем выбранный
+   фильтр, и только потом отсекаем старое. */
 function slideshowItems() {
   const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  return announcementsState.items.filter((item) => {
+  return visibleAnnouncements(0).filter((item) => {
     if (item.pinned) return true;
     const created = item.created_at ? new Date(item.created_at).getTime() : 0;
     return created >= weekAgo;
@@ -2046,6 +2048,8 @@ function setupAnnouncements() {
     const filter = event.target.closest('[data-ann-filter]');
     if (filter) {
       announcementsState.filter = filter.dataset.annFilter;
+      // Смена фильтра меняет состав превью — начинаем с первого анонса.
+      slideshow.index = 0;
       renderAnnouncements();
       return;
     }
