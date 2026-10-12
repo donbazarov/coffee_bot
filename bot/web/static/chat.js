@@ -556,6 +556,107 @@
     debugNode.textContent = text;
   }
 
+  let appliedVvH = null;   // последние записанные CSS-переменные (защита от 1px-дрожания)
+  let appliedChatH = null;
+  let keyboardUp = false;  // «клавиатура видна/выезжает» — переживает анимацию открытия
+  let chromeRaf = null;    // схлопывание применений в один кадр рендера
+  let chromeTimer = null;  // debounce контрольного промера
+  let predictTimer = null; // самоотмена прогноза, если клавиатура так и не появилась
+  let layoutFull = window.innerHeight; // полная высота layout без клавиатуры
+
+  /**
+   * Видимая высота = область от верха layout-вьюпорта до клавиатуры.
+   * При interactive-widget=resizes-content layout уже ужат клавиатурой, и верное
+   * значение — window.innerHeight; visualViewport в этот момент ещё и «съезжает»
+   * паном (offsetTop), поэтому его height в одиночку даёт 384 вместо 551 и щель
+   * над клавиатурой. Где ресайза контента нет (старые iOS/Android) — считаем по
+   * visualViewport.
+   */
+  function visibleHeight() {
+    const layout = window.innerHeight;
+    if (layoutFull < layout) layoutFull = layout;
+    if (layout <= layoutFull - 120) return Math.round(layout);
+    const viewport = window.visualViewport;
+    return viewport ? Math.round(viewport.height) : layout;
+  }
+
+  function applyChrome(keyboardUp, confirmedOpen, visible, topbarHeight) {
+    if (chromeRaf) return;
+    chromeRaf = requestAnimationFrame(() => {
+      chromeRaf = null;
+      const root = document.documentElement;
+      if (!keyboardUp) {
+        // Клавиатура закрыта: высоту держит CSS-база 100dvh. Убираем JS-значения,
+        // чтобы два источника высоты не конфликтовали.
+        if (appliedVvH !== null) { root.style.removeProperty('--vv-h'); appliedVvH = null; }
+        if (appliedChatH !== null) { root.style.removeProperty('--chat-h'); appliedChatH = null; }
+      } else if (confirmedOpen) {
+        // Клавиатура открыта и видимая область РЕАЛЬНО укоротилась: уточняем высоту
+        // по факту. Пока вьюпорт ещё полный (клавиатура в пути) — не трогаем
+        // прогнозные значения из predictKeyboardOpen, иначе прогноз затрётся полной
+        // высотой и «телепорт» вернётся.
+        const vv = `${Math.round(visible)}px`;
+        if (vv !== appliedVvH) { root.style.setProperty('--vv-h', vv); appliedVvH = vv; }
+        const chat = `${Math.max(180, Math.round(visible - topbarHeight))}px`;
+        if (chat !== appliedChatH) { root.style.setProperty('--chat-h', chat); appliedChatH = chat; }
+      }
+      // keyboardUp && !confirmedOpen — оставляем значения прогноза.
+    });
+  }
+
+  /**
+   * Прогноз открытия клавиатуры. iOS НЕ панорамирует страницу, только если на
+   * момент показа клавиатуры поле ввода уже лежит в видимой области. Поэтому
+   * сжимаем чат синхронно в событии focus — до старта анимации клавиатуры, —
+   * на примерную её высоту. Точные resize-события потом лишь уточняют значения.
+   */
+  function predictKeyboardOpen() {
+    const root = document.documentElement;
+    // База прогноза — полная видимая высота (клавиатуры ещё нет), иначе при уже
+    // ужатом layout прогноз недосчитает высоту клавиатуры и iOS запанорамирует.
+    const visible = visibleHeight();
+    // Высота клавиатуры iOS ≈ 46% видимой области (но не больше 360px). Лучше
+    // слегка переоценить: иначе поле ввода на кадр окажется под клавиатурой.
+    const guess = Math.min(Math.round(visible * 0.46), 360);
+    let topbarHeight = 0;
+    const cssTopbar = root.style.getPropertyValue('--topbar-h').trim();
+    if (cssTopbar) {
+      topbarHeight = parseFloat(cssTopbar);
+    } else {
+      const topbar = document.querySelector('.topbar');
+      if (topbar) topbarHeight = Math.round(topbar.getBoundingClientRect().height);
+    }
+    const vv = `${Math.round(visible - guess)}px`;
+    const chat = `${Math.max(180, Math.round(visible - guess - topbarHeight))}px`;
+    root.style.setProperty('--vv-h', vv);
+    root.style.setProperty('--chat-h', chat);
+    // Синхронизируем dedupe в applyChrome, чтобы не было лишних перезаписей.
+    appliedVvH = vv;
+    appliedChatH = chat;
+    keyboardUp = true;
+    root.classList.add('is-keyboard');
+    // iOS показывает клавиатуру не всегда: программный focus() после await
+    // фокусирует поле, но контекст жеста уже потерян. Если за отведённое время
+    // видимая область так и не укоротилась — откатываем прогноз.
+    clearTimeout(predictTimer);
+    predictTimer = setTimeout(cancelPredictedKeyboard, 500);
+  }
+
+  /**
+   * Откат прогноза: клавиатура не появилась — возвращаем высоты CSS-базе
+   * (100dvh), иначе окно останется «сжатым» до первого тапа по экрану.
+   */
+  function cancelPredictedKeyboard() {
+    const visible = visibleHeight();
+    // Видимая область уже укоротилась — прогноз подтверждён, отменять нечего.
+    if (visible <= (idleVisible || window.innerHeight) - 20) return;
+    keyboardUp = false;
+    const root = document.documentElement;
+    root.classList.remove('is-keyboard');
+    if (appliedVvH !== null) { root.style.removeProperty('--vv-h'); appliedVvH = null; }
+    if (appliedChatH !== null) { root.style.removeProperty('--chat-h'); appliedChatH = null; }
+  }
+
   function measureChrome() {
     const root = document.documentElement;
     let topbarHeight = 0;
@@ -574,7 +675,7 @@
     // Всё положение считаем от видимой области (visualViewport): на iOS она
     // укорачивается клавиатурой, а документ при этом не меняется.
     const viewport = window.visualViewport;
-    const visible = viewport ? viewport.height : window.innerHeight;
+    const visible = visibleHeight();
     const offset = viewport ? viewport.offsetTop : 0;
     const active = document.activeElement;
     const inputFocused = Boolean(active) && /^(input|textarea)$/i.test(active.tagName || '');
@@ -583,35 +684,44 @@
     // (на iOS укорачивается visualViewport, в Chrome — innerHeight). Порог 120px
     // отсекает схлопывание панели Safari (там разница ~50–90px).
     const shrink = Math.max(window.innerHeight - visible, idleVisible - visible);
-    const keyboardOpen = inputFocused && shrink > 120;
-    root.classList.toggle('is-keyboard', keyboardOpen);
-    // Документ держим ровно по видимой области и позицию страницы — в нуле:
-    // тогда iOS нечего прокручивать под клавиатуру, и шапка с названием
-    // контакта не двигаются (двигается только низ чата за клавиатурой).
-    root.style.setProperty('--vv-h', `${Math.round(visible)}px`);
-    if (visible && topbarHeight) {
-      const base = visible - topbarHeight - (keyboardOpen ? 0 : dockHeight);
-      root.style.setProperty('--chat-h', `${Math.max(180, Math.round(base))}px`);
-    }
+    // Различаем «клавиатура уже открыта» (вьюпорт укоротился) и «прогноз на focus».
+    // Сбрасываем состояние (keyboardUp=false) только когда фокус ушёл из поля:
+    // в середине анимации shrink ещё мал, и мгновенный сброс снял бы прогнозное
+    // сжатие — из-за этого и «телепорт».
+    const confirmedOpen = inputFocused && shrink > 120;
+    if (confirmedOpen) { clearTimeout(predictTimer); keyboardUp = true; }
+    if (!inputFocused) keyboardUp = false;
+    root.classList.toggle('is-keyboard', keyboardUp);
+    applyChrome(keyboardUp, confirmedOpen, visible, topbarHeight);
     const chatBox = view.getBoundingClientRect();
     showDebug([
-      `innerH ${Math.round(window.innerHeight)}  vvH ${Math.round(visible)}  vvTop ${Math.round(offset)}`,
-      `topbar ${topbarHeight}  dock ${dockVisible ? dockHeight : 'скрыт'}  kb ${keyboardOpen ? 'да' : 'нет'}`,
+      `innerH ${Math.round(window.innerHeight)}  vis ${Math.round(visible)}  vvTop ${Math.round(offset)}`,
+      `topbar ${topbarHeight}  dock ${dockVisible ? dockHeight : 'скрыт'}  kb ${keyboardUp ? 'да' : 'нет'}`,
       `chatH ${getComputedStyle(root).getPropertyValue('--chat-h').trim()}  scrollY ${Math.round(window.scrollY)}`,
       `chat ${Math.round(chatBox.top)}…${Math.round(chatBox.bottom)}  dockTop ${dockVisible ? Math.round(dock.getBoundingClientRect().top) : '—'}`,
     ].join('\n'));  }
 
   function scheduleChromeMeasure() {
-    // Клавиатура iOS выезжает с анимацией и часть событий приходит раньше времени.
+    // Клавиатура iOS выезжает с анимацией: событий приходит много, а часть — ещё
+    // до конца анимации. Мгновенный прогон + контрольный промер по хвосту анимации.
     measureChrome();
-    [80, 200, 420, 750].forEach((delay) => setTimeout(measureChrome, delay));
+    clearTimeout(chromeTimer);
+    chromeTimer = setTimeout(() => measureChrome(), 380);
   }
 
   function setupKeyboard() {
     measureChrome();
     window.addEventListener('resize', scheduleChromeMeasure);
-    document.addEventListener('focusin', scheduleChromeMeasure);
-    document.addEventListener('focusout', scheduleChromeMeasure);
+    document.addEventListener('focusin', (event) => {
+      // Сжимаем чат заранее, до анимации клавиатуры — иначе iOS панорамирует
+      // страницу и весь интерфейс «уезжает вниз и возвращается».
+      if (isMobile() && document.documentElement.classList.contains('is-chat-open')) {
+        const tag = event.target && event.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') predictKeyboardOpen();
+      }
+      scheduleChromeMeasure();
+    });
+    document.addEventListener('focusout', () => { clearTimeout(predictTimer); scheduleChromeMeasure(); });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(measureChrome).catch(() => {});
     const viewport = window.visualViewport;
     if (!viewport) return;
@@ -895,7 +1005,9 @@
     el.rename.hidden = !(state.channel === 'room' && MANAGER);
     highlightListItem();
     await loadMessages();
-    el.input.focus();
+    // На мобильном не поднимаем клавиатуру сами: программный focus() после await
+    // на iOS показывает поле, но не клавиатуру, и прогноз ложно «сжимал» окно.
+    if (!isMobile()) el.input.focus();
   }
 
   function query() {
@@ -930,8 +1042,15 @@
     return el.log.scrollHeight - el.log.scrollTop - el.log.clientHeight < 90;
   }
 
+  let scrollRaf = null;
   function scrollToBottom() {
-    el.log.scrollTop = el.log.scrollHeight;
+    // Пиним скролл в следующем кадре: к этому моменту новая высота чата уже
+    // применена, иначе на iOS лента «не доезжает» до последнего сообщения.
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = null;
+      el.log.scrollTop = el.log.scrollHeight;
+    });
   }
 
   function messageHtml(message) {
@@ -1589,7 +1708,7 @@
       return;
     }
     if (!state.threadOpen && !state.listedOnce) await openList(state.channel);
-    el.input.focus();
+    if (!isMobile()) el.input.focus();
   }
 
   // Слушатели ставим сразу: нижний док должен открывать чат ещё до первого захода.

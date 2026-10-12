@@ -123,7 +123,7 @@
 
 * { box-sizing: border-box; }
 html { min-width: 320px; min-height: 100%; background: var(--bg); }
-body { margin: 0; min-height: 100vh; color: var(--text); background: var(--bg); font: 400 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+body { margin: 0; min-height: 100dvh; color: var(--text); background: var(--bg); font: 400 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 h1, h2, h3 { font-weight: 600; }
@@ -154,7 +154,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .login-error { max-width: 420px; margin-top: 18px; padding: 12px 15px; border: 1px solid var(--danger-line); color: var(--danger-text); background: var(--danger-soft); }
 .login-footer { display: flex; justify-content: space-between; color: var(--dim); font: 9px var(--mono); letter-spacing: .12em; }
 
-.app-shell { display: flex; min-height: 100vh; }
+.app-shell { display: flex; min-height: 100dvh; }
 .rail { position: fixed; inset: 0 auto 0 0; z-index: 3; display: flex; width: 236px; flex-direction: column; padding: 27px 18px 20px; border-right: 1px solid var(--line); background: var(--rail-bg); }
 .rail .brand { padding: 0 9px 35px; }
 .rail-nav { display: grid; gap: 5px; }
@@ -958,7 +958,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-tab { padding: 7px 14px; border: 0; border-radius: 999px; background: none; color: var(--muted); font: 600 12px var(--sans); cursor: pointer; transition: color .18s ease, background-color .18s ease; }
 .chat-tab.is-selected { background: var(--accent-soft); color: var(--text); }
 .chat-layout { display: flex; gap: 16px; align-items: stretch; min-height: 0; }
-.chat-list { display: flex; width: 300px; flex: 0 0 auto; flex-direction: column; gap: 4px; max-height: min(62vh, 620px); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.chat-list { display: flex; width: 300px; flex: 0 0 auto; flex-direction: column; gap: 4px; max-height: min(62dvh, 620px); overflow-y: auto; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
 .chat-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid transparent; border-radius: 12px; background: none; color: var(--text); text-align: left; cursor: pointer; }
 .chat-item:hover { background: rgba(var(--hl), .04); }
 .chat-item.is-active { border-color: var(--accent-line); background: var(--accent-soft); }
@@ -972,7 +972,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-main { position: relative; display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 10px; }
 .chat-thread-head { display: none; align-items: center; gap: 8px; }
 .chat-thread-title { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: 14px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.chat-log { display: flex; height: min(58vh, 560px); flex-direction: column; gap: 10px; padding: 16px; overflow-y: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overscroll-behavior: contain; }
+.chat-log { display: flex; height: min(58dvh, 560px); flex-direction: column; gap: 10px; padding: 16px; overflow-y: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overscroll-behavior: contain; }
 .chat-day { align-self: center; margin: 4px 0; padding: 3px 12px; border-radius: 999px; background: rgba(var(--hl), .06); color: var(--muted); font: 10px var(--mono); letter-spacing: .06em; }
 .chat-msg { display: flex; max-width: 86%; align-items: flex-end; gap: 9px; }
 .chat-msg.is-mine { align-self: flex-end; flex-direction: row-reverse; }
@@ -1004,7 +1004,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-editing span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Диагностика раскладки чата на телефоне: ?chatdebug=1 (см. chat.js). */
-.chat-debug { position: fixed; z-index: 70; bottom: 6px; left: 6px; max-width: 92vw; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, .75); color: #fff; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; pointer-events: none; }
+.chat-debug { position: fixed; z-index: 70; top: calc(var(--topbar-h, 58px) + 4px); left: 6px; max-width: 92vw; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, .75); color: #fff; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; pointer-events: none; }
 
 /* Одна кнопка вложений: изображение, опрос, вставка из буфера. */
 .chat-attach-menu { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; display: flex; min-width: 196px; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-1); }
@@ -1095,7 +1095,7 @@ body { transition: background-color .3s ease, color .3s ease; }
      при показе клавиатуры прокручивает страницу — от этого «съезжала» вся
      шапка и был резиновый отскок при свайпе по верхней части. --vv-h и --chat-h
      считает chat.js по visualViewport. */
-  html.is-chat-open, html.is-chat-open body { height: var(--vv-h, 100%); overflow: hidden; overscroll-behavior: none; }
+  html.is-chat-open, html.is-chat-open body { height: var(--vv-h, 100dvh); overflow: hidden; overscroll-behavior: none; }
   html.is-chat-open body { position: fixed; top: 0; right: 0; left: 0; }
   html.is-chat-open .app-shell { height: 100%; min-height: 0; }
   html.is-chat-open .app-footer { display: none; }
@@ -1104,7 +1104,7 @@ body { transition: background-color .3s ease, color .3s ease; }
   html.is-chat-open .topbar { position: fixed; z-index: 25; top: 0; right: 0; left: 0; min-height: var(--topbar-h); padding: 0 18px; background: var(--bg); }
   /* Клавиатура открыта — док убираем, чтобы панель ввода упиралась прямо в неё. */
   html.is-chat-open.is-keyboard .dock { display: none; }
-  #chat-view.is-visible { position: fixed; z-index: 20; top: var(--topbar-h); right: 0; left: 0; display: flex; flex-direction: column; height: calc(100svh - var(--topbar-h) - var(--dock-h)); height: var(--chat-h, calc(100dvh - var(--topbar-h) - var(--dock-h))); }
+  #chat-view.is-visible { position: fixed; z-index: 20; top: var(--topbar-h); right: 0; left: 0; display: flex; flex-direction: column; height: var(--chat-h, calc(100dvh - var(--topbar-h) - var(--dock-h))); }
   /* 16px — порог, ниже которого iOS приближает страницу при фокусе на поле.
      Перечисляем и «свои» правила для полей: у них специфичность выше. */
   input, select, textarea,
@@ -1118,7 +1118,8 @@ body { transition: background-color .3s ease, color .3s ease; }
   .chat-main { position: absolute; inset: 0; z-index: 2; padding: 0 0 2px; background: var(--bg); transform: translateX(100%); transition: transform .28s cubic-bezier(.2,.8,.2,1); }
   #chat-view.is-thread-open .chat-main { transform: translateX(0); }
   .chat-main.is-dragging { transition: none; }
-  .chat-log { flex: 1 1 auto; height: auto; min-height: 0; }
+  .chat-log { flex: 1 1 auto; height: auto; min-height: 0; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .chat-composer { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
   .chat-msg { max-width: 92%; }
 
   .dock { position: fixed; z-index: 30; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px); }
