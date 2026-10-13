@@ -1003,9 +1003,6 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-editing[hidden] { display: none; }
 .chat-editing span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Диагностика раскладки чата на телефоне: ?chatdebug=1 (см. chat.js). */
-.chat-debug { position: fixed; z-index: 70; top: calc(var(--topbar-h, 58px) + 4px); left: 6px; max-width: 92vw; padding: 6px 8px; border-radius: 8px; background: rgba(0, 0, 0, .75); color: #fff; font: 10px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; pointer-events: none; }
-
 /* Одна кнопка вложений: изображение, опрос, вставка из буфера. */
 .chat-attach-menu { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; display: flex; min-width: 196px; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface-raised); box-shadow: var(--shadow-1); }
 .chat-attach-menu[hidden] { display: none; }
@@ -1091,20 +1088,19 @@ body { transition: background-color .3s ease, color .3s ease; }
   :root { --topbar-h: 58px; --dock-h: calc(62px + env(safe-area-inset-bottom)); }
   .main-area { padding-bottom: calc(28px + var(--dock-h) + env(safe-area-inset-bottom)); }
   .chat-heading { display: none; }
-  /* Режим чата: документ ровно по видимой области и без прокрутки. Иначе iOS
-     при показе клавиатуры прокручивает страницу — от этого «съезжала» вся
-     шапка и был резиновый отскок при свайпе по верхней части. --vv-h и --chat-h
-     считает chat.js по visualViewport. */
-  html.is-chat-open, html.is-chat-open body { height: var(--vv-h, 100dvh); overflow: hidden; overscroll-behavior: none; }
-  html.is-chat-open body { position: fixed; top: 0; right: 0; left: 0; }
+  /* Режим чата: документ жёстко прибит к видимой области и сам не скроллится —
+     iOS нечего прокручивать, поэтому нет «прыжков» и резинового отскока.
+     Высоту держит ТОЛЬКО CSS: 100dvh + interactive-widget=resizes-content
+     (в Chrome вьюпорт ужимается под клавиатуру; iOS клавиатуру накладывает).
+     Переменных --vv-h/--chat-h из JS здесь больше нет. */
+  html.is-chat-open, html.is-chat-open body { position: fixed; inset: 0; width: 100vw; height: 100dvh; overflow: hidden; overscroll-behavior: none; }
   html.is-chat-open .app-shell { height: 100%; min-height: 0; }
   html.is-chat-open .app-footer { display: none; }
-  /* Шапка и чат закреплены у верха документа, а он не скроллится — поэтому не
-     двигаются. Поднимается только низ чата: панель ввода идёт за клавиатурой. */
+  /* Шапка закреплена у верха документа, а он не скроллится — поэтому не двигается. */
   html.is-chat-open .topbar { position: fixed; z-index: 25; top: 0; right: 0; left: 0; min-height: var(--topbar-h); padding: 0 18px; background: var(--bg); }
-  /* Клавиатура открыта — док убираем, чтобы панель ввода упиралась прямо в неё. */
-  html.is-chat-open.is-keyboard .dock { display: none; }
-  #chat-view.is-visible { position: fixed; z-index: 20; top: var(--topbar-h); right: 0; left: 0; display: flex; flex-direction: column; height: var(--chat-h, calc(100dvh - var(--topbar-h) - var(--dock-h))); }
+  /* Чат — flex-колонка ровно между шапкой и доком: высоту задают границы (inset),
+     а не JS. Внутри скроллится только лента сообщений, панель ввода прижата к низу. */
+  #chat-view.is-visible { position: fixed; z-index: 20; inset: var(--topbar-h) 0 var(--dock-h) 0; display: flex; flex-direction: column; height: auto; }
   /* 16px — порог, ниже которого iOS приближает страницу при фокусе на поле.
      Перечисляем и «свои» правила для полей: у них специфичность выше. */
   input, select, textarea,
@@ -1118,8 +1114,10 @@ body { transition: background-color .3s ease, color .3s ease; }
   .chat-main { position: absolute; inset: 0; z-index: 2; padding: 0 0 2px; background: var(--bg); transform: translateX(100%); transition: transform .28s cubic-bezier(.2,.8,.2,1); }
   #chat-view.is-thread-open .chat-main { transform: translateX(0); }
   .chat-main.is-dragging { transition: none; }
-  .chat-log { flex: 1 1 auto; height: auto; min-height: 0; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
-  .chat-composer { padding-bottom: calc(8px + env(safe-area-inset-bottom)); }
+  /* Лента — единственный скроллер на экране: нативный, плавный, без цепляния. */
+  .chat-log { flex: 1 1 auto; height: auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding-bottom: 16px; }
+  /* Панель ввода не сжимается и держится у нижней границы чата. */
+  .chat-composer { position: sticky; bottom: 0; z-index: 2; flex: 0 0 auto; padding-bottom: 8px; }
   .chat-msg { max-width: 92%; }
 
   .dock { position: fixed; z-index: 30; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; padding: 6px 6px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(10px); }

@@ -1159,9 +1159,8 @@ function setView(name) {
   if (name === 'control' && !managerRole) name = 'profile';
   const apply = () => {
     const isChat = name === 'chat';
-    // Пока открыт чат, страница не скроллится: иначе браузер прокручивает документ,
-    // чтобы показать поле ввода над клавиатурой, и чат уезжает вместе с шапкой.
-    if (isChat) window.scrollTo({ top: 0, behavior: 'auto' });
+    // В режиме чата документ прибит к видимой области (см. app.css) —
+    // прокрутки у него нет, поэтому и scrollTo(0, 0) больше не нужен.
     document.documentElement.classList.toggle('is-chat-open', isChat);
     document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
     // Нижний док: пункты чата подсвечивает сам chat.js, при уходе с чата гасим их.
