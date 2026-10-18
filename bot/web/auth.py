@@ -115,7 +115,7 @@ def register_or_find_telegram_user(telegram_data: dict[str, Any]) -> tuple[dict[
 
             if user["role"] == "guest":
                 return None, "pending"
-            if not user["is_active"] or user["role"] not in {"barista", "senior", "mentor"}:
+            if not user["is_active"] or user["role"] not in {"newbie", "barista", "senior", "mentor"}:
                 return None, "disabled"
             return {"id": user["id"], "name": user["name"], "role": user["role"]}, "approved"
     except IntegrityError:

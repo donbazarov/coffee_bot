@@ -99,7 +99,7 @@ def active_employee_ids(connection: Connection) -> list[int]:
     """Все активные сотрудники графика — тот же состав, что и в таблице на сайте."""
     rows = connection.execute(text("""
         SELECT id FROM users
-        WHERE is_active = 1 AND role IN ('barista', 'senior', 'mentor')
+        WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
         ORDER BY COALESCE(display_name, name) COLLATE NOCASE
     """)).scalars().all()
     return [int(row) for row in rows]

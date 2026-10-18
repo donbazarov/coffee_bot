@@ -275,7 +275,7 @@ def recipients(engine: Engine, category: str, exclude_user_id: int | None = None
             SELECT DISTINCT s.user_id
             FROM web_push_subscriptions AS s
             JOIN users AS u ON u.id = s.user_id
-            WHERE u.is_active = 1 AND u.role IN ('barista', 'senior', 'mentor')
+            WHERE u.is_active = 1 AND u.role IN ('newbie', 'barista', 'senior', 'mentor')
         """)).scalars().all()
     from bot.web import announcements  # локальный импорт: модули ссылаются друг на друга
 

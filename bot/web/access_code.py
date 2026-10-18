@@ -38,7 +38,7 @@ MAX_IP_ATTEMPTS = 20  # неудач с одного адреса за окно
 # Формат совпадает с SQLite CURRENT_TIMESTAMP, поэтому сравнение в SQL строковое.
 STAMP = "%Y-%m-%d %H:%M:%S"
 
-STAFF_ROLES = ("barista", "senior", "mentor")
+STAFF_ROLES = ("newbie", "barista", "senior", "mentor")
 
 
 def _stamp(moment: datetime) -> str:
@@ -167,7 +167,7 @@ def ensure_active_codes(engine: Engine) -> int:
     with engine.connect() as connection:
         missing = connection.execute(text("""
             SELECT id FROM users
-            WHERE is_active = 1 AND role IN ('barista', 'senior', 'mentor')
+            WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
               AND (access_code IS NULL OR access_code = '')
         """)).scalars().all()
     for user_id in missing:

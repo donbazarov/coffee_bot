@@ -66,7 +66,7 @@ MAX_POLL_OPTIONS = 12
 MIN_POLL_OPTIONS = 2
 MAX_POLL_QUESTION = 200
 MAX_POLL_OPTION = 100
-STAFF_ROLES = ("barista", "senior", "mentor")
+STAFF_ROLES = ("newbie", "barista", "senior", "mentor")
 # Приём файлов из системного меню «Поделиться» (Web Share Target из манифеста):
 # файлы складываются в uploads, а в базу пишется заявка с токеном — страница
 # открывается с `?share=<токен>` и предлагает выбрать чат.
@@ -517,7 +517,7 @@ def _active_staff(user_id: int) -> bool:
     with engine.connect() as connection:
         row = connection.execute(text("""
             SELECT 1 FROM users WHERE id = :id AND is_active = 1
-              AND role IN ('barista','senior','mentor')
+              AND role IN ('newbie','barista','senior','mentor')
         """), {"id": int(user_id)}).first()
     return row is not None
 
@@ -541,7 +541,7 @@ def match_mentions(text_value: str, exclude: int | None = None) -> set[int]:
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT id, name, display_name, telegram_username FROM users
-            WHERE is_active = 1 AND role IN ('barista','senior','mentor')
+            WHERE is_active = 1 AND role IN ('newbie','barista','senior','mentor')
         """)).mappings().all()
     found: set[int] = set()
     for row in rows:
@@ -650,7 +650,7 @@ def _chat_push_candidates() -> set[int]:
         rows = connection.execute(text("""
             SELECT DISTINCT s.user_id FROM web_push_subscriptions s
             JOIN users u ON u.id = s.user_id
-            WHERE u.is_active = 1 AND u.role IN ('barista','senior','mentor')
+            WHERE u.is_active = 1 AND u.role IN ('newbie','barista','senior','mentor')
         """)).scalars().all()
     return {int(value) for value in rows}
 
@@ -723,7 +723,7 @@ def _user_from_cookie(cookie_value: str | None) -> dict[str, Any] | None:
     with engine.connect() as connection:
         user = connection.execute(text("""
             SELECT id, name, display_name, role, session_epoch FROM users
-            WHERE id = :id AND is_active = 1 AND role IN ('barista','senior','mentor')
+            WHERE id = :id AND is_active = 1 AND role IN ('newbie','barista','senior','mentor')
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None
@@ -973,7 +973,7 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
                             OR (m.sender_id = :me AND m.recipient_id = u.id))
                      ORDER BY m.id DESC LIMIT 1) AS last_text
             FROM users u
-            WHERE u.is_active = 1 AND u.role IN ('barista','senior','mentor') AND u.id != :me
+            WHERE u.is_active = 1 AND u.role IN ('newbie','barista','senior','mentor') AND u.id != :me
         """), {"me": me}).mappings().all()
     users = []
     for row in rows:

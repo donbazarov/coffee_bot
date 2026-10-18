@@ -10,7 +10,7 @@ let matrixPointerDown = false;
 let matrixClipboard = null;
 let matrixChanges = new Map();
 let editMode = false;
-let modulePreferences = { quality_enabled: true, calendar_enabled: true };
+let modulePreferences = { calendar_enabled: true };
 const managerRole = document.body.dataset.manager === 'true';
 const userRole = document.body.dataset.role || '';
 const isMentor = userRole === 'mentor';
@@ -160,54 +160,233 @@ async function api(path, options = {}) {
   }
 }
 
-function renderChart(days) {
-  const chart = document.querySelector('#weekly-chart');
-  if (!chart) return;
-  const max = Math.max(1, ...days.map((day) => day.count));
-  chart.innerHTML = days.map((day, index) => `
-    <div class="chart-column" title="${escapeHtml(day.day)}: ${day.count} оценок">
-      <div class="chart-bar-wrap"><div class="chart-bar" style="height:${Math.max(2, day.count / max * 100)}%;animation-delay:${index * 35}ms"></div></div>
-      <span class="chart-day">${escapeHtml(day.day)}</span>
-    </div>`).join('');
-}
+/* --- Развитие ---------------------------------------------------------- */
 
-function renderLeaderboard(users) {
-  const node = document.querySelector('#leaderboard');
-  if (!node) return;
-  if (!users.length) { node.innerHTML = '<p class="empty-state">За выбранный период оценок пока нет</p>'; return; }
-  node.innerHTML = users.map((person, index) => `
-    <div class="leader-row"><span class="leader-rank">${String(index + 1).padStart(2, '0')}</span>
-      <span class="leader-name" title="${escapeHtml(person.name)}">${escapeHtml(person.name)}</span>
-      <span class="leader-count">${person.count} оц.</span><span class="leader-score">${person.average ?? '—'}</span>
-    </div>`).join('');
-}
+const BRANCH_ICONS = { sensory: '☕', milk: '🥛', standards: '📋', team: '🤝' };
+let developmentState = null;
+let evaluationPhotoUrl = null;
 
-function renderRecent(reviews) {
-  const node = document.querySelector('#recent-reviews');
-  if (!node) return;
-  if (!reviews.length) { node.innerHTML = '<p class="empty-state">Оценок за этот период пока нет</p>'; return; }
-  node.innerHTML = reviews.map((review) => {
-    const date = review.created_at ? String(review.created_at).slice(0, 16).replace('T', ' ') : '';
-    const type = [review.drink_type, review.point].filter(Boolean).join(' · ');
-    return `<article class="review-row">
-      <div class="review-person"><strong>${escapeHtml(review.barista)}</strong><span>${escapeHtml(review.author || 'Команда')}</span></div>
-      <span class="review-meta">${escapeHtml(type || review.category)}</span>
-      <span class="review-time">${escapeHtml(date)}</span>
-      <span class="review-score">${review.score ?? '—'} / 5</span>
+function branchRow(branch) {
+  const level = branch.level;
+  const percent = Number(branch.progress) || 0;
+  return `
+    <article class="branch-card${branch.kind === 'social' ? ' is-social' : ''}">
+      <div class="branch-head">
+        <span class="branch-icon" aria-hidden="true">${BRANCH_ICONS[branch.code] || '◆'}</span>
+        <div class="branch-copy">
+          <strong>${escapeHtml(branch.name)}</strong>
+          <span>${escapeHtml(branch.description)}</span>
+        </div>
+        <span class="branch-level">${level}<small>ур.</small></span>
+      </div>
+      <div class="branch-track"><i style="width:${Math.min(100, percent)}%"></i></div>
+      <div class="branch-foot"><span>${Number(branch.xp)} XP</span><span>${branch.xp_to_next ? `до ${branch.level + 1} ур. — ${branch.xp_to_next}` : 'максимум'}</span></div>
     </article>`;
-  }).join('');
 }
 
-async function loadDashboard(period = '30d') {
+function renderDevelopment(data) {
+  developmentState = data;
+  const panel = document.querySelector('#level-panel');
+  const number = document.querySelector('#level-number');
+  const title = document.querySelector('#level-title');
+  const sub = document.querySelector('#level-sub');
+  const bar = document.querySelector('#level-bar');
+  const ring = document.querySelector('#level-ring-value');
+  const ringLength = 2 * Math.PI * 52;
+  if (panel) {
+    panel.classList.toggle('is-newbie', data.role === 'newbie');
+    panel.classList.toggle('is-mentor', data.role === 'mentor');
+  }
+  // Бейдж стажёра скрыт, у наставника вместо цифры — череп (см. разметку).
+  if (number) number.textContent = data.role === 'newbie' || data.role === 'mentor' ? '' : String(data.level);
+  if (ring) {
+    ring.style.strokeDasharray = String(ringLength);
+    ring.style.strokeDashoffset = String(ringLength * (1 - Math.min(100, Number(data.account_progress) || 0) / 100));
+  }
+  if (title) {
+    title.textContent = data.role === 'newbie'
+      ? 'Уровень появится после аттестации'
+      : data.role === 'mentor'
+        ? 'Наставник'
+        : data.level_name || `Уровень ${data.level}`;
+  }
+  if (sub) {
+    sub.textContent = data.role === 'newbie'
+      ? 'Вы стажёр: расписание видно, прогресс заморожен до перехода в «Бариста»'
+      : data.role === 'mentor'
+        ? 'Высшая ступень: оценивайте команду и растите ветки сотрудников'
+        : `${Number(data.account_xp)} XP · до следующего уровня ${Number(data.account_xp_to_next)} XP`;
+  }
+  if (bar) bar.style.width = `${Math.min(100, Number(data.account_progress) || 0)}%`;
+
+  const grid = document.querySelector('#branch-grid');
+  if (grid) {
+    const branches = data.branches || [];
+    grid.innerHTML = branches.length
+      ? branches.map(branchRow).join('')
+      : '<p class="empty-state">Ветки ещё не настроены</p>';
+  }
+
+  const recent = document.querySelector('#my-evaluations');
+  if (recent) {
+    const rows = data.recent || [];
+    recent.innerHTML = rows.length ? rows.map((evaluation) => {
+      const date = evaluation.created_at ? String(evaluation.created_at).slice(0, 16).replace('T', ' ') : '';
+      const scores = (evaluation.branches || [])
+        .map((item) => `${escapeHtml(item.name)} ${item.score}`).join(' · ');
+      return `<article class="review-row">
+        <div class="review-person"><strong>${escapeHtml(evaluation.evaluator || 'Наставник')}</strong><span>${escapeHtml(date)}</span></div>
+        <span class="review-meta">${scores || '—'}</span>
+        <span class="review-time">${evaluation.photo_url ? `<a href="${escapeHtml(evaluation.photo_url)}" target="_blank" rel="noopener">Фото</a>` : ''}</span>
+        <span class="review-score">+${Number(evaluation.xp_awarded)} XP</span>
+      </article>`;
+    }).join('') : '<p class="empty-state">Оценок пока нет</p>';
+  }
+}
+
+async function loadDevelopment() {
+  try { renderDevelopment(await api('/api/dashboard/me')); }
+  catch (error) { showToast(error.message); }
+}
+
+/* Судейский лист: большие кнопки 3.0–5.0 на каждую ветку. Оценки ниже 4.0
+   остаются в истории, но опыта не дают — это честное «пока рано». */
+function renderEvaluationBranches() {
+  const container = document.querySelector('#evaluation-branches');
+  if (!container) return;
+  const branches = developmentState?.branches || [];
+  if (!branches.length) {
+    container.innerHTML = '<p class="empty-state">Ветки ещё не настроены</p>';
+    return;
+  }
+  const values = [5.0, 4.5, 4.0, 3.5, 3.0];
+  container.innerHTML = branches.map((branch) => `
+    <div class="evaluation-branch" data-branch="${escapeHtml(branch.code)}">
+      <div class="evaluation-branch-head">
+        <strong>${escapeHtml(branch.name)}</strong>
+        <span>${escapeHtml(branch.description)}${branch.kind === 'social' ? ' · социальная' : ''}</span>
+      </div>
+      <div class="evaluation-score-row" role="group" aria-label="${escapeHtml(branch.name)}">
+        ${values.map((value) => `<button type="button" class="evaluation-score" data-score="${value}" aria-pressed="false">${value.toFixed(1)}</button>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function resetEvaluationDialog() {
+  evaluationPhotoUrl = null;
+  document.querySelector('#evaluation-form')?.reset();
+  const errorNode = document.querySelector('#evaluation-form-error');
+  if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
+  const preview = document.querySelector('#evaluation-photo-preview');
+  if (preview) { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
+  renderEvaluationBranches();
+}
+
+async function fillEvaluationEmployees() {
+  const select = document.querySelector('#evaluation-employee');
+  if (!select) return;
   try {
-    const data = await api(`/api/dashboard?period=${encodeURIComponent(period)}`);
-    animateNumber(document.querySelector('#metric-reviews'), data.review_count);
-    animateNumber(document.querySelector('#metric-average'), data.average, 1);
-    animateNumber(document.querySelector('#metric-staff'), data.active_users);
-    renderChart(data.daily);
-    renderLeaderboard(data.leaderboard);
-    renderRecent(data.recent);
-  } catch (error) { showToast(error.message); }
+    const users = await api('/api/users');
+    const me = Number(document.body.dataset.userId || 0);
+    const staff = users.filter((user) => user.is_active && user.role !== 'mentor' && Number(user.id) !== me);
+    select.innerHTML = staff.length
+      ? staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name)}</option>`).join('')
+      : '<option value="">Нет сотрудников для оценки</option>';
+  } catch (error) {
+    select.innerHTML = '<option value="">Не удалось загрузить список</option>';
+    showToast(error.message);
+  }
+}
+
+async function uploadEvaluationPhoto(file) {
+  if (!file) return;
+  const preview = document.querySelector('#evaluation-photo-preview');
+  const errorNode = document.querySelector('#evaluation-form-error');
+  const image = preview?.querySelector('img');
+  if (errorNode) errorNode.hidden = true;
+  try {
+    // Сырое тело, как у аватара: multipart не нужен, Content-Type — от файла.
+    const response = await fetch('/api/evaluations/photo', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+      credentials: 'same-origin',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить фото');
+    evaluationPhotoUrl = data.url;
+    if (image) image.src = data.url;
+    if (preview) preview.hidden = false;
+  } catch (error) {
+    if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
+  }
+}
+
+function setupDevelopment() {
+  const dialog = document.querySelector('#evaluation-dialog');
+  const openButton = document.querySelector('#evaluation-open');
+  if (!dialog || !openButton) return;
+
+  openButton.addEventListener('click', async () => {
+    resetEvaluationDialog();
+    dialog.showModal();
+    if (!developmentState) await loadDevelopment();
+    renderEvaluationBranches();
+    fillEvaluationEmployees();
+  });
+
+  document.querySelector('#evaluation-branches')?.addEventListener('click', (event) => {
+    const button = event.target.closest('.evaluation-score');
+    if (!button) return;
+    const row = button.closest('.evaluation-branch');
+    row?.querySelectorAll('.evaluation-score').forEach((item) => {
+      const selected = item === button;
+      item.classList.toggle('is-selected', selected);
+      item.setAttribute('aria-pressed', String(selected));
+    });
+  });
+
+  document.querySelector('#evaluation-photo-input')?.addEventListener('change', (event) => {
+    uploadEvaluationPhoto(event.currentTarget.files?.[0]);
+  });
+  document.querySelector('#evaluation-photo-remove')?.addEventListener('click', () => {
+    evaluationPhotoUrl = null;
+    const preview = document.querySelector('#evaluation-photo-preview');
+    if (preview) { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
+    const input = document.querySelector('#evaluation-photo-input');
+    if (input) input.value = '';
+  });
+
+  document.querySelector('#evaluation-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorNode = document.querySelector('#evaluation-form-error');
+    const employeeId = Number(document.querySelector('#evaluation-employee')?.value || 0);
+    const scores = {};
+    document.querySelectorAll('#evaluation-branches .evaluation-branch').forEach((row) => {
+      const selected = row.querySelector('.evaluation-score.is-selected');
+      if (selected) scores[row.dataset.branch] = Number(selected.dataset.score);
+    });
+    if (!employeeId || !Object.keys(scores).length) {
+      if (errorNode) { errorNode.textContent = 'Выберите сотрудника и хотя бы одну оценку'; errorNode.hidden = false; }
+      return;
+    }
+    const submit = document.querySelector('#evaluation-submit');
+    if (submit) submit.disabled = true;
+    try {
+      const result = await api('/api/evaluations', {
+        method: 'POST',
+        body: JSON.stringify({ employee_id: employeeId, scores, photo_url: evaluationPhotoUrl }),
+      });
+      showToast(result.total_xp ? `Оценка сохранена: +${result.total_xp} XP` : 'Оценка сохранена, опыт не начислен');
+      dialog.close();
+      loadDevelopment();
+      if (managerRole) loadUsers();
+    } catch (error) {
+      if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
 }
 
 function renderUsers(users) {
@@ -219,7 +398,7 @@ function renderUsers(users) {
   const pendingCount = users.filter((user) => user.access_pending).length;
   count.textContent = `${activeCount} активных · ${pendingCount} ожидают · ${users.length} всего`;
   if (!users.length) { list.innerHTML = '<p class="empty-state">Сотрудников пока нет</p>'; return; }
-  const roleNames = { barista: 'Бариста', senior: 'Старший', mentor: 'Наставник', guest: 'Ожидает доступа' };
+  const roleNames = { newbie: 'Стажёр', barista: 'Бариста', senior: 'Старший', mentor: 'Наставник', guest: 'Ожидает доступа' };
   list.innerHTML = users.map((user) => {
     const shown = user.display_name || user.name;
     return `
@@ -304,7 +483,9 @@ function updateEditControls() {
   document.body.classList.toggle('calendar-editing', editMode);
   const swapsEntry = document.querySelector('#edit-swaps-toggle');
   const scheduleEntry = document.querySelector('#edit-schedule-toggle');
-  if (swapsEntry) swapsEntry.hidden = editMode;
+  // Стажёр только смотрит график: сервер тоже отклонит правки (PermissionError).
+  const canEdit = userRole !== 'newbie' && !baristaPreview;
+  if (swapsEntry) swapsEntry.hidden = editMode || !canEdit;
   if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor || baristaPreview;
   const tools = document.querySelector('.matrix-edit-tools');
   if (tools) tools.hidden = !editMode;
@@ -598,9 +779,7 @@ function discardScheduleChanges() {
 
 function applyModuleVisibility() {
   const summary = document.querySelector('#calendar-summary');
-  const quality = document.querySelector('#quality-dashboard');
   if (summary) summary.hidden = !modulePreferences.calendar_enabled;
-  if (quality) quality.hidden = !modulePreferences.quality_enabled;
   document.querySelectorAll('[data-view="calendar"]').forEach((button) => { button.hidden = !modulePreferences.calendar_enabled; });
   if (!modulePreferences.calendar_enabled && document.querySelector('#calendar-view')?.classList.contains('is-visible')) setView('profile');
 }
@@ -622,7 +801,6 @@ function applyBaristaPreview(enabled) {
 async function loadPreferences() {
   try {
     modulePreferences = await api('/api/preferences');
-    document.querySelector('#quality-module-toggle').checked = modulePreferences.quality_enabled;
     document.querySelector('#calendar-module-toggle').checked = modulePreferences.calendar_enabled;
     applyModuleVisibility();
     applyServerAppearance(modulePreferences);
@@ -1259,6 +1437,7 @@ function setView(name) {
       title.textContent =
         name === 'team' ? 'Управление командой' :
         name === 'calendar' ? 'График смен' :
+        name === 'development' ? 'Развитие' :
         name === 'control' ? 'Панель управления' :
         name === 'announcements' ? 'Анонсы' :
         name === 'chat' ? 'Чат' :
@@ -1266,6 +1445,8 @@ function setView(name) {
         `Добрый день, ${title.dataset.name}`;
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
+    // Прогресс мог измениться, пока сотрудник был в другом разделе.
+    if (name === 'development') loadDevelopment();
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
@@ -2469,10 +2650,8 @@ function setupDashboard() {
   setupProfile();
   setupAnnouncements();
   loadAnnouncements();
-  document.querySelectorAll('[data-period]').forEach((button) => button.addEventListener('click', () => {
-    document.querySelectorAll('[data-period]').forEach((item) => item.classList.toggle('is-selected', item === button));
-    loadDashboard(button.dataset.period);
-  }));
+  setupDevelopment();
+  loadDevelopment();
 
   const logout = async () => {
     try { await api('/api/logout', { method: 'POST' }); window.location.reload(); }
@@ -2556,7 +2735,7 @@ function setupDashboard() {
     loadCalendar();
   });
   const startEditing = (type) => {
-    if (editMode) return;
+    if (editMode || userRole === 'newbie') return;
     editType = type;
     editMode = true;
     matrixAnchor = null; matrixExtent = null;
@@ -2784,7 +2963,7 @@ function setupDashboard() {
     } catch { document.querySelector('#feed-status').textContent = event.currentTarget.dataset.url; }
   });
 
-  for (const [id, key] of [['quality-module-toggle', 'quality_enabled'], ['calendar-module-toggle', 'calendar_enabled']]) {
+  for (const [id, key] of [['calendar-module-toggle', 'calendar_enabled']]) {
     document.querySelector(`#${id}`)?.addEventListener('change', async (event) => {
       const previous = modulePreferences[key];
       modulePreferences[key] = event.currentTarget.checked;
@@ -2792,7 +2971,6 @@ function setupDashboard() {
       try {
         modulePreferences = await api('/api/preferences', { method: 'PATCH', body: JSON.stringify({ [key]: modulePreferences[key] }) });
         if (key === 'calendar_enabled' && modulePreferences.calendar_enabled) loadCalendar();
-        if (key === 'quality_enabled' && modulePreferences.quality_enabled) loadDashboard();
         showToast('Настройка сохранена');
       } catch (error) {
         modulePreferences[key] = previous;
@@ -2813,7 +2991,6 @@ function setupDashboard() {
   updateEditControls();
   loadPreferences().then(() => {
     if (modulePreferences.calendar_enabled) loadCalendar();
-    if (modulePreferences.quality_enabled) loadDashboard();
   });
   loadShiftTemplates();
   if (managerRole) {

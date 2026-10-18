@@ -4,7 +4,7 @@ import logging
 import re
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, chat, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import access_code, announcements, avatars, chat, gamification, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -44,8 +44,13 @@ from bot.web.calendar_service import (
 from bot.web.migrations import migrate_legacy_telegram_ids
 
 BASE_DIR = Path(__file__).resolve().parent
-ROLE_VALUES = {"barista", "senior", "mentor"}
-ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
+ROLE_VALUES = {"newbie", "barista", "senior", "mentor"}
+ROLE_NAMES = {
+    "newbie": "Стажёр",
+    "barista": "Бариста",
+    "senior": "Старший",
+    "mentor": "Наставник",
+}
 
 # Тексты ошибок входа. Формулировки для «нет такого сотрудника» и «неверный код»
 # намеренно разные только в одном: без кода нельзя понять, существует ли запись,
@@ -60,16 +65,6 @@ LOGIN_ERRORS = {
 }
 ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 MAX_AVATAR_BYTES = 4 * 1024 * 1024
-SCORE_SQL = """
-    CASE
-        WHEN category = 'Эспрессо/Фильтр' AND balance IS NOT NULL AND bouquet IS NOT NULL
-             AND body IS NOT NULL AND aftertaste IS NOT NULL
-            THEN (balance + bouquet + body + aftertaste) / 4.0
-        WHEN category = 'Молочный напиток' AND balance IS NOT NULL AND bouquet IS NOT NULL
-             AND foam IS NOT NULL AND latte_art IS NOT NULL
-            THEN (balance + bouquet + foam + latte_art) / 4.0
-    END
-"""
 
 # Логи домена "bot.web" uvicorn по умолчанию не показывает: он настраивает только
 # свои логгеры, а корневой остаётся на WARNING. Заводим собственный обработчик,
@@ -167,6 +162,13 @@ def migrate_database():
     announcements.initialize_schema(engine)
     push.initialize_schema(engine)
     chat.initialize_schema(engine)
+    gamification.initialize_schema(engine)
+    # Базовый опыт уже работающей команде выдаётся один раз: у каждого barista и
+    # senior уровень должен появиться сразу после раскатки, а не после первой
+    # оценки наставника. Повторные запуски ничего не добавляют (идемпотентно).
+    backfilled_xp = gamification.backfill_base_xp(engine)
+    if backfilled_xp:
+        logger.info("Геймификация: базовый опыт выдан (%s XP)", backfilled_xp)
     # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
     # ручной работы наставника по каждому человеку.
     access_code.ensure_active_codes(engine)
@@ -197,11 +199,11 @@ def preferences(user: dict[str, Any] = Depends(require_user)):
 @app.patch("/api/preferences")
 async def update_preferences(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     payload = await _read_json_object(request)
-    allowed = {"quality_enabled", "calendar_enabled", "theme", "accent", "chat_notify"}
+    allowed = {"calendar_enabled", "theme", "accent", "chat_notify"}
     if not payload or set(payload) - allowed:
         raise HTTPException(status_code=422, detail="Неизвестные настройки")
     for key, value in payload.items():
-        if key in {"quality_enabled", "calendar_enabled"} and not isinstance(value, bool):
+        if key == "calendar_enabled" and not isinstance(value, bool):
             raise HTTPException(status_code=422, detail="Настройки модулей должны быть boolean")
         if key == "theme" and value not in THEME_VALUES:
             raise HTTPException(status_code=422, detail="Неизвестная тема оформления")
@@ -964,66 +966,6 @@ async def update_announcement(announcement_id: int, request: Request,
     return {"ok": True}
 
 
-@app.get("/api/dashboard")
-def dashboard(period: str = "30d", _: dict[str, Any] = Depends(require_user)):
-    periods = {"7d": "-6 days", "30d": "-29 days", "90d": "-89 days", "all": None}
-    if period not in periods:
-        raise HTTPException(status_code=422, detail="Неизвестный период")
-
-    interval = periods[period]
-    where_sql = "" if interval is None else "WHERE date(created_at) >= date('now', :interval)"
-    params = {} if interval is None else {"interval": interval}
-
-    with engine.connect() as connection:
-        summary = connection.execute(
-            text(f"SELECT COUNT(*) AS count, ROUND(AVG({SCORE_SQL}), 2) AS average FROM drink_reviews {where_sql}"),
-            params,
-        ).mappings().one()
-        active_users = connection.execute(text("SELECT COUNT(*) FROM users WHERE is_active = 1")).scalar_one()
-        leaderboard = connection.execute(
-            text(f"""
-                SELECT barista_name AS name, COUNT(*) AS count, ROUND(AVG({SCORE_SQL}), 2) AS average
-                FROM drink_reviews {where_sql}
-                GROUP BY barista_name ORDER BY average DESC, count DESC LIMIT 8
-            """),
-            params,
-        ).mappings().all()
-        recent = connection.execute(
-            text(f"""
-                SELECT id, barista_name AS barista, respondent_name AS author, point, category,
-                       drink_type, comment, created_at, ROUND(({SCORE_SQL}), 1) AS score
-                FROM drink_reviews {where_sql}
-                ORDER BY created_at DESC LIMIT 8
-            """),
-            params,
-        ).mappings().all()
-        daily_rows = connection.execute(
-            text(f"""
-                SELECT date(created_at) AS day, COUNT(*) AS count, ROUND(AVG({SCORE_SQL}), 2) AS average
-                FROM drink_reviews WHERE date(created_at) >= date('now', '-6 days')
-                GROUP BY date(created_at) ORDER BY day
-            """)
-        ).mappings().all()
-
-    by_day = {row["day"]: dict(row) for row in daily_rows}
-    today = date.today()
-    daily = []
-    for offset in range(6, -1, -1):
-        day = today - timedelta(days=offset)
-        row = by_day.get(day.isoformat(), {})
-        daily.append({"day": day.strftime("%d.%m"), "count": row.get("count", 0), "average": row.get("average")})
-
-    return {
-        "period": period,
-        "review_count": summary["count"],
-        "average": summary["average"],
-        "active_users": active_users,
-        "leaderboard": [dict(row) for row in leaderboard],
-        "recent": [dict(row) for row in recent],
-        "daily": daily,
-    }
-
-
 @app.get("/api/users")
 def list_users(_: dict[str, Any] = Depends(require_manager)):
     with engine.connect() as connection:
@@ -1080,7 +1022,7 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
     values.setdefault("telegram_username", None)
     with engine.begin() as connection:
         try:
-            connection.execute(
+            result = connection.execute(
                 text("""
                     INSERT INTO users (name, iiko_id, telegram_username, role, is_active)
                     VALUES (:name, :iiko_id, :telegram_username, :role, 1)
@@ -1089,6 +1031,9 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
             )
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
+        # Бариста и старшему — базовый опыт сразу при создании: наставнику не
+        # нужно помнить о дополнительном действии, уровень появляется сам.
+        gamification.grant_base_xp(connection, int(result.lastrowid), values["role"])
     return {"ok": True}
 
 
@@ -1113,10 +1058,13 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
         target_active = values.get("is_active", current_user["is_active"])
         if target_role == "guest" and target_active:
             raise HTTPException(status_code=400, detail="Назначьте роль сотрудника до выдачи доступа")
+        # Любая роль ниже менеджерской (в том числе новая «стажёр») снимает права,
+        # поэтому проверяем именно принадлежность к менеджерам, а не «стал баристой».
         will_remove_manager = (
             current_user["role"] in {"senior", "mentor"}
             and current_user["is_active"]
-            and (values.get("role", current_user["role"]) == "barista" or values.get("is_active", 1) == 0)
+            and (values.get("role", current_user["role"]) not in {"senior", "mentor"}
+                 or values.get("is_active", 1) == 0)
         )
         if will_remove_manager:
             other_managers = connection.execute(text("""
@@ -1132,9 +1080,109 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
                     raise HTTPException(status_code=404, detail="Пользователь не найден")
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
+        # Повышение до бариста/старшего сразу даёт базовый опыт. Понижение до
+        # стажёра и деактивация опыт не обнуляют: начисления остаются в логе.
+        if "role" in values and target_active:
+            gamification.grant_base_xp(connection, user_id, target_role)
     if regenerate:
         return {"ok": True, "code": access_code.set_access_code(engine, user_id)}
     return {"ok": True}
+
+
+# --------------------------------------------------------------------------- #
+# Развитие: уровень, ветки навыков и оценки наставника
+#
+# Уровень считается по сумме хард-веток (сенсорика, молоко, стандарты); ветка
+# «Команда» копится параллельно и на бейдж не влияет. Оценивают только старшие
+# и наставники, стажёр видит расписание и свой прогресс без права правок.
+# --------------------------------------------------------------------------- #
+
+EVALUATION_ROLES = {"senior", "mentor"}
+EVALUATED_ROLES = {"newbie", "barista", "senior"}
+
+
+def _validate_evaluation_scores(scores: Any, allowed: set[str]) -> dict[str, float]:
+    if not isinstance(scores, dict) or not scores:
+        raise HTTPException(status_code=422, detail="Нужна хотя бы одна оценка")
+    if set(scores) - allowed:
+        raise HTTPException(status_code=422, detail="Неизвестная ветка оценки")
+    parsed: dict[str, float] = {}
+    for code, value in scores.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise HTTPException(status_code=422, detail="Оценка должна быть числом")
+        # Округляем до шага 0.5: кнопки в интерфейсе дают ровно такие значения,
+        # но API не должно зависеть от аккуратности клиента.
+        number = round(float(value) * 2) / 2
+        if number < 0 or number > 5:
+            raise HTTPException(status_code=422, detail="Оценка должна быть от 0 до 5")
+        parsed[code] = number
+    return parsed
+
+
+@app.get("/api/dashboard/me")
+def my_progress(user: dict[str, Any] = Depends(require_user)):
+    """Свой прогресс: уровень аккаунта, ветки и последние оценки."""
+    return gamification.dashboard_me(engine, user["id"])
+
+
+@app.get("/api/evaluations/photos/{filename}")
+def evaluation_photo(filename: str, _: dict[str, Any] = Depends(require_user)):
+    # Имя приходит из URL, поэтому пропускаем только собственный формат:
+    # FileResponse не должен получить путь за пределами каталога фото.
+    if not gamification.PHOTO_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    path = gamification.photo_path(filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    return FileResponse(
+        path,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=31536000"},
+    )
+
+
+@app.post("/api/evaluations/photo")
+async def upload_evaluation_photo(request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    """Тело запроса — сам файл изображения (без multipart). Шаг перед оценкой."""
+    if user["role"] not in EVALUATION_ROLES:
+        raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
+    data = await request.body()
+    if not data or len(data) > gamification.MAX_PHOTO_BYTES:
+        raise HTTPException(status_code=413, detail="Файл пустой или больше 8 МБ")
+    url = await run_in_threadpool(gamification.store_photo, data)
+    if not url:
+        raise HTTPException(status_code=422, detail="Не удалось прочитать изображение")
+    return {"ok": True, "url": url}
+
+
+@app.post("/api/evaluations")
+async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depends(require_csrf)):
+    """Оценка сотрудника: конвертируется в XP и сразу попадает в ветки."""
+    if evaluator["role"] not in EVALUATION_ROLES:
+        raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
+    payload = await _read_json_object(request)
+    employee_id = payload.get("employee_id")
+    if isinstance(employee_id, bool) or not isinstance(employee_id, int):
+        raise HTTPException(status_code=422, detail="Не указан сотрудник")
+    photo_url = payload.get("photo_url")
+    if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
+        raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
+
+    with engine.begin() as connection:
+        allowed = {branch["code"] for branch in gamification.active_branches(connection)}
+        scores = _validate_evaluation_scores(payload.get("scores"), allowed)
+        employee = connection.execute(
+            text("SELECT id, role, is_active FROM users WHERE id = :id"), {"id": employee_id}
+        ).mappings().first()
+        if not employee or not employee["is_active"]:
+            raise HTTPException(status_code=404, detail="Сотрудник не найден или отключён")
+        if employee["role"] not in EVALUATED_ROLES:
+            raise HTTPException(status_code=400, detail="Оценивать можно только сотрудников")
+        if int(employee["id"]) == int(evaluator["id"]):
+            raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
+        return gamification.apply_evaluation(
+            connection, int(evaluator["id"]), int(employee_id), scores, photo_url
+        )
 
 
 # --------------------------------------------------------------------------- #

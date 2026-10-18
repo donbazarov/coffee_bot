@@ -25,7 +25,7 @@ def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
     with engine.connect() as connection:
         user = connection.execute(text("""
             SELECT id,name,display_name,role,avatar_rev,telegram_id,access_code,session_epoch FROM users
-            WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
+            WHERE id=:id AND is_active=1 AND role IN ('newbie','barista','senior','mentor')
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None, None

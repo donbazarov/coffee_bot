@@ -15,7 +15,7 @@ from bot.web.schedule_snapshot import (
     render_schedule_snapshots,
 )
 
-ROLE_NAMES = {"barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
+ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
 # Максимум дней в одной публикации: 92 дня — это ровно 12 снимков по 8 дней.
 MAX_PUBLISH_DAYS = 92
@@ -93,7 +93,6 @@ def initialize_calendar_schema(engine: Engine) -> None:
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS web_user_preferences (
                 user_id INTEGER PRIMARY KEY REFERENCES users(id),
-                quality_enabled INTEGER NOT NULL DEFAULT 1,
                 calendar_enabled INTEGER NOT NULL DEFAULT 1,
                 theme TEXT NOT NULL DEFAULT 'system',
                 accent TEXT NOT NULL DEFAULT '#f47369',
@@ -374,7 +373,7 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         """), {"first_day": first_day.isoformat(), "last_day": last_day.isoformat()}).mappings().all()
         employees = connection.execute(text("""
             SELECT id, COALESCE(display_name, name) AS name, iiko_id, role, avatar_rev FROM users
-            WHERE is_active = 1 AND role IN ('barista', 'senior', 'mentor')
+            WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
             ORDER BY COALESCE(display_name, name) COLLATE NOCASE
         """)).mappings().all()
         current_user_id = user["id"]
@@ -551,12 +550,17 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
             raise LookupError("Пользователь не найден или отключён")
         if change_type == "schedule" and actor["role"] != "mentor":
             raise PermissionError("Тип «Расписание» доступен только наставникам")
+        # Стажёр расписание видит, но не правит: право на изменения приходит
+        # вместе с ролью «Бариста» после аттестации. Тот же отказ и на сервере,
+        # а не только скрытой кнопкой в интерфейсе.
+        if actor["role"] == "newbie":
+            raise PermissionError("Стажёр не может менять расписание")
 
         cells = []
         for operation in prepared:
             employee = connection.execute(text("""
                 SELECT id, name, iiko_id FROM users
-                WHERE id=:id AND is_active=1 AND role IN ('barista','senior','mentor')
+                WHERE id=:id AND is_active=1 AND role IN ('newbie','barista','senior','mentor')
             """), {"id": operation["user_id"]}).mappings().first()
             if not employee or employee["iiko_id"] is None:
                 raise LookupError("У бариста не найден активный iiko_id")
@@ -719,14 +723,13 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
 def get_user_preferences(engine: Engine, user_id: int) -> dict[str, Any]:
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT quality_enabled, calendar_enabled, theme, accent, chat_notify
+            SELECT calendar_enabled, theme, accent, chat_notify
             FROM web_user_preferences WHERE user_id=:user_id
         """), {"user_id": user_id}).mappings().first()
     theme = row["theme"] if row and row["theme"] in THEME_VALUES else "system"
     accent = row["accent"] if row and _HEX_COLOR.match(row["accent"] or "") else DEFAULT_ACCENT
     chat_notify = row["chat_notify"] if row and row["chat_notify"] in CHAT_NOTIFY_VALUES else DEFAULT_CHAT_NOTIFY
     return {
-        "quality_enabled": bool(row["quality_enabled"]) if row else True,
         "calendar_enabled": bool(row["calendar_enabled"]) if row else True,
         "theme": theme,
         "accent": accent,
@@ -740,13 +743,13 @@ def save_user_preferences(engine: Engine, user_id: int, values: dict[str, Any]) 
     with engine.begin() as connection:
         connection.execute(text("""
             INSERT INTO web_user_preferences
-                (user_id, quality_enabled, calendar_enabled, theme, accent, chat_notify, updated_at)
-            VALUES (:user_id, :quality, :calendar, :theme, :accent, :chat_notify, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id) DO UPDATE SET quality_enabled=excluded.quality_enabled,
+                (user_id, calendar_enabled, theme, accent, chat_notify, updated_at)
+            VALUES (:user_id, :calendar, :theme, :accent, :chat_notify, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
                 calendar_enabled=excluded.calendar_enabled, theme=excluded.theme,
                 accent=excluded.accent, chat_notify=excluded.chat_notify,
                 updated_at=CURRENT_TIMESTAMP
-        """), {"user_id": user_id, "quality": int(updated["quality_enabled"]),
+        """), {"user_id": user_id,
                "calendar": int(updated["calendar_enabled"]),
                "theme": updated["theme"], "accent": updated["accent"],
                "chat_notify": updated.get("chat_notify", DEFAULT_CHAT_NOTIFY)})
@@ -757,7 +760,7 @@ def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -
     with engine.connect() as connection:
         user = connection.execute(text("""
             SELECT id, name, display_name, iiko_id FROM users WHERE id = :user_id AND is_active = 1
-              AND role IN ('barista','senior','mentor')
+              AND role IN ('newbie','barista','senior','mentor')
         """), {"user_id": user_id}).mappings().first()
         if not user or user["iiko_id"] is None:
             return "\r\n".join([
