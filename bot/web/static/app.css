@@ -155,18 +155,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .login-footer { display: flex; justify-content: space-between; color: var(--dim); font: 9px var(--mono); letter-spacing: .12em; }
 
 .app-shell { display: flex; min-height: 100dvh; }
-.rail { position: fixed; inset: 0 auto 0 0; z-index: 3; display: flex; width: 236px; flex-direction: column; padding: 27px 18px 20px; border-right: 1px solid var(--line); background: var(--rail-bg); }
-.rail .brand { padding: 0 9px 35px; }
-.rail-nav { display: grid; gap: 5px; }
 .nav-item { display: flex; align-items: center; gap: 13px; width: 100%; padding: 12px 13px; border: 1px solid transparent; background: transparent; color: var(--muted); text-align: left; cursor: pointer; transition: .18s ease; }
 .nav-item:hover { color: var(--text); background: rgba(var(--hl), .05); }
 .nav-item.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
 .nav-item.is-active .nav-icon { color: var(--accent); }
 .nav-icon { display: inline-flex; width: 18px; flex: 0 0 auto; align-items: center; justify-content: center; color: var(--dim); font-size: 17px; }
-.rail-bottom { display: flex; align-items: center; gap: 8px; margin-top: auto; padding: 12px 9px 0; color: var(--dim); font: 9px var(--mono); letter-spacing: .07em; }
-.rail-version { margin-left: auto; }
 .status-light { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--mint); box-shadow: 0 0 12px color-mix(in srgb, var(--mint) 45%, transparent); }
-.main-area { width: min(1440px, calc(100% - 236px)); margin-left: 236px; padding: 0 clamp(24px, 4vw, 62px); }
+.main-area { width: 100%; padding: 0 clamp(24px, 4vw, 62px); }
 .topbar { display: flex; min-height: 118px; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
 .topbar-title .eyebrow { margin-bottom: 6px; }
 .topbar-title h1 { max-width: 55vw; overflow: hidden; margin: 0; font-size: 19px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
@@ -293,8 +288,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @keyframes rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 1080px) {
-  .rail { width: 194px; padding-inline: 12px; }
-  .main-area { width: calc(100% - 194px); margin-left: 194px; padding-inline: 24px; }
+  .main-area { padding-inline: 24px; }
   .user-row { grid-template-columns: minmax(130px, 1fr) minmax(77px, .65fr) minmax(80px, .7fr) minmax(80px, .7fr) 150px; }
   .user-telegram { display: none; }
 }
@@ -303,7 +297,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .login-content { padding: 60px 0 75px; }
   .login-content h1 { font-size: clamp(43px, 13vw, 64px); }
   .login-copy { max-width: 340px; font-size: 14px; }
-  .rail { display: none; }
   .main-area { width: 100%; margin: 0; padding: 0 18px calc(30px + env(safe-area-inset-bottom)); }
   .topbar { min-height: 83px; }
   .topbar-title .eyebrow { font-size: 8px; }
@@ -803,6 +796,23 @@ body.drawer-open { overflow: hidden; }
 .drawer-account { display: flex; align-items: center; gap: 11px; margin-top: auto; padding: 16px 6px 0; border-top: 1px solid var(--line); }
 .drawer-account .account-copy { min-width: 0; flex: 1; }
 .drawer-logout { margin-left: auto; }
+
+@media (min-width: 1024px) {
+  .drawer {
+    z-index: 3;
+    width: 236px;
+    padding: 27px 18px 20px;
+    box-shadow: none;
+    visibility: visible;
+    transform: none;
+    transition: none;
+  }
+  .drawer-head { padding: 0 9px 35px; }
+  .drawer-nav { gap: 5px; }
+  #drawer-close, .drawer-backdrop, .topbar-menu { display: none; }
+  .main-area { width: min(1440px, calc(100% - 236px)); margin-left: 236px; }
+  body.drawer-open { overflow: unset; }
+}
 
 /* =========================================================================
    Личный кабинет: оформление (тема и акцент)

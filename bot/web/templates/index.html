@@ -117,21 +117,6 @@
   </main>
   {% else %}
   <div class="app-shell">
-    <aside class="rail">
-      <a class="brand" href="/" aria-label="НЕФТЬ, главная"><span class="brand-symbol" aria-hidden="true"></span><span class="brand-name">НЕФТЬ<small>QUALITY DESK</small></span></a>
-      <nav class="rail-nav" aria-label="Основная навигация">
-        <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
-        <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>
-        <button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>
-        <button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>
-        <button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>
-        {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
-        {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
-        <button class="nav-item" type="button" data-view="profile"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg></span><span>Личный кабинет</span></button>
-      </nav>
-      <div class="rail-bottom"><span class="status-light"></span><span>СЕРВИС АКТИВЕН</span></div>
-    </aside>
-
     <main class="main-area">
       <header class="topbar">
         <button class="icon-button topbar-menu" type="button" id="drawer-open" aria-label="Открыть меню" aria-expanded="false" title="Меню"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>
@@ -461,7 +446,7 @@
   </nav>
 
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
-  <aside class="drawer" id="drawer" aria-label="Меню" aria-hidden="true">
+  <aside class="drawer" id="drawer" aria-label="Меню">
     <div class="drawer-head">
       <a class="brand" href="/" aria-label="НЕФТЬ, главная"><span class="brand-symbol" aria-hidden="true"></span><span class="brand-name">НЕФТЬ<small>CREW DESK</small></span></a>
       <button class="icon-button" type="button" id="drawer-close" aria-label="Закрыть меню"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
@@ -469,8 +454,8 @@
     <nav class="drawer-nav" aria-label="Меню">
       <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
       <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>
-      <button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" hidden></span></span><span>Анонсы</span></button>
-      <button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg></span><span>Чат</span></button>
+      <button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>
+      <button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>
       <button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>
       {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}

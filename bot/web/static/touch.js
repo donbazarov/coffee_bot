@@ -29,7 +29,7 @@
   const chatMain = document.getElementById('chat-main');
 
   const drawerWidth = () => (drawer ? drawer.getBoundingClientRect().width || 320 : 320);
-  const isDrawerOpen = () => Boolean(drawer && drawer.classList.contains('is-open'));
+  const isDrawerOpen = () => Boolean(!document.body.classList.contains('is-sidebar-pinned') && drawer && drawer.classList.contains('is-open'));
   const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
   const inMatrix = (target) => Boolean(target && target.closest && target.closest('.matrix-scroll'));
   const isMobile = () => window.matchMedia(MOBILE_QUERY).matches;

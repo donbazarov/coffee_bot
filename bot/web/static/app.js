@@ -1878,11 +1878,23 @@ function setupProfile() {
   });
 }
 
-/* --- Сэндвич-drawer ------------------------------------------------------ */
+/* --- Сэндвич-drawer / боковая навигация ---------------------------------- */
+
+const SIDEBAR_PINNED_QUERY = '(min-width: 1024px)';
+
+function isSidebarPinned() {
+  return window.matchMedia(SIDEBAR_PINNED_QUERY).matches;
+}
 
 function closeDrawer() {
   const drawer = document.querySelector('#drawer');
   if (!drawer) return;
+  if (isSidebarPinned()) {
+    drawer.setAttribute('aria-hidden', 'false');
+    document.querySelector('#drawer-backdrop')?.classList.remove('is-open');
+    document.body.classList.remove('drawer-open');
+    return;
+  }
   drawer.classList.remove('is-open');
   drawer.setAttribute('aria-hidden', 'true');
   document.querySelector('#drawer-backdrop')?.classList.remove('is-open');
@@ -1896,8 +1908,24 @@ function setupDrawer() {
   const openButton = document.querySelector('#drawer-open');
   if (!drawer || !backdrop || !openButton) return;
   let lastFocus = null;
+  const media = window.matchMedia(SIDEBAR_PINNED_QUERY);
+
+  const syncSidebarMode = () => {
+    const pinned = media.matches;
+    document.body.classList.toggle('is-sidebar-pinned', pinned);
+    if (pinned) {
+      drawer.classList.remove('is-open');
+      drawer.setAttribute('aria-hidden', 'false');
+      backdrop.classList.remove('is-open');
+      openButton.setAttribute('aria-expanded', 'false');
+      document.body.classList.remove('drawer-open');
+    } else if (!drawer.classList.contains('is-open')) {
+      drawer.setAttribute('aria-hidden', 'true');
+    }
+  };
 
   const open = () => {
+    if (isSidebarPinned()) return;
     lastFocus = document.activeElement;
     backdrop.classList.add('is-open');
     drawer.classList.add('is-open');
@@ -1912,6 +1940,7 @@ function setupDrawer() {
   backdrop.addEventListener('click', closeDrawer);
 
   document.addEventListener('keydown', (event) => {
+    if (isSidebarPinned()) return;
     if (event.key === 'Escape' && drawer.classList.contains('is-open')) {
       closeDrawer();
       lastFocus?.focus?.();
@@ -1926,16 +1955,20 @@ function setupDrawer() {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   });
 
-  // Закрытие свайпом влево.
+  // Закрытие свайпом влево (только в режиме offcanvas).
   let startX = null;
-  drawer.addEventListener('pointerdown', (event) => { startX = event.clientX; });
+  drawer.addEventListener('pointerdown', (event) => {
+    if (isSidebarPinned()) { startX = null; return; }
+    startX = event.clientX;
+  });
   drawer.addEventListener('pointerup', (event) => {
-    if (startX !== null && startX - event.clientX > 60) closeDrawer();
+    if (!isSidebarPinned() && startX !== null && startX - event.clientX > 60) closeDrawer();
     startX = null;
   });
 
-  // На широких экранах drawer не нужен — закрываем при возврате к десктопу.
-  window.addEventListener('resize', () => { if (window.innerWidth > 760) closeDrawer(); });
+  syncSidebarMode();
+  if (media.addEventListener) media.addEventListener('change', syncSidebarMode);
+  else media.addListener(syncSidebarMode);
 }
 
 /* --- Лента анонсов -------------------------------------------------------
