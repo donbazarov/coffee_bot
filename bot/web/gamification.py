@@ -47,6 +47,13 @@ PHOTO_MAX_SIDE = 1600
 PHOTO_FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.webp$")
 PHOTO_URL_RE = re.compile(r"^/api/evaluations/photos/[0-9a-f]{32}\.webp$")
 
+# Код ачивки: строчная латиница, цифры и подчёркивания. Совпадает с сидами и
+# гарантирует, что code пригоден для JSON-payload правил и будущего рендера.
+ACHIEVEMENT_CODE_RE = re.compile(r"^[a-z0-9_]{2,64}$")
+
+# Известные типы триггеров ачивок: движок умеет вычислять только их.
+ACHIEVEMENT_TRIGGERS = ("branch_xp_total", "evaluation_streak")
+
 # Сиды веток: (код, название, описание). Порядок задаёт `position`.
 # INSERT OR IGNORE: список наставник не должен чинить руками.
 BRANCH_SEEDS = (
@@ -54,6 +61,30 @@ BRANCH_SEEDS = (
     ("milk", "Молоко", "Пар, текстура, температура и латте-арт"),
     ("standards", "Стандарты", "Рецептуры, гигиена, станция и тайминги"),
     ("team", "Команда", "Социальная ветка: чаты, мемы, викторины, помощь команде"),
+)
+
+# Сиды базовых ачивок для тестов движка. `rule_payload` — JSON-правило,
+# которое разбирает `check_user_achievements`; `branch_id` — это код ветки
+# (`skill_branches.code`), а не числовой id. INSERT OR IGNORE: повторный старт
+# ничего не дублирует и не перезаписывает ручные правки наставника.
+ACHIEVEMENT_SEEDS = (
+    {
+        "code": "sensory_geek",
+        "name": "Сенсорный гик",
+        "description": "2500 XP в ветке «Сенсорика»: вкус, аромат и чистота чашки на уровне чутья",
+        "icon_model": "badge_sensory",
+        "texture_color": "#c98a3c",
+        "rule_payload": {"trigger_type": "branch_xp_total", "branch_id": "sensory", "threshold": 2500},
+    },
+    {
+        "code": "latte_art_master",
+        "name": "Мастер латте-арта",
+        "description": "Три оценки подряд не ниже 4.5 в ветке «Молоко»",
+        "icon_model": "badge_milk",
+        "texture_color": "#e8d5b7",
+        "rule_payload": {"trigger_type": "evaluation_streak", "branch_id": "milk",
+                         "min_score": 4.5, "streak_count": 3},
+    },
 )
 
 
@@ -131,6 +162,47 @@ def initialize_schema(engine: Engine) -> None:
                 VALUES (:code, :name, :description, :position, 1)
             """), {"code": code, "name": name, "description": description,
                    "position": position})
+
+        # Ачивки: справочник достижений и факт их выдачи сотрудникам. Правило
+        # (`rule_payload`) храним как TEXT-JSON — SQLite не имеет JSON-типа,
+        # как и у `evaluations.raw_scores`.
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                description TEXT,
+                icon_model TEXT,
+                texture_color TEXT,
+                rule_payload TEXT NOT NULL DEFAULT '{}',
+                is_active INTEGER NOT NULL DEFAULT 1
+            )
+        """))
+        connection.execute(text("""
+            CREATE TABLE IF NOT EXISTS user_achievements (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                achievement_id INTEGER NOT NULL REFERENCES achievements(id),
+                unlocked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, achievement_id)
+            )
+        """))
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_user_achievements_achievement
+            ON user_achievements (achievement_id)
+        """))
+        for seed in ACHIEVEMENT_SEEDS:
+            connection.execute(text("""
+                INSERT OR IGNORE INTO achievements
+                    (code, name, description, icon_model, texture_color, rule_payload, is_active)
+                VALUES (:code, :name, :description, :icon_model, :texture_color, :rule_payload, 1)
+            """), {
+                "code": seed["code"],
+                "name": seed["name"],
+                "description": seed["description"],
+                "icon_model": seed["icon_model"],
+                "texture_color": seed["texture_color"],
+                "rule_payload": json.dumps(seed["rule_payload"], ensure_ascii=False),
+            })
 
 
 # --- Уровни ------------------------------------------------------------------ #
@@ -276,7 +348,303 @@ def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int
             WHERE user_id = :user_id AND branch_id = :branch_id
         """), {"user_id": employee_id, "branch_id": branch["id"], "amount": xp})
 
-    return {"ok": True, "id": evaluation_id, "xp_awarded": awarded, "total_xp": total}
+    # Ачивки проверяем после начисления опыта и записи оценки: их правила видят
+    # уже обновлённые `user_skills` и свежую строку в `evaluations`. Транзакция
+    # та же, что у оценки, — частичной выдачи не бывает.
+    unlocked = check_user_achievements(connection, employee_id, "evaluation")
+
+    return {"ok": True, "id": evaluation_id, "xp_awarded": awarded,
+            "total_xp": total, "achievements": unlocked}
+
+
+# --- Достижения (ачивки) ------------------------------------------------------- #
+
+
+def _branch_xp_for_code(connection: Connection, user_id: int, branch_code: str) -> int:
+    """Опыт пользователя в ветке по её коду (0, если записи ещё нет)."""
+    row = connection.execute(text("""
+        SELECT us.xp
+        FROM user_skills us
+        JOIN skill_branches sb ON sb.id = us.branch_id
+        WHERE us.user_id = :user_id AND sb.code = :code
+    """), {"user_id": user_id, "code": branch_code}).first()
+    return int(row[0]) if row else 0
+
+
+def _evaluation_streak(connection: Connection, user_id: int, branch_code: str,
+                       min_score: float) -> int:
+    """Длина серии последних оценок, где score ветки не ниже `min_score`.
+
+    Идём от свежих к старым: первая же оценка без ветки, с битым JSON или с
+    оценкой ниже порога обрывает серию. Ровно то, что проверяет правило
+    `evaluation_streak`, но в виде числа — нужно и для прогресса на витрине.
+    """
+    rows = connection.execute(text("""
+        SELECT raw_scores FROM evaluations
+        WHERE employee_id = :user_id
+        ORDER BY created_at DESC, id DESC
+    """), {"user_id": user_id}).scalars().all()
+    streak = 0
+    for raw in rows:
+        try:
+            scores = json.loads(raw or "{}")
+        except (json.JSONDecodeError, TypeError):
+            break
+        value = scores.get(branch_code) if isinstance(scores, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            break
+        if float(value) < min_score:
+            break
+        streak += 1
+    return streak
+
+
+def _rule_satisfied(connection: Connection, user_id: int, rule: dict[str, Any]) -> bool:
+    """Выполнено ли правило ачивки. Неизвестный/битый триггер → False."""
+    trigger = rule.get("trigger_type")
+    branch_code = rule.get("branch_id")
+    if not isinstance(branch_code, str) or not branch_code:
+        return False
+    if trigger == "branch_xp_total":
+        threshold = rule.get("threshold")
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            return False
+        return _branch_xp_for_code(connection, user_id, branch_code) >= float(threshold)
+    if trigger == "evaluation_streak":
+        min_score = rule.get("min_score")
+        streak_count = rule.get("streak_count")
+        if (isinstance(min_score, bool) or not isinstance(min_score, (int, float))
+                or isinstance(streak_count, bool) or not isinstance(streak_count, int)
+                or streak_count <= 0):
+            return False
+        return _evaluation_streak(connection, user_id, branch_code, float(min_score)) >= streak_count
+    return False
+
+
+def check_user_achievements(connection: Connection, user_id: int,
+                            event_context: str) -> list[dict[str, Any]]:
+    """Выдаёт ачивки, правила которых выполнены, и возвращает их список.
+
+    Берём только активные достижения, которых у пользователя ещё нет.
+    `event_context` фиксирует источник проверки («evaluation» и т.п.) — задел
+    для фильтрации правил по событию; сейчас проверяются все правила.
+    """
+    rows = connection.execute(text("""
+        SELECT id, code, name, description, icon_model, texture_color, rule_payload
+        FROM achievements
+        WHERE is_active = 1
+          AND id NOT IN (
+              SELECT achievement_id FROM user_achievements WHERE user_id = :user_id
+          )
+        ORDER BY id
+    """), {"user_id": user_id}).mappings().all()
+
+    unlocked: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            rule = json.loads(row["rule_payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(rule, dict) or not _rule_satisfied(connection, user_id, rule):
+            continue
+        connection.execute(text("""
+            INSERT OR IGNORE INTO user_achievements (user_id, achievement_id)
+            VALUES (:user_id, :achievement_id)
+        """), {"user_id": user_id, "achievement_id": row["id"]})
+        unlocked.append({
+            "id": row["id"],
+            "code": row["code"],
+            "name": row["name"],
+            "description": row["description"],
+            "icon_model": row["icon_model"],
+            "texture_color": row["texture_color"],
+        })
+    return unlocked
+
+
+def _achievement_progress(connection: Connection, user_id: int,
+                          rule: dict[str, Any]) -> tuple[int, int] | None:
+    """Текущее значение и цель правила — для витрины «ближайших» ачивок."""
+    trigger = rule.get("trigger_type")
+    branch_code = rule.get("branch_id")
+    if not isinstance(branch_code, str) or not branch_code:
+        return None
+    if trigger == "branch_xp_total":
+        threshold = rule.get("threshold")
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            return None
+        return _branch_xp_for_code(connection, user_id, branch_code), int(threshold)
+    if trigger == "evaluation_streak":
+        min_score = rule.get("min_score")
+        streak_count = rule.get("streak_count")
+        if (isinstance(min_score, bool) or not isinstance(min_score, (int, float))
+                or isinstance(streak_count, bool) or not isinstance(streak_count, int)
+                or streak_count <= 0):
+            return None
+        return _evaluation_streak(connection, user_id, branch_code, float(min_score)), streak_count
+    return None
+
+
+def _achievement_entry(row: Any) -> dict[str, Any]:
+    """Срез достижения для API: без сырого rule_payload."""
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "name": row["name"],
+        "description": row["description"],
+        "icon_model": row["icon_model"],
+        "texture_color": row["texture_color"],
+    }
+
+
+def achievements_for_user(connection: Connection, user_id: int) -> dict[str, Any]:
+    """Полученные ачивки и заблокированные с прогрессом (для дашборда)."""
+    unlocked_rows = connection.execute(text("""
+        SELECT a.id, a.code, a.name, a.description, a.icon_model, a.texture_color,
+               ua.unlocked_at
+        FROM user_achievements ua
+        JOIN achievements a ON a.id = ua.achievement_id
+        WHERE ua.user_id = :user_id
+        ORDER BY ua.unlocked_at DESC, a.id DESC
+    """), {"user_id": user_id}).mappings().all()
+    unlocked = []
+    for row in unlocked_rows:
+        entry = _achievement_entry(row)
+        entry["unlocked_at"] = row["unlocked_at"]
+        unlocked.append(entry)
+
+    locked_rows = connection.execute(text("""
+        SELECT id, code, name, description, icon_model, texture_color, rule_payload
+        FROM achievements
+        WHERE is_active = 1
+          AND id NOT IN (
+              SELECT achievement_id FROM user_achievements WHERE user_id = :user_id
+          )
+        ORDER BY id
+    """), {"user_id": user_id}).mappings().all()
+    next_up = []
+    for row in locked_rows:
+        entry = _achievement_entry(row)
+        try:
+            rule = json.loads(row["rule_payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            rule = {}
+        progress = _achievement_progress(connection, user_id, rule) if isinstance(rule, dict) else None
+        if progress is not None:
+            current, target = progress
+            entry["progress"] = {
+                "current": min(current, target),
+                "target": target,
+                "percent": round(current / target * 100, 1) if target else 0.0,
+            }
+        next_up.append(entry)
+
+    return {"achievements": unlocked, "next_achievements": next_up}
+
+
+def _parse_rule_payload(value: Any) -> dict[str, Any]:
+    """Проверяет JSON-правило ачивки. Принимает dict или строку с JSON."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("rule_payload не является корректным JSON") from error
+    if not isinstance(value, dict):
+        raise ValueError("rule_payload должен быть JSON-объектом")
+    trigger = value.get("trigger_type")
+    if trigger not in ACHIEVEMENT_TRIGGERS:
+        raise ValueError("Неизвестный trigger_type правила")
+    branch_id = value.get("branch_id")
+    if not isinstance(branch_id, str) or not branch_id:
+        raise ValueError("В правиле не указан branch_id (код ветки)")
+    if trigger == "branch_xp_total":
+        threshold = value.get("threshold")
+        if isinstance(threshold, bool) or not isinstance(threshold, (int, float)):
+            raise ValueError("Для branch_xp_total нужен числовой threshold")
+    elif trigger == "evaluation_streak":
+        min_score = value.get("min_score")
+        streak_count = value.get("streak_count")
+        if isinstance(min_score, bool) or not isinstance(min_score, (int, float)):
+            raise ValueError("Для evaluation_streak нужен числовой min_score")
+        if isinstance(streak_count, bool) or not isinstance(streak_count, int) or streak_count <= 0:
+            raise ValueError("Для evaluation_streak нужен streak_count > 0")
+    return value
+
+
+def manage_achievements(engine: Engine) -> list[dict[str, Any]]:
+    """Список всех ачивок (включая неактивные) для панели наставника."""
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT id, code, name, description, icon_model, texture_color,
+                   rule_payload, is_active
+            FROM achievements
+            ORDER BY id
+        """)).mappings().all()
+    items = []
+    for row in rows:
+        try:
+            rule = json.loads(row["rule_payload"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            rule = {}
+        entry = _achievement_entry(row)
+        entry["is_active"] = bool(row["is_active"])
+        entry["rule_payload"] = rule
+        items.append(entry)
+    return items
+
+
+def create_achievement(engine: Engine, payload: dict[str, Any]) -> dict[str, Any]:
+    """Создаёт ачивку с сырым JSON-правилом. Ошибки — `ValueError` для API."""
+    code = payload.get("code")
+    name = payload.get("name")
+    if not isinstance(code, str) or not ACHIEVEMENT_CODE_RE.match(code):
+        raise ValueError("Код ачивки: строчные латинские буквы, цифры и подчёркивания")
+    if not isinstance(name, str) or not name.strip() or len(name.strip()) > 100:
+        raise ValueError("Название ачивки обязательно (до 100 символов)")
+    description = payload.get("description")
+    if description is not None and not isinstance(description, str):
+        raise ValueError("Описание должно быть текстом")
+    icon_model = payload.get("icon_model")
+    texture_color = payload.get("texture_color")
+    for label, value in (("icon_model", icon_model), ("texture_color", texture_color)):
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{label} должен быть текстом")
+    rule = _parse_rule_payload(payload.get("rule_payload"))
+    is_active = payload.get("is_active", True)
+    if not isinstance(is_active, bool):
+        raise ValueError("is_active должен быть boolean")
+
+    with engine.begin() as connection:
+        if connection.execute(
+            text("SELECT 1 FROM achievements WHERE code = :code"), {"code": code}
+        ).first():
+            raise ValueError("Ачивка с таким кодом уже существует")
+        result = connection.execute(text("""
+            INSERT INTO achievements
+                (code, name, description, icon_model, texture_color, rule_payload, is_active)
+            VALUES (:code, :name, :description, :icon_model, :texture_color, :rule_payload, :is_active)
+        """), {
+            "code": code,
+            "name": name.strip(),
+            "description": description,
+            "icon_model": icon_model,
+            "texture_color": texture_color,
+            "rule_payload": json.dumps(rule, ensure_ascii=False),
+            "is_active": 1 if is_active else 0,
+        })
+        achievement_id = int(result.lastrowid)
+
+    entry = {
+        "id": achievement_id,
+        "code": code,
+        "name": name.strip(),
+        "description": description,
+        "icon_model": icon_model,
+        "texture_color": texture_color,
+        "is_active": is_active,
+        "rule_payload": rule,
+    }
+    return entry
 
 
 # --- Дашборд развития ---------------------------------------------------------- #
@@ -303,6 +671,9 @@ def dashboard_me(engine: Engine, user_id: int) -> dict[str, Any]:
             WHERE e.employee_id = :user_id
             ORDER BY e.created_at DESC, e.id DESC LIMIT 5
         """), {"user_id": user_id}).mappings().all()
+        # Полученные ачивки и ближайшие заблокированные — считаем в той же
+        # сессии, пока открыто соединение.
+        achievements = achievements_for_user(connection, user_id)
 
     user_branches = []
     hard_xp = 0
@@ -358,6 +729,7 @@ def dashboard_me(engine: Engine, user_id: int) -> dict[str, Any]:
         "social_level": level_for_xp(social_xp),
         "branches": user_branches,
         "recent": recent,
+        **achievements,
     }
 
 

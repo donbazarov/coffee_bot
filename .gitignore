@@ -42,3 +42,5 @@ secrets.txt
 server_data/
 server_backups/
 project_context.txt
+bundle_code.py
+.claude/

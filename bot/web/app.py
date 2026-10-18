@@ -1185,6 +1185,22 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
         )
 
 
+@app.get("/api/achievements/manage")
+def manage_achievements(_: dict[str, Any] = Depends(require_manager)):
+    """Список ачивок для панели наставника: активные и выключенные."""
+    return gamification.manage_achievements(engine)
+
+
+@app.post("/api/achievements/manage", status_code=201)
+async def create_achievement(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    """Создание ачивки с сырым JSON-правилом (`rule_payload`)."""
+    payload = await _read_json_object(request)
+    try:
+        return gamification.create_achievement(engine, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 # --------------------------------------------------------------------------- #
 # Истории гостей
 #
