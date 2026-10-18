@@ -175,6 +175,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .account-copy { display: flex; min-width: 95px; flex-direction: column; line-height: 1.4; }
 .account-copy strong { font-size: 12px; font-weight: 600; }
 .account-copy span { color: var(--muted); font-size: 11px; }
+.app-status { display: flex; align-items: center; gap: 8px; color: var(--dim); font: 9px var(--mono); letter-spacing: .07em; white-space: nowrap; }
+.app-status.is-offline { color: #e9c46a; }
+.app-status.is-offline .status-light { background: #e9c46a; box-shadow: 0 0 12px color-mix(in srgb, #e9c46a 45%, transparent); }
 .icon-button { display: grid; width: 35px; height: 35px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: color .18s, border-color .18s; }
 .icon-button:hover { border-color: var(--line-strong); color: var(--text); }
 .view { display: none; padding: 37px 0 0; animation: rise-in .38s cubic-bezier(.2,.8,.2,1) both; }
@@ -781,7 +784,6 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* =========================================================================
    Сэндвич-drawer (мобильная навигация вместо нижней панели)
    ========================================================================= */
-.topbar-menu { display: none; }
 .drawer-backdrop { position: fixed; z-index: 40; inset: 0; background: var(--overlay); backdrop-filter: blur(3px); opacity: 0; pointer-events: none; transition: opacity .25s ease; }
 .drawer-backdrop.is-open { opacity: 1; pointer-events: auto; }
 .drawer { position: fixed; z-index: 41; inset: 0 auto 0 0; display: flex; width: min(84vw, 320px); flex-direction: column; gap: 6px; padding: 22px 16px calc(20px + env(safe-area-inset-bottom)); overflow-y: auto; border-right: 1px solid var(--line); background: var(--rail-bg); box-shadow: var(--shadow-2); visibility: hidden; transform: translateX(-102%); transition: transform .3s cubic-bezier(.2,.8,.2,1), visibility .3s; }
@@ -794,11 +796,6 @@ body.drawer-open { overflow: hidden; }
 .drawer-account { display: flex; align-items: center; gap: 11px; margin-top: auto; padding: 16px 6px 0; border-top: 1px solid var(--line); }
 .drawer-account .account-copy { min-width: 0; flex: 1; }
 .drawer-logout { margin-left: auto; }
-
-@media (max-width: 760px) {
-  .topbar-menu { display: grid; }
-  .account-area > .icon-button[data-view] { display: none; }
-}
 
 /* =========================================================================
    Личный кабинет: оформление (тема и акцент)

@@ -134,11 +134,9 @@
       <header class="topbar">
         <button class="icon-button topbar-menu" type="button" id="drawer-open" aria-label="Открыть меню" aria-expanded="false" title="Меню"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>
         <div class="topbar-title"><span class="eyebrow">ПАНЕЛЬ КАЧЕСТВА</span><h1 id="page-title" data-name="{{ user.display_name or user.name }}">Добрый день, {{ user.display_name or user.name }}</h1></div>
-        <div class="account-area">
-          <div class="account-mark">{% if user.avatar_rev %}<img src="/avatars/{{ user.id }}.jpg?v={{ user.avatar_rev }}" alt="">{% else %}{{ (user.display_name or user.name)[:1] | upper }}{% endif %}</div>
-          <div class="account-copy"><strong>{{ user.display_name or user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}</span></div>
-          <button class="icon-button" type="button" data-view="profile" aria-label="Личный кабинет" title="Личный кабинет"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></button>
-          <button class="icon-button" type="button" id="logout-button" aria-label="Выйти" title="Выйти"><svg class="icon" aria-hidden="true"><use href="#i-power"></use></svg></button>
+        <div class="app-status" id="app-network-status">
+          <span class="status-light" id="app-network-light"></span>
+          <span class="status-text" id="app-network-text">СЕРВИС АКТИВЕН</span>
         </div>
       </header>
 

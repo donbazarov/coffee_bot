@@ -66,6 +66,61 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/* --- Глобальный статус сети и UI-кеш для офлайн-режима ------------------ */
+
+/* Индикатор в правом углу шапки: зелёный — связь есть, жёлтый — офлайн.
+   `timestamp` — время последней успешной синхронизации, отображается как ОФЛАЙН (HH:MM). */
+function setNetworkStatus(isOnline, timestamp = null) {
+  const status = document.querySelector('#app-network-status');
+  const text = document.querySelector('#app-network-text');
+  if (!status) return;
+  status.classList.toggle('is-offline', !isOnline);
+  if (!text) return;
+  if (isOnline) {
+    text.textContent = 'СЕРВИС АКТИВЕН';
+    return;
+  }
+  const offlineTime = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  const hasTime = timestamp != null && !Number.isNaN(offlineTime.getTime());
+  text.textContent = hasTime
+    ? `ОФЛАЙН (${String(offlineTime.getHours()).padStart(2, '0')}:${String(offlineTime.getMinutes()).padStart(2, '0')})`
+    : 'ОФЛАЙН';
+}
+
+const CACHE_KEY_ANNOUNCEMENTS = 'neft-cache:announcements';
+const CACHE_KEY_CALENDAR = 'neft-cache:calendar';
+const CACHE_KEY_LAST_SYNC = 'neft-cache:last-sync';
+
+function readCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw == null ? null : JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeCache(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (error) {
+    /* localStorage может быть недоступен (приватный режим) — кеш пропускаем. */
+  }
+}
+
+function lastSyncTimestamp() {
+  const stored = readCache(CACHE_KEY_LAST_SYNC);
+  return stored == null ? null : new Date(stored);
+}
+
+/* Кастомная ошибка сети/серверной недоступности: не «ломает» UI, а лишь
+   переводит приложение в офлайн-режим и сигнализирует об этом через флаг. */
+function offlineError(message) {
+  const error = new Error(message);
+  error.isOffline = true;
+  return error;
+}
+
 async function api(path, options = {}) {
   activeRequests += 1;
   syncProgress();
@@ -77,18 +132,27 @@ async function api(path, options = {}) {
       response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
     } catch (networkError) {
       // Контейнер мог перезапускаться (деплой) — один раз тихо повторяем GET.
-      if (!options.method || options.method === 'GET') {
+      if ((!options.method || options.method === 'GET') && !options.retried) {
         await delay(900);
         return api(path, { ...options, retried: true });
       }
-      throw networkError;
+      setNetworkStatus(false);
+      throw offlineError('Связь с сервером потеряна');
     }
     if (response.status >= 500 && (!options.method || options.method === 'GET') && !options.retried) {
       await delay(900);
       return api(path, { ...options, retried: true });
     }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || 'Не удалось выполнить запрос');
+    if (!response.ok) {
+      // 5xx после повтора — сервер недоступен; 4xx — обычная ошибка бизнес-логики.
+      if (response.status >= 500) {
+        setNetworkStatus(false);
+        throw offlineError(data.detail || 'Сервер временно недоступен');
+      }
+      throw new Error(data.detail || 'Не удалось выполнить запрос');
+    }
+    setNetworkStatus(true);
     return data;
   } finally {
     activeRequests = Math.max(0, activeRequests - 1);
@@ -1099,14 +1163,34 @@ async function pasteMatrixSelection() {
 }
 
 async function loadCalendar() {
+  const year = calendarCursor.getFullYear();
+  const month = calendarCursor.getMonth() + 1;
+  const cacheKey = `${CACHE_KEY_CALENDAR}:${year}-${month}`;
+
+  // Офлайн-режим: сначала мгновенно показываем сохранённую копию графика.
+  const cached = readCache(cacheKey);
+  if (cached && cached.year === year && cached.month === month) {
+    calendarState = cached;
+    calendarAutoScroll = true;
+    renderCalendar(calendarState);
+  }
+
   try {
-    const year = calendarCursor.getFullYear();
-    const month = calendarCursor.getMonth() + 1;
-    calendarState = await api(`/api/calendar?year=${year}&month=${month}`);
+    const data = await api(`/api/calendar?year=${year}&month=${month}`);
+    calendarState = data;
+    writeCache(cacheKey, data);
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     calendarAutoScroll = true;
     renderCalendar(calendarState);
     await loadShiftHistory();
-  } catch (error) { showToast(error.message); }
+  } catch (error) {
+    if (error.isOffline) {
+      setNetworkStatus(false, lastSyncTimestamp());
+      showToast('Связь с сервером потеряна. Показана сохраненная копия');
+      return;
+    }
+    showToast(error.message);
+  }
 }
 
 function openShiftDialog(date, shift = null, employeeId = null) {
@@ -1928,15 +2012,42 @@ async function openAnnouncementCard(id) {
 }
 
 async function loadAnnouncements() {
+  // Офлайн-режим: мгновенно показываем сохранённую копию анонсов.
+  const cached = readCache(CACHE_KEY_ANNOUNCEMENTS);
+  if (cached && Array.isArray(cached.items)) {
+    announcementsState.items = cached.items;
+    announcementsState.unread = cached.unread || announcementsState.unread;
+    announcementsState.categories = cached.categories || [];
+    announcementsState.canPublish = Boolean(cached.canPublish);
+    renderAnnouncements();
+    renderAnnouncementCategories();
+  }
+
   try {
     const data = await api('/api/announcements?limit=50');
     announcementsState.items = data.items || [];
     announcementsState.unread = data.unread || announcementsState.unread;
     announcementsState.categories = data.categories || [];
     announcementsState.canPublish = Boolean(data.can_publish);
+    writeCache(CACHE_KEY_ANNOUNCEMENTS, {
+      items: announcementsState.items,
+      unread: announcementsState.unread,
+      categories: announcementsState.categories,
+      canPublish: announcementsState.canPublish,
+    });
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     renderAnnouncements();
     renderAnnouncementCategories();
-  } catch (error) { showToast(error.message); }
+    return true;
+  } catch (error) {
+    if (error.isOffline) {
+      setNetworkStatus(false, lastSyncTimestamp());
+      showToast('Связь с сервером потеряна. Показана сохраненная копия');
+    } else {
+      showToast(error.message);
+    }
+    return false;
+  }
 }
 
 async function markAnnouncementsRead() {
@@ -2151,8 +2262,10 @@ function applyDeepLink(url) {
 /* Открытие раздела = «я посмотрел ленту»: снимаем счётчик, но показываем
    непрочитанное в самом списке, чтобы не терять контекст. */
 async function openAnnouncements() {
-  await loadAnnouncements();
-  if (Number((announcementsState.unread || {}).total || 0) > 0) await markAnnouncementsRead();
+  const fresh = await loadAnnouncements();
+  // «Прочитано» фиксируем только при живом соединении: в офлайне POST не пройдёт
+  // и просто зашумит вторым тостом поверх «показана сохраненная копия».
+  if (fresh && Number((announcementsState.unread || {}).total || 0) > 0) await markAnnouncementsRead();
 }
 
 function setupAnnouncements() {
