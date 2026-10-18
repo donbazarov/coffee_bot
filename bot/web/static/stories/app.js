@@ -8,13 +8,40 @@
   const API_STORIES = '/stories/api/stories';
   const API_ME = '/stories/api/me';
   const API_MINE = '/stories/api/stories/mine';
-  const MAX_CHARS = 600;
   const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
-  const AUTOPLAY_MS = 7000;
 
-  const CTA_NEW = 'До 600 символов и одна фотография. История появится после проверки.';
+  // Скорость автопрокрутки и лимит символов приходят с сервера вместе со
+  // списком историй и кэшируются в localStorage — в офлайне берём их оттуда.
+  // Значения по умолчанию совпадают с серверными (stories_service.DEFAULT_SETTINGS).
+  const CACHE_KEY = 'neft-cache:stories';
+  const DEFAULT_AUTOPLAY_MS = 7000;
+  const DEFAULT_MAX_CHARS = 600;
+  let autoplayMs = DEFAULT_AUTOPLAY_MS;
+  let maxChars = DEFAULT_MAX_CHARS;
+
   const CTA_EDIT_PUBLISHED = 'Ваша история уже опубликована — её можно изменить. После правок она снова уйдёт на проверку.';
   const CTA_EDIT_PENDING = 'Ваша история ждёт проверки — её можно изменить. После правок она снова уйдёт на проверку.';
+
+  function ctaNew() {
+    return `До ${maxChars} символов и одна фотография. История появится после проверки.`;
+  }
+
+  function readCache(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw == null ? null : JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function writeCache(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (error) {
+      /* localStorage недоступен (приватный режим) — кэш пропускаем. */
+    }
+  }
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -364,7 +391,7 @@
     carousel.timer = setTimeout(() => {
       next();
       scheduleAutoplay();
-    }, AUTOPLAY_MS);
+    }, autoplayMs);
   }
 
   function restartProgress() {
@@ -373,7 +400,7 @@
     bar.style.transition = 'none';
     bar.style.width = '0%';
     void bar.offsetWidth;                       // принудительный reflow
-    bar.style.transition = `width ${AUTOPLAY_MS}ms linear`;
+    bar.style.transition = `width ${autoplayMs}ms linear`;
     bar.style.width = '100%';
   }
 
@@ -484,7 +511,7 @@
     headerShare.textContent = edit ? 'Изменить' : 'Поделиться';
 
     if (!edit) {
-      ctaNote.textContent = CTA_NEW;
+      ctaNote.textContent = ctaNew();
       return;
     }
     // Показываем гостю, что сейчас происходит с его историей.
@@ -494,11 +521,11 @@
 
   function updateMeter() {
     const length = textarea.value.length;
-    counter.textContent = `${length} / ${MAX_CHARS}`;
-    const percent = Math.min(100, (length / MAX_CHARS) * 100);
+    counter.textContent = `${length} / ${maxChars}`;
+    const percent = Math.min(100, (length / maxChars) * 100);
     meterFill.style.width = percent + '%';
-    meter.classList.toggle('is-warn', length > MAX_CHARS * 0.8 && length < MAX_CHARS);
-    meter.classList.toggle('is-limit', length >= MAX_CHARS);
+    meter.classList.toggle('is-warn', length > maxChars * 0.8 && length < maxChars);
+    meter.classList.toggle('is-limit', length >= maxChars);
   }
 
   function clearError() { hide(formError); formError.textContent = ''; }
@@ -630,8 +657,8 @@
       textarea.focus();
       return;
     }
-    if (textarea.value.length > MAX_CHARS) {
-      setError(`Слишком длинная история: максимум ${MAX_CHARS} символов`);
+    if (textarea.value.length > maxChars) {
+      setError(`Слишком длинная история: максимум ${maxChars} символов`);
       return;
     }
 
@@ -690,11 +717,37 @@
     updateCta();
   }
 
+  /** Применяем настройки страницы (скорость прокрутки и лимит символов). */
+  function applySettings(settings) {
+    if (!settings) return;
+    const ms = Number(settings.autoplay_ms);
+    const chars = Number(settings.max_text_length);
+    autoplayMs = Number.isFinite(ms) && ms >= 1000 ? ms : DEFAULT_AUTOPLAY_MS;
+    maxChars = Number.isFinite(chars) && chars >= 50 ? chars : DEFAULT_MAX_CHARS;
+
+    textarea.maxLength = maxChars;
+    updateMeter();
+    updateCta();
+    scheduleAutoplay();   // перезапуск с новой скоростью, если карусель уже есть
+  }
+
   async function loadStories() {
+    // 1. Сразу рисуем то, что лежит в кэше — не ждём сеть (офлайн-режим).
+    const cached = readCache(CACHE_KEY);
+    const cachedStories = cached && Array.isArray(cached.stories) ? cached.stories : null;
+    if (cached) applySettings(cached.settings);
+    if (cachedStories && cachedStories.length) renderCarousel(cachedStories);
+
+    // 2. Догоняем сетью: обновляем кэш и перерисовываем.
     try {
       const data = await api(API_STORIES);
-      renderCarousel(data.stories || []);
+      const stories = data.stories || [];
+      writeCache(CACHE_KEY, { stories, settings: data.settings || null });
+      applySettings(data.settings);
+      renderCarousel(stories);
     } catch {
+      // Сеть недоступна. Если кэш уже показан — оставляем его на экране.
+      if (cachedStories && cachedStories.length) return;
       show(carousel.empty);
       hide(carousel.controls);
       hide(carousel.progress);
@@ -702,9 +755,23 @@
     }
   }
 
+  /* Оболочка в кеше телефона: гостевая страница открывается офлайн. Версию
+     берём из адреса самого файла — при деплое она меняется, и старый кеш
+     выбрасывается (тот же Service Worker, что и на основном сайте). */
+  function setupServiceWorker() {
+    if (!('serviceWorker' in navigator) || !window.isSecureContext) return;
+    const script = Array.from(document.scripts).find((node) => node.src && node.src.includes('/static/stories/app.js'));
+    const version = script ? new URL(script.src).searchParams.get('v') || '' : '';
+    navigator.serviceWorker.register(`/sw.js?v=${version}`, { scope: '/' }).catch(() => {
+      // Не получилось — страница работает как раньше, просто без офлайна.
+    });
+  }
+
   document.getElementById('year').textContent = String(new Date().getFullYear());
+  textarea.maxLength = maxChars;
   updateMeter();
   updateCta();
   loadGuest();
   loadStories();
+  setupServiceWorker();
 })();

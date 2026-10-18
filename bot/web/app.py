@@ -1206,8 +1206,15 @@ def stories_page(request: Request):
 
 @app.get("/stories/api/stories")
 def stories_public_list():
-    """Только опубликованные истории — для карусели."""
-    return {"stories": stories_service.list_published()}
+    """Только опубликованные истории — для карусели.
+
+    Вместе со списком отдаём настройки страницы (скорость автопрокрутки и
+    лимит символов): клиент кэширует их в localStorage и в офлайне берёт оттуда.
+    """
+    return {
+        "stories": stories_service.list_published(),
+        "settings": stories_service.get_settings(),
+    }
 
 
 @app.post("/stories/api/stories", status_code=201)
@@ -1259,7 +1266,35 @@ def stories_upload(filename: str):
 @app.get("/api/stories/moderation")
 def stories_moderation_list(_: dict[str, Any] = Depends(require_manager)):
     """Все истории для панели модерации в личном кабинете."""
-    return {"stories": stories_service.list_all(), "stats": stories_service.stats()}
+    return {
+        "stories": stories_service.list_all(),
+        "stats": stories_service.stats(),
+        "settings": stories_service.get_settings(),
+    }
+
+
+# Важно: маршруты /order и /settings объявлены до /{story_id}, иначе FastAPI
+# примет "order" и "settings" за идентификатор истории.
+
+
+@app.patch("/api/stories/moderation/order")
+async def stories_moderation_order(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    """Ручной порядок историй из панели модерации (drag-and-drop)."""
+    body = await _read_json_object(request)
+    stories_service.update_order(body.get("order") or [])
+    return {
+        "ok": True,
+        "stories": stories_service.list_all(),
+        "stats": stories_service.stats(),
+    }
+
+
+@app.patch("/api/stories/moderation/settings")
+async def stories_moderation_settings(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    """Скорость автопрокрутки и лимит символов истории."""
+    body = await _read_json_object(request)
+    settings = stories_service.update_settings(body.get("autoplay_ms"), body.get("max_text_length"))
+    return {"ok": True, "settings": settings}
 
 
 @app.patch("/api/stories/moderation/{story_id}")

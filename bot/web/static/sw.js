@@ -9,7 +9,12 @@
  * Правила простые:
  *   • /static/* — из кеша (ссылки версионированные: app.css?v=<hash>);
  *   • переход между страницами — сначала сеть (3 с), потом кеш;
+ *   • /stories/uploads/* — фото историй: из кеша, сеть догоняет в фоне;
  *   • /api/, /auth/, /avatars/, не-GET и «обновить страницу» — всегда в сеть.
+ *
+ * Гостевая страница историй (/stories) работает в офлайне: её HTML лежит в
+ * оболочке, тексты историй кэширует клиент через localStorage (stories/app.js),
+ * а фотографии — по правилу выше.
  *
  * Версия кеша берётся из ?v= в адресе самого файла (его подставляет app.js),
  * поэтому после деплоя старый кеш удаляется автоматически.
@@ -39,6 +44,11 @@ const SHELL = [
   '/static/icons/favicon-96x96.png',
   '/static/icons/apple-touch-icon.png',
   '/site.webmanifest',
+  // Гостевая страница историй: HTML и её собственная статика — чтобы карусель
+  // открывалась офлайн (тексты и фото кэшируются отдельно, см. ниже).
+  '/stories',
+  `/static/stories/styles.css?v=${VERSION}`,
+  `/static/stories/app.js?v=${VERSION}`,
 ];
 
 self.addEventListener('install', (event) => {
@@ -78,6 +88,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Фотографии историй: имя файла неизменно, поэтому Cache-First — картинка
+  // рисуется мгновенно, а сеть догоняет в фоне (см. refreshInBackground).
+  if (url.pathname.startsWith('/stories/uploads/')) {
+    event.respondWith(staleWhileRevalidate(request));
+    return;
+  }
+
   if (request.mode === 'navigate') {
     // Явное обновление страницы пользователем («потянуть вниз», Cmd+R) —
     // не подсовываем кеш, иначе из него не выбраться.
@@ -101,6 +118,39 @@ async function fromCache(request) {
     const previous = await cache.match(request, { ignoreSearch: true });
     if (previous) return previous;
     throw error;
+  }
+}
+
+/* Фото историй: отдаём из кеша сразу, а свежую версию тянем в фоне. Файлы
+   неизменяемые по имени, поэтому обновление в фоне — почти всегда лишнее,
+   но страховка от «битого» кеша не помешает. */
+async function staleWhileRevalidate(request) {
+  const cache = await caches.open(CACHE);
+  const cached = await cache.match(request);
+  if (cached) {
+    refreshAssetInBackground(request);
+    return cached;
+  }
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) cache.put(request, response.clone());
+    return response;
+  } catch (error) {
+    const fallback = await cache.match(request, { ignoreSearch: true });
+    if (fallback) return fallback;
+    throw error;
+  }
+}
+
+async function refreshAssetInBackground(request) {
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) {
+      const cache = await caches.open(CACHE);
+      await cache.put(request, response);
+    }
+  } catch (error) {
+    // Сеть не ответила — оставляем кешированную картинку.
   }
 }
 

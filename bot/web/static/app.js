@@ -1466,7 +1466,7 @@ function setView(name) {
    Публичная страница живёт по прямой ссылке /stories и в навигации её нет.
    Здесь только инструменты наставника: публикация, правка и удаление. */
 
-const storiesAdmin = { filter: 'all', items: [], stats: null };
+const storiesAdmin = { filter: 'all', items: [], stats: null, settings: null };
 
 function formatStoryDate(value) {
   try {
@@ -1508,6 +1508,9 @@ function buildStoryAdminCard(story) {
   const card = document.createElement('article');
   card.className = 'story-admin-card' + (story.published ? ' is-published' : '');
   card.dataset.storyId = story.id;
+  card.draggable = true;
+
+  const textLimit = (storiesAdmin.settings && storiesAdmin.settings.max_text_length) || 600;
 
   card.innerHTML = `
     <div class="story-admin-main">
@@ -1516,6 +1519,7 @@ function buildStoryAdminCard(story) {
       </div>
       <div class="story-admin-body">
         <div class="story-admin-head">
+          <span class="story-admin-drag" title="Перетащите, чтобы изменить порядок" aria-hidden="true">⠿</span>
           <span class="story-admin-name">${escapeHtml(story.name || 'Гость НЕФТИ')}</span>
           <span class="story-admin-badge ${story.published ? 'is-published' : 'is-pending'}">${story.published ? 'Опубликовано' : 'На модерации'}</span>
           <span class="story-admin-date">${escapeHtml(formatStoryDate(story.createdAt))}</span>
@@ -1530,7 +1534,7 @@ function buildStoryAdminCard(story) {
     </div>
     <form class="story-admin-edit" hidden>
       <label>Имя гостя<input type="text" name="name" maxlength="40" value="${escapeHtml(story.name || '')}"></label>
-      <label>Текст истории<textarea name="text" maxlength="600" rows="5">${escapeHtml(story.text)}</textarea></label>
+      <label>Текст истории<textarea name="text" maxlength="${textLimit}" rows="5">${escapeHtml(story.text)}</textarea></label>
       <div class="story-admin-photo-row">
         <label class="button button-quiet">Заменить фото<input type="file" name="photo" accept="image/png,image/jpeg,image/webp,image/gif" hidden></label>
         <button class="button button-quiet" type="button" data-story-photo-remove ${story.photo ? '' : 'disabled'}>Удалить фото</button>
@@ -1598,10 +1602,16 @@ function wireStoryAdminCard(card, story) {
     removePhotoButton.disabled = !story.photo;
     showError('');
     editForm.hidden = false;
+    // Пока открыт редактор, карточку не перетаскиваем — иначе выделять текст
+    // в textarea неудобно.
+    card.draggable = false;
     editForm.elements.text.focus();
   });
 
-  card.querySelector('[data-story-cancel]').addEventListener('click', () => { editForm.hidden = true; });
+  card.querySelector('[data-story-cancel]').addEventListener('click', () => {
+    editForm.hidden = true;
+    card.draggable = true;
+  });
   editForm.elements.text.addEventListener('input', () => showError(''));
   editForm.elements.name.addEventListener('input', () => showError(''));
 
@@ -1674,11 +1684,98 @@ async function loadStoriesAdmin() {
     const data = await api('/api/stories/moderation');
     storiesAdmin.items = data.stories || [];
     storiesAdmin.stats = data.stats || null;
+    storiesAdmin.settings = data.settings || null;
+    fillStoriesSettingsForm();
     if (status) status.textContent = '';
     renderStoriesAdmin();
   } catch (error) {
     if (status) status.textContent = error.message;
   }
+}
+
+/* --- Настройки страницы историй (скорость прокрутки, лимит текста) -------- */
+
+function fillStoriesSettingsForm() {
+  const form = document.querySelector('#stories-settings-form');
+  if (!form || !storiesAdmin.settings) return;
+  form.elements.autoplay_ms.value = storiesAdmin.settings.autoplay_ms;
+  form.elements.max_text_length.value = storiesAdmin.settings.max_text_length;
+}
+
+function setupStoriesSettings() {
+  const form = document.querySelector('#stories-settings-form');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = document.querySelector('#stories-settings-error');
+    const showError = (message) => { if (error) { error.textContent = message; error.hidden = !message; } };
+    showError('');
+    const payload = {
+      autoplay_ms: Number(form.elements.autoplay_ms.value),
+      max_text_length: Number(form.elements.max_text_length.value),
+    };
+    if (!Number.isFinite(payload.autoplay_ms) || !Number.isFinite(payload.max_text_length)) {
+      showError('Укажите числа'); return;
+    }
+    try {
+      const data = await api('/api/stories/moderation/settings', { method: 'PATCH', body: JSON.stringify(payload) });
+      storiesAdmin.settings = data.settings || storiesAdmin.settings;
+      fillStoriesSettingsForm();
+      renderStoriesAdmin();          // обновляем maxlength в формах правки
+      showToast('Настройки историй сохранены');
+    } catch (requestError) { showError(requestError.message); }
+  });
+}
+
+/* --- Порядок историй: drag-and-drop (по аналогии с шаблонами смен) -------- */
+
+function setupStoriesAdminDragAndDrop() {
+  const list = document.querySelector('#stories-admin-list');
+  if (!list) return;
+  let dragged = null;
+  list.addEventListener('dragstart', (event) => {
+    const row = event.target.closest('[data-story-id]');
+    if (!row) return;
+    dragged = row;
+    row.classList.add('is-dragging');
+    event.dataTransfer.effectAllowed = 'move';
+    try { event.dataTransfer.setData('text/plain', row.dataset.storyId); } catch (error) { /* Safari */ }
+  });
+  list.addEventListener('dragover', (event) => {
+    if (!dragged) return;
+    event.preventDefault();
+    list.querySelectorAll('.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'));
+    const row = event.target.closest('[data-story-id]');
+    if (row && row !== dragged) row.classList.add('is-drop-target');
+  });
+  list.addEventListener('drop', async (event) => {
+    if (!dragged) return;
+    event.preventDefault();
+    const target = event.target.closest('[data-story-id]');
+    if (target && target !== dragged) {
+      const rect = target.getBoundingClientRect();
+      const insertAfter = event.clientY > rect.top + rect.height / 2;
+      list.insertBefore(dragged, insertAfter ? target.nextSibling : target);
+      await persistStoriesOrder();
+    }
+  });
+  list.addEventListener('dragend', () => {
+    if (dragged) dragged.classList.remove('is-dragging');
+    list.querySelectorAll('.is-drop-target').forEach((item) => item.classList.remove('is-drop-target'));
+    dragged = null;
+  });
+}
+
+async function persistStoriesOrder() {
+  const list = document.querySelector('#stories-admin-list');
+  if (!list) return;
+  const order = [...list.querySelectorAll('[data-story-id]')].map((row) => row.dataset.storyId);
+  try {
+    const data = await api('/api/stories/moderation/order', { method: 'PATCH', body: JSON.stringify({ order }) });
+    storiesAdmin.items = data.stories || storiesAdmin.items;
+    if (data.stats) storiesAdmin.stats = data.stats;
+    showToast('Порядок историй сохранён');
+  } catch (error) { showToast(error.message); }
 }
 
 function setupStoriesAdmin() {
@@ -1689,6 +1786,8 @@ function setupStoriesAdmin() {
       renderStoriesAdmin();
     });
   });
+  setupStoriesSettings();
+  setupStoriesAdminDragAndDrop();
   loadStoriesAdmin();
 }
 

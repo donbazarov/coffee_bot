@@ -415,6 +415,15 @@
         <section class="panel settings-panel" id="stories-admin-panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИИ ГОСТЕЙ</p><h3>Модерация</h3></div><span class="panel-index" id="stories-admin-stats">—</span></div>
           <p class="settings-hint">Гостевая страница живёт по прямой ссылке <a href="/stories" target="_blank" rel="noopener">/stories</a> — в навигации её нет. В карусель попадают только опубликованные истории.</p>
+          <form class="template-form" id="stories-settings-form">
+            <label>Скорость прокрутки (мс)<input type="number" name="autoplay_ms" min="1000" max="60000" step="500" required></label>
+            <label>Лимит символов<input type="number" name="max_text_length" min="50" max="1200" step="10" required></label>
+            <p class="template-form-error" id="stories-settings-error" role="alert" hidden></p>
+            <div class="template-form-actions">
+              <button class="button button-primary" type="submit">Сохранить настройки</button>
+            </div>
+          </form>
+          <p class="settings-hint">Порядок историй меняется перетаскиванием карточек за ⠿ — сверху вниз, как они показываются гостям.</p>
           <div class="stories-filters" role="group" aria-label="Фильтр историй">
             <button class="button button-quiet is-active" type="button" data-stories-filter="all">Все</button>
             <button class="button button-quiet" type="button" data-stories-filter="pending">На модерации</button>

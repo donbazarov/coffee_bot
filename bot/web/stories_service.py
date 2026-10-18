@@ -47,6 +47,13 @@ ALLOWED_PHOTO_TYPES = {
 
 DEFAULT_AUTHOR = "Гость НЕФТИ"
 
+# Настройки публичной страницы. Живут в db["settings"] и правятся из панели
+# модерации: скорость автопрокрутки карусели и лимит символов в истории.
+DEFAULT_SETTINGS: dict[str, int] = {"autoplay_ms": 7000, "max_text_length": 600}
+MIN_AUTOPLAY_MS = 1000
+MAX_AUTOPLAY_MS = 60000
+MIN_TEXT_LENGTH = 50
+
 # Кука «памяти гостя»: по ней узнаём устройство и не даём отправить несколько
 # историй с одного телефона. Только httpOnly — из JavaScript недоступна.
 GUEST_COOKIE = "neft_guest"
@@ -125,6 +132,59 @@ def save_db(db: dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Настройки
+# --------------------------------------------------------------------------- #
+
+def _clamp_int(value: object, default: int, low: int, high: int) -> int:
+    """Приводит значение к int и зажимает в диапазон [low, high].
+
+    Битые значения (строки, None, отрицательные) заменяются на default —
+    страница не должна «ломаться» из-за неверной настройки.
+    """
+    try:
+        number = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, number))
+
+
+def get_settings() -> dict[str, int]:
+    """Текущие настройки страницы историй с дефолтами и ограничениями диапазона."""
+    db = load_db()
+    raw = db.get("settings")
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "autoplay_ms": _clamp_int(
+            raw.get("autoplay_ms"), DEFAULT_SETTINGS["autoplay_ms"], MIN_AUTOPLAY_MS, MAX_AUTOPLAY_MS
+        ),
+        "max_text_length": _clamp_int(
+            raw.get("max_text_length"), DEFAULT_SETTINGS["max_text_length"], MIN_TEXT_LENGTH, MAX_TEXT_LENGTH
+        ),
+    }
+
+
+def update_settings(autoplay_ms: object, max_text_length: object) -> dict[str, int]:
+    """Сохраняет настройки страницы. Возвращает нормализованный результат."""
+    settings = {
+        "autoplay_ms": _clamp_int(
+            autoplay_ms, DEFAULT_SETTINGS["autoplay_ms"], MIN_AUTOPLAY_MS, MAX_AUTOPLAY_MS
+        ),
+        "max_text_length": _clamp_int(
+            max_text_length, DEFAULT_SETTINGS["max_text_length"], MIN_TEXT_LENGTH, MAX_TEXT_LENGTH
+        ),
+    }
+    db = load_db()
+    current = db.get("settings")
+    if not isinstance(current, dict):
+        current = {}
+    current.update(settings)
+    db["settings"] = current
+    save_db(db)
+    return settings
+
+
+# --------------------------------------------------------------------------- #
 # Представления
 # --------------------------------------------------------------------------- #
 
@@ -175,8 +235,9 @@ def validate_text(raw: object) -> tuple[str | None, str | None]:
     text = raw.strip()
     if not text:
         return None, "История не может быть пустой"
-    if len(text) > MAX_TEXT_LENGTH:
-        return None, f"Слишком длинная история: максимум {MAX_TEXT_LENGTH} символов"
+    limit = get_settings()["max_text_length"]
+    if len(text) > limit:
+        return None, f"Слишком длинная история: максимум {limit} символов"
     return text, None
 
 
@@ -248,18 +309,44 @@ def delete_photo(photo_path: str | None) -> None:
 # --------------------------------------------------------------------------- #
 
 def list_published() -> list[dict[str, Any]]:
-    """Только опубликованные истории — для карусели."""
+    """Только опубликованные истории — для карусели.
+
+    Порядок берём из db["stories"] как есть: его задаёт наставник
+    drag-and-drop'ом в панели модерации (см. update_order).
+    """
     db = load_db()
     stories = [story for story in db["stories"] if story.get("published")]
-    stories.sort(key=lambda story: story.get("createdAt", ""), reverse=True)
     return [public_story(story) for story in stories]
 
 
 def list_all() -> list[dict[str, Any]]:
-    """Все истории для панели модерации."""
+    """Все истории для панели модерации — в заданном вручную порядке."""
     db = load_db()
-    stories = sorted(db["stories"], key=lambda story: story.get("createdAt", ""), reverse=True)
-    return [moderation_story(story) for story in stories]
+    return [moderation_story(story) for story in db["stories"]]
+
+
+def update_order(ordered_ids: list[str]) -> None:
+    """Пересортировывает db["stories"] по списку id из панели модерации.
+
+    Истории, которых не оказалось в ordered_ids (например, добавленные с
+    другого устройства между загрузкой и сохранением), остаются в конце
+    в прежнем порядке — так их не потерять.
+    """
+    if not isinstance(ordered_ids, list) or not ordered_ids:
+        raise StoriesError(400, "Пустой список порядка историй")
+
+    db = load_db()
+    by_id = {story["id"]: story for story in db["stories"]}
+    seen: set[str] = set()
+    ordered: list[dict[str, Any]] = []
+    for story_id in ordered_ids:
+        story = by_id.get(story_id)
+        if story is not None and story_id not in seen:
+            ordered.append(story)
+            seen.add(story_id)
+    ordered.extend(story for story in db["stories"] if story["id"] not in seen)
+    db["stories"] = ordered
+    save_db(db)
 
 
 def _find_by_guest(db: dict[str, Any], token: str) -> dict[str, Any] | None:
@@ -466,6 +553,9 @@ __all__ = [
     "list_all",
     "list_published",
     "author_story",
+    "get_settings",
+    "update_settings",
+    "update_order",
     "migrate_from_prototype",
     "read_upload",
     "stats",
