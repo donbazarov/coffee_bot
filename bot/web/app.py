@@ -1,6 +1,7 @@
 import os
 import hashlib
 import logging
+import mimetypes
 import re
 import threading
 import time
@@ -78,6 +79,9 @@ if not logger.handlers:
     logger.propagate = False
 
 app = FastAPI(title="Coffee Quality", docs_url=None, redoc_url=None)
+# Windows-реестр не знает .glb, и Starlette отдавал модель как text/plain.
+# Регистрируем MIME заранее: .glb — модель 3D-витрины наград в «Развитии».
+mimetypes.add_type("model/gltf-binary", ".glb")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 # Чат вынесен в отдельный роутер (bot/web/chat.py): общий канал, личные сообщения,
 # загрузка изображений и WebSocket реального времени.
@@ -93,7 +97,15 @@ def _static_version() -> str:
     и после деплоя новый HTML работает со старыми app.css/app.js.
     """
     digest = hashlib.sha1()
-    for name in ("fonts.css", "theme-boot.js", "app.css", "app.js", "pwa-install.js", "chat.js", "touch.js", "sw.js", "login-wait.js", "stories/app.js", "stories/styles.css"):
+    for name in (
+        "fonts.css", "theme-boot.js", "app.css", "app.js", "pwa-install.js",
+        "chat.js", "touch.js", "sw.js", "login-wait.js",
+        "stories/app.js", "stories/styles.css",
+        # 3D-модель медали и вендорный бандл model-viewer: имена файлов не
+        # меняются при обновлении, а /static/**?v= кешируется на год — версия
+        # должна расти, иначе браузер останется со старой моделью.
+        "vendor/model-viewer.min.js", "models/medal_base.glb",
+    ):
         try:
             stat = (BASE_DIR / "static" / name).stat()
         except OSError:

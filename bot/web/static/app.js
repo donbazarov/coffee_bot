@@ -165,6 +165,17 @@ async function api(path, options = {}) {
 const BRANCH_ICONS = { sensory: '☕', milk: '🥛', standards: '📋', team: '🤝' };
 let developmentState = null;
 let evaluationPhotoUrl = null;
+/* Достижения: 3D-витрина медали (model-viewer) и сетка наград. */
+const ACHIEVEMENT_GOLD = '#d4af37';
+// Тот же золотой в формате model-viewer ([r,g,b,a], 0..1) — на случай пустого
+// texture_color в справочнике наград.
+const ACHIEVEMENT_GOLD_RGBA = [0xd4 / 255, 0xaf / 255, 0x37 / 255, 1];
+let achievementsState = [];
+let selectedAchievementCode = null;
+// Цвет, назначенный до события `load`: model.materials появляется только после
+// загрузки .glb, поэтому держим его здесь и применяем в обработчике.
+let pendingAchievementColor = null;
+let achievementsBound = false;
 
 function branchRow(branch) {
   const level = branch.level;
@@ -182,6 +193,137 @@ function branchRow(branch) {
       <div class="branch-track"><i style="width:${Math.min(100, percent)}%"></i></div>
       <div class="branch-foot"><span>${Number(branch.xp)} XP</span><span>${branch.xp_to_next ? `до ${branch.level + 1} ур. — ${branch.xp_to_next}` : 'максимум'}</span></div>
     </article>`;
+}
+
+/* `#rgb`/`#rrggbb` из API → [r,g,b,a] для PBR-материала (пусто/битое → золото). */
+function hexToRgba(value) {
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(value || '').trim());
+  if (!match) return ACHIEVEMENT_GOLD_RGBA;
+  const hex = match[1].length === 3
+    ? match[1].replace(/./g, (symbol) => symbol + symbol)
+    : match[1];
+  return [
+    parseInt(hex.slice(0, 2), 16) / 255,
+    parseInt(hex.slice(2, 4), 16) / 255,
+    parseInt(hex.slice(4, 6), 16) / 255,
+    1,
+  ];
+}
+
+/* Красит медаль в цвет награды. false — модель ещё грузится. */
+function paintAchievementModel(rgba) {
+  const materials = document.querySelector('#achievement-viewer')?.model?.materials;
+  if (!materials || !materials.length) return false;
+  materials.forEach((material) => {
+    // PBR-API model-viewer: baseColorFactor умножается на текстуры модели,
+    // поэтому один и тот же .glb перекрашивается без отдельных ассетов.
+    material.pbrMetallicRoughness?.setBaseColorFactor?.(rgba);
+  });
+  return true;
+}
+
+function applyAchievementColor(color) {
+  const rgba = hexToRgba(color);
+  pendingAchievementColor = paintAchievementModel(rgba) ? null : rgba;
+}
+
+function achievementCard(achievement, isLocked) {
+  const progress = achievement.progress || null;
+  const percent = progress ? Math.max(2, Math.min(100, Number(progress.percent) || 0)) : 0;
+  const state = isLocked
+    ? '<span class="achievement-state"><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg>НЕ ОТКРЫТА</span>'
+    : '<span class="achievement-state"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg>ПОЛУЧЕНА</span>';
+  return `
+    <button type="button" class="achievement-card${isLocked ? ' is-locked' : ''}" data-code="${escapeHtml(achievement.code)}" aria-pressed="false" style="--card-color:${escapeHtml(achievement.texture_color || ACHIEVEMENT_GOLD)}">
+      <span class="achievement-dot" aria-hidden="true"></span>
+      <span class="achievement-name">${escapeHtml(achievement.name || achievement.code)}</span>
+      ${state}
+      ${progress ? `<span class="achievement-progress"><i style="width:${percent}%"></i></span>
+      <span class="achievement-progress-label">${Number(progress.current)} / ${Number(progress.target)}</span>` : ''}
+    </button>`;
+}
+
+/* Подпись под витриной: дата получения либо прогресс до цели. */
+function achievementMeta(achievement, isLocked) {
+  const progress = achievement.progress || null;
+  if (isLocked) {
+    if (!progress || !progress.target) return 'Цель награды пока не измеряется';
+    return `Прогресс: ${Number(progress.current)} из ${Number(progress.target)} · ${Math.round(Number(progress.percent) || 0)}%`;
+  }
+  const date = String(achievement.unlocked_at || '').slice(0, 10);
+  return date ? `Получена ${displayDate(date, true)}` : 'Получена';
+}
+
+function selectAchievement(achievement, isLocked) {
+  if (!achievement) return;
+  selectedAchievementCode = achievement.code;
+  const title = document.querySelector('#achievement-title');
+  const desc = document.querySelector('#achievement-desc');
+  const meta = document.querySelector('#achievement-meta');
+  if (title) title.textContent = achievement.name || 'Награда';
+  if (desc) desc.textContent = achievement.description || 'Описание награды появится позже.';
+  if (meta) {
+    meta.textContent = achievementMeta(achievement, isLocked);
+    meta.hidden = false;
+  }
+  document.querySelectorAll('#achievements-grid .achievement-card').forEach((card) => {
+    const active = card.dataset.code === achievement.code;
+    card.classList.toggle('is-active', active);
+    card.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+  applyAchievementColor(achievement.texture_color);
+}
+
+/* Полученные и заблокированные награды — один список для сетки. */
+function renderAchievements(data) {
+  const grid = document.querySelector('#achievements-grid');
+  if (!grid) return;
+  const unlocked = (data.achievements || []).map((achievement) => ({ ...achievement, locked: false }));
+  const locked = (data.next_achievements || []).map((achievement) => ({ ...achievement, locked: true }));
+  achievementsState = [...unlocked, ...locked];
+
+  const counter = document.querySelector('#achievements-counter');
+  if (counter) {
+    counter.textContent = achievementsState.length ? `${unlocked.length} ИЗ ${achievementsState.length}` : '—';
+  }
+  grid.innerHTML = achievementsState.length
+    ? achievementsState.map((achievement) => achievementCard(achievement, achievement.locked)).join('')
+    : '<p class="empty-state">Награды появятся после первых оценок</p>';
+
+  // Автовыбор при первом входе на вкладку: прошлая награда → первая полученная
+  // → первая заблокированная (у стажёра полученных может не быть вовсе).
+  const selected = achievementsState.find((achievement) => achievement.code === selectedAchievementCode)
+    || unlocked[0] || locked[0] || null;
+  if (selected) selectAchievement(selected, selected.locked);
+}
+
+/* Подписки вешаем один раз: renderDevelopment() вызывается при каждом входе
+   на вкладку «Развитие». */
+function setupAchievements() {
+  if (achievementsBound) return;
+  achievementsBound = true;
+  const viewer = document.querySelector('#achievement-viewer');
+  const hero = document.querySelector('#achievements-hero');
+  const veil = document.querySelector('#achievement-veil');
+  viewer?.addEventListener('load', () => {
+    hero?.classList.add('is-ready');
+    if (!pendingAchievementColor) return;
+    const rgba = pendingAchievementColor;
+    pendingAchievementColor = null;
+    paintAchievementModel(rgba);
+  });
+  viewer?.addEventListener('error', () => {
+    // Медаль не доехала: витрина остаётся декоративным плейсхолдером, а список
+    // наград и тексты продолжают работать — раздел не выглядит сломанным.
+    hero?.classList.remove('is-ready');
+    if (veil) veil.textContent = '3D НЕДОСТУПНО';
+  });
+  document.querySelector('#achievements-grid')?.addEventListener('click', (event) => {
+    const card = event.target.closest('.achievement-card');
+    if (!card) return;
+    const achievement = achievementsState.find((item) => item.code === card.dataset.code);
+    if (achievement) selectAchievement(achievement, achievement.locked);
+  });
 }
 
 function renderDevelopment(data) {
@@ -226,6 +368,10 @@ function renderDevelopment(data) {
       ? branches.map(branchRow).join('')
       : '<p class="empty-state">Ветки ещё не настроены</p>';
   }
+
+  // Награды: полученные + ближайшие заблокированные с прогрессом
+  // (/api/dashboard/me → gamification.achievements_for_user).
+  renderAchievements(data);
 
   const recent = document.querySelector('#my-evaluations');
   if (recent) {
@@ -2783,6 +2929,7 @@ function setupDashboard() {
   setupAnnouncements();
   loadAnnouncements();
   setupDevelopment();
+  setupAchievements();
   loadDevelopment();
 
   const logout = async () => {

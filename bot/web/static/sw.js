@@ -40,6 +40,10 @@ const SHELL = [
   `/static/app.css?v=${VERSION}`,
   `/static/app.js?v=${VERSION}`,
   '/static/icons/logo.svg',
+  // 3D-витрина наград: без бандла model-viewer и медали вкладка «Развитие»
+  // в офлайне осталась бы с пустым местом вместо медали.
+  `/static/vendor/model-viewer.min.js?v=${VERSION}`,
+  `/static/models/medal_base.glb?v=${VERSION}`,
   '/static/icons/favicon.ico',
   '/static/icons/favicon-96x96.png',
   '/static/icons/apple-touch-icon.png',

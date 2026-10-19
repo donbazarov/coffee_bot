@@ -10,7 +10,7 @@ IGNORE_DIRS = {
 }
 IGNORE_FILES = {
     OUTPUT_FILE, 'bundle_code.py', '.DS_Store', 
-    'db.sqlite3', 'project.db', 'local.db'
+    'db.sqlite3', 'project.db', 'local.db', '.clinerules'
 }
 # Разрешенные расширения файлов для анализа архитектуры
 VALID_EXTENSIONS = {

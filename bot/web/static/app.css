@@ -230,6 +230,38 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .branch-card.is-social .branch-track i { background: var(--accent); }
 .branch-foot { display: flex; justify-content: space-between; gap: 10px; color: var(--dim); font: 9px var(--mono); letter-spacing: .04em; }
 
+/* --- Достижения: 3D-витрина медали и сетка наград ----------------------
+   Витрина — два столбца (медаль + текст), на мобильном — в стопку.
+   Сетка наград тянется по auto-fill, при 360px это ровно 3 колонки
+   без горизонтальной прокрутки. */
+.achievements-panel { margin: 0 0 12px; padding: 19px 21px 17px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+.achievements-hero { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: center; gap: 18px; margin: 14px 0 16px; padding: 12px 16px; border: 1px solid var(--line-faint); background: radial-gradient(circle at 26% 22%, var(--accent-soft), transparent 66%), var(--surface-sunken); }
+.achievements-hero model-viewer { display: block; grid-area: 1 / 1; width: 100%; height: 240px; --poster-color: transparent; }
+.achievements-copy { grid-area: 1 / 2; min-width: 0; }
+.achievements-copy h3 { margin: 0 0 7px; font: 600 18px/1.25 var(--sans); letter-spacing: -.01em; }
+.achievements-copy p { margin: 0; color: var(--text-soft); font-size: 12px; line-height: 1.6; }
+.achievements-meta { margin-top: 9px !important; color: var(--muted); font: 10px/1.5 var(--mono); letter-spacing: .06em; }
+/* Плейсхолдер витрины: показывает «3D-МЕДАЛЬ» пока модель грузится, гасится
+   классом .is-ready по событию load. Если бандл не доехал — остаётся текстом. */
+.achievement-veil { display: grid; grid-area: 1 / 1; place-items: center; width: min(190px, 76%); aspect-ratio: 1; margin: auto; border: 1px dashed var(--line-strong); border-radius: 50%; color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; transition: opacity .3s ease; }
+.achievements-hero.is-ready .achievement-veil { opacity: 0; pointer-events: none; }
+.achievements-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 12px; }
+.achievement-card { display: grid; min-height: 96px; align-content: start; gap: 7px; padding: 11px 8px; border: 1px solid var(--line); background: var(--surface-sunken); color: var(--text); font: inherit; text-align: center; cursor: pointer; transition: border-color .18s ease, background-color .18s ease, filter .18s ease; }
+.achievement-card:hover { border-color: var(--line-strong); background: var(--surface-raised); }
+.achievement-card.is-active { border-color: var(--accent-line); background: var(--accent-faint); }
+.achievement-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.achievement-dot { display: block; width: 34px; height: 34px; margin: 0 auto; border-radius: 50%; background: var(--card-color, var(--accent)); box-shadow: inset 0 -7px 13px rgba(0, 0, 0, .45), 0 0 0 1px var(--line-strong); }
+.achievement-name { display: -webkit-box; overflow: hidden; min-height: 26px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 10px; line-height: 1.3; }
+.achievement-state { display: flex; align-items: center; justify-content: center; min-height: 15px; color: var(--dim); font: 8px var(--mono); letter-spacing: .06em; }
+.achievement-state .icon { width: 11px; height: 11px; margin-right: 4px; }
+.achievement-progress { display: block; height: 4px; overflow: hidden; background: rgba(var(--hl), .12); }
+.achievement-progress i { display: block; height: 100%; background: var(--accent); }
+.achievement-progress-label { color: var(--dim); font: 9px var(--mono); }
+/* Заблокированная награда обесцвечена; выбранную/наведённую гасим меньше,
+   чтобы подпись прогресса и название читались. */
+.achievement-card.is-locked { filter: grayscale(1) opacity(.5); }
+.achievement-card.is-locked.is-active, .achievement-card.is-locked:hover { filter: grayscale(1) opacity(.82); }
+
 .evaluation-dialog { width: min(560px, 94vw); }
 .evaluation-branches { display: grid; gap: 14px; margin-top: 4px; }
 .evaluation-branch { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line-faint); }
@@ -323,6 +355,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .level-number { font-size: 42px; }
   .level-title { font-size: 20px; }
   .branch-grid { grid-template-columns: 1fr; gap: 9px; }
+  .achievements-panel { padding: 17px 15px 15px; }
+  .achievements-hero { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px; }
+  .achievements-hero model-viewer { height: 240px; }
+  .achievements-copy { grid-area: 2 / 1; text-align: center; }
+  .achievement-veil { width: min(178px, 58%); }
+  .achievements-grid { grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 10px; }
   .evaluation-score-row { gap: 4px; }
   .evaluation-score { min-height: 48px; font-size: 13px; }
   .app-footer { padding: 23px 0 10px; font-size: 8px; }

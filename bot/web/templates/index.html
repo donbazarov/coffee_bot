@@ -20,6 +20,10 @@
   <script src="/static/pwa-install.js?v={{ static_version }}" defer></script>
   <script src="/static/chat.js?v={{ static_version }}" defer></script>
   <script src="/static/touch.js?v={{ static_version }}" defer></script>
+  {# 3D-витрина наград: бандл model-viewer лежит локально (static/vendor).
+     Внешний CDN не проходит по CSP `script-src 'self'` и не кешируется
+     Service Worker'ом, поэтому в офлайне витрина осталась бы пустой. #}
+  <script type="module" src="/static/vendor/model-viewer.min.js?v={{ static_version }}"></script>
 </head>
 <body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}" data-pwa-launch="{{ 'true' if utm_source == 'pwa' else 'false' }}">
   {# Инлайновый спрайт иконок: SVG с currentColor вместо эмодзи-символов. #}
@@ -169,6 +173,23 @@
         </section>
 
         <div class="branch-grid" id="branch-grid" aria-live="polite"></div>
+
+        <section class="panel achievements-panel" id="achievements-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">НАГРАДЫ</p><h3>Ачивки</h3></div>
+            <span class="panel-index" id="achievements-counter">—</span>
+          </div>
+          <div class="achievements-hero" id="achievements-hero">
+            <div class="achievement-veil" id="achievement-veil">3D-МЕДАЛЬ</div>
+            <model-viewer id="achievement-viewer" src="/static/models/medal_base.glb?v={{ static_version }}" alt="3D-медаль выбранной награды" auto-rotate camera-controls disable-zoom shadow-intensity="1" interaction-prompt="none" exposure="1"></model-viewer>
+            <div class="achievements-copy" aria-live="polite">
+              <h3 id="achievement-title">Выбери награду</h3>
+              <p id="achievement-desc">Полученные медали горят цветом награды, заблокированные показывают прогресс до цели.</p>
+              <p class="achievements-meta" id="achievement-meta" hidden></p>
+            </div>
+          </div>
+          <div class="achievements-grid" id="achievements-grid"></div>
+        </section>
 
         <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Последние оценки</h3></div><span class="panel-index">ДО 5</span></div>
