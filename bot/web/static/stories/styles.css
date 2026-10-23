@@ -20,6 +20,12 @@
   --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
 }
 
+/* Масштаб интерфейса: гость двигает ползунок в настройках, а переменную
+   --ui-scale выставляет stories/app.js. zoom тянет за собой всё содержимое
+   страницы, при этом вёрстка остаётся адаптивной (медиазапросы и clamp
+   считаются уже от новой ширины вьюпорта). */
+html { zoom: var(--ui-scale, 1); }
+
 * { box-sizing: border-box; }
 
 html, body {
@@ -145,6 +151,9 @@ body {
 .btn-round svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 .btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* «Поделиться» и шестерёнка в шапке стоят рядом */
+.header-actions { display: flex; align-items: center; gap: 10px; }
 
 /* ------------------------------ сцена ---------------------------------- */
 
@@ -424,6 +433,113 @@ body {
 .modal-body { padding: 34px clamp(20px, 4vw, 38px) 30px; }
 .modal-body[hidden] { display: none; }
 .modal-body h2 { margin: 0 0 8px; font-size: clamp(20px, 3vw, 25px); font-weight: 500; }
+
+/* ------------------------ настройки страницы --------------------------- */
+
+.settings-card { width: min(460px, 100%); }
+
+.setting-row { margin: 24px 0 0; }
+
+.setting-label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Ползунок масштаба: высота 44px — палец уверенно попадает по дорожке. */
+.scale-field { display: flex; align-items: center; gap: 14px; }
+.range-value {
+  min-width: 54px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--accent);
+}
+
+.scale-field input[type="range"] {
+  flex: 1;
+  height: 44px;
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.scale-field input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.scale-field input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-top: -9px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f0c479, var(--accent));
+  box-shadow: 0 4px 14px rgba(232, 178, 95, 0.35);
+}
+.scale-field input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.14);
+}
+.scale-field input[type="range"]::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #f0c479, var(--accent));
+}
+.scale-field input[type="range"]:focus { outline: none; }
+.scale-field input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(232, 178, 95, 0.35);
+}
+
+/* Переключатель «открывать истории полностью» — вся строка кликабельна */
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 24px 0 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+.checkbox-row input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.checkbox-row strong { display: block; font-size: 14.5px; font-weight: 500; }
+.checkbox-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.checkbox-row input:checked + span strong { color: var(--accent); }
+
+.number-input {
+  width: 100%;
+  padding: 13px 16px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.number-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232, 178, 95, 0.15); }
+
+.setting-hint { margin: 9px 0 0; color: var(--muted); font-size: 12.5px; }
 
 .field-label {
   display: block;

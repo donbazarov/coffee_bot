@@ -23,7 +23,13 @@
       <span class="brand-mark">НЕФТЬ</span>
       <span class="brand-sub">кофейня · истории гостей</span>
     </a>
-    <button class="btn btn-ghost" id="header-share">Поделиться</button>
+    <div class="header-actions">
+      <button class="btn btn-ghost" id="header-share">Поделиться</button>
+      <!-- Шестерёнка: личные настройки страницы (масштаб, автораскрытие, скорость) -->
+      <button class="btn btn-round" id="header-settings" type="button" aria-label="Настройки страницы" aria-haspopup="dialog" aria-expanded="false" title="Настройки страницы">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
   </header>
 
   <main class="stage">
@@ -135,6 +141,53 @@
         <p class="muted small" id="thanks-note">После проверки история появится в общей карусели.</p>
         <div class="modal-actions">
           <button class="btn btn-primary" id="thanks-done">Готово</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Модальное окно: личные настройки страницы (хранятся на устройстве) -->
+  <div class="modal" id="settings-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <button class="modal-close" id="settings-close" aria-label="Закрыть">×</button>
+
+      <div class="modal-body">
+        <h2 id="settings-title">Настройки страницы</h2>
+        <p class="muted small">Хранятся на этом устройстве — на других телефонах настройки свои.</p>
+
+        <div class="setting-row">
+          <label class="setting-label" for="scale-input">Масштаб интерфейса</label>
+          <div class="scale-field">
+            <input type="range" id="scale-input" min="85" max="150" step="5" value="100" />
+            <output class="range-value" id="scale-value" for="scale-input">100%</output>
+          </div>
+        </div>
+
+        <label class="checkbox-row" for="autoexpand-input">
+          <input type="checkbox" id="autoexpand-input" />
+          <span>
+            <strong>Открывать истории полностью</strong>
+            <small>Текст и фото видны сразу, без кнопки «Показать полностью».</small>
+          </span>
+        </label>
+
+        <div class="setting-row">
+          <label class="setting-label" for="speed-input">Скорость прокрутки слайд-шоу, секунд</label>
+          <input
+            type="number"
+            class="number-input"
+            id="speed-input"
+            min="1"
+            max="60"
+            step="1"
+            inputmode="numeric" />
+          <p class="setting-hint" id="speed-hint">Сейчас — как настроено в кофейне: 7 с</p>
+        </div>
+
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="settings-reset" type="button">Сбросить</button>
+          <button class="btn btn-primary" id="settings-done" type="button">Готово</button>
         </div>
       </div>
     </div>

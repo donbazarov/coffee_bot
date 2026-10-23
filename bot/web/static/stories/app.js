@@ -18,6 +18,19 @@
   const DEFAULT_MAX_CHARS = 600;
   let autoplayMs = DEFAULT_AUTOPLAY_MS;
   let maxChars = DEFAULT_MAX_CHARS;
+  let serverAutoplayMs = DEFAULT_AUTOPLAY_MS;   // скорость из панели модерации
+
+  // Личные настройки гостя: масштаб интерфейса, автораскрытие историй и своя
+  // скорость слайд-шоу. Лежат в кэше устройства и важнее серверных значений.
+  const PREFS_KEY = 'neft-cache:stories:prefs';
+  const SCALE_MIN = 85;
+  const SCALE_MAX = 150;
+  const DEFAULT_SCALE = 100;
+  const MIN_AUTOPLAY_SEC = 1;
+  const MAX_AUTOPLAY_SEC = 60;
+  let uiScale = DEFAULT_SCALE;
+  let autoExpand = false;
+  let autoplaySec = null;       // null — берём скорость, настроенную в кофейне
 
   const CTA_EDIT_PUBLISHED = 'Ваша история уже опубликована — её можно изменить. После правок она снова уйдёт на проверку.';
   const CTA_EDIT_PENDING = 'Ваша история ждёт проверки — её можно изменить. После правок она снова уйдёт на проверку.';
@@ -44,6 +57,44 @@
   }
 
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* =====================================================================
+     0. Личные настройки устройства (шестерёнка в шапке)
+     ===================================================================== */
+
+  /** Сколько секунд в миллисекундах (нижняя граница — как у сервера). */
+  function toSeconds(ms) {
+    return Math.max(MIN_AUTOPLAY_SEC, Math.round(ms / 1000));
+  }
+
+  /** Масштаб интерфейса: zoom на <html> тянет за собой всю страницу. */
+  function applyUiScale() {
+    document.documentElement.style.setProperty('--ui-scale', String(uiScale / 100));
+    refreshAll();      // климп текста и высота карточек считаются в новых px
+  }
+
+  function savePrefs() {
+    writeCache(PREFS_KEY, { scale: uiScale, autoExpand, autoplaySec });
+  }
+
+  /** Читаем настройки устройства и сразу применяем их (работает и в офлайне). */
+  function loadPrefs() {
+    const stored = readCache(PREFS_KEY);
+    if (stored) {
+      const scale = Number(stored.scale);
+      uiScale = Number.isFinite(scale)
+        ? Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(scale / 5) * 5))
+        : DEFAULT_SCALE;
+      autoExpand = stored.autoExpand === true;
+      const seconds = Number(stored.autoplaySec);
+      autoplaySec = Number.isFinite(seconds) && seconds > 0
+        ? Math.min(MAX_AUTOPLAY_SEC, Math.max(MIN_AUTOPLAY_SEC, Math.round(seconds)))
+        : null;
+    }
+    if (autoplaySec !== null) autoplayMs = autoplaySec * 1000;
+    applyUiScale();
+    syncSettingsForm();
+  }
 
   /* =====================================================================
      1. Фон — разноцветные кривые Безье «радужные масляные разводы»
@@ -364,7 +415,11 @@
     });
 
     const active = slides[carousel.index];
-    if (active) refreshClampState(active);
+    if (active) {
+      refreshClampState(active);
+      // Автооткрытие: история показывается целиком, без «показать полностью».
+      if (autoExpand) setSlideExpanded(active, true);
+    }
     syncViewportHeight();
   }
 
@@ -439,7 +494,8 @@
 
   // Стрелки клавиатуры
   document.addEventListener('keydown', (e) => {
-    if (document.getElementById('editor-modal').hidden === false) return;
+    if (!document.getElementById('editor-modal').hidden) return;
+    if (!document.getElementById('settings-modal').hidden) return;   // открыто окошко настроек
     if (e.key === 'ArrowRight') goTo(carousel.index + 1, true);
     if (e.key === 'ArrowLeft') goTo(carousel.index - 1, true);
   });
@@ -704,6 +760,112 @@
   });
 
   /* =====================================================================
+    4b. Окошко настроек: масштаб, автораскрытие, скорость слайд-шоу
+     ===================================================================== */
+
+  const settingsModal = document.getElementById('settings-modal');
+  const settingsBtn = document.getElementById('header-settings');
+  const scaleInput = document.getElementById('scale-input');
+  const scaleValue = document.getElementById('scale-value');
+  const autoExpandInput = document.getElementById('autoexpand-input');
+  const speedInput = document.getElementById('speed-input');
+  const speedHint = document.getElementById('speed-hint');
+
+  let settingsLastFocused = null;
+
+  /** Заполняем окошко текущими значениями. Скорость показываем в секундах. */
+  function syncSettingsForm() {
+    scaleInput.value = String(uiScale);
+    scaleValue.textContent = uiScale + '%';
+    autoExpandInput.checked = autoExpand;
+    speedInput.value = String(autoplaySec === null ? toSeconds(serverAutoplayMs) : autoplaySec);
+    updateSpeedHint();
+  }
+
+  function updateSpeedHint() {
+    speedHint.textContent = autoplaySec === null
+      ? `Сейчас — как настроено в кофейне: ${toSeconds(serverAutoplayMs)} с`
+      : `Ваша скорость: ${autoplaySec} с. Вернуть настройку кофейни — кнопкой «Сбросить».`;
+  }
+
+  /** Раскрыть или свернуть активную историю и пересчитать высоту карусели. */
+  function refreshActiveSlide(expanded) {
+    const active = carousel.track.children[carousel.index];
+    if (!active) return;
+    setSlideExpanded(active, expanded);
+    refreshClampState(active);
+    syncViewportHeight();
+  }
+
+  function openSettings() {
+    settingsLastFocused = document.activeElement;
+    syncSettingsForm();
+    show(settingsModal);
+    settingsBtn.setAttribute('aria-expanded', 'true');
+    document.body.style.overflow = 'hidden';
+    pauseAutoplay();                 // пока гость настраивает, слайдшоу стоит
+    setTimeout(() => scaleInput.focus(), 60);
+  }
+
+  function closeSettings() {
+    hide(settingsModal);
+    settingsBtn.setAttribute('aria-expanded', 'false');
+    document.body.style.overflow = '';
+    if (settingsLastFocused instanceof HTMLElement) settingsLastFocused.focus();
+    scheduleAutoplay();
+  }
+
+  settingsBtn.addEventListener('click', openSettings);
+  document.getElementById('settings-close').addEventListener('click', closeSettings);
+  document.getElementById('settings-done').addEventListener('click', closeSettings);
+  settingsModal.querySelector('[data-close]').addEventListener('click', closeSettings);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !settingsModal.hidden) closeSettings();
+  });
+
+  // Масштаб применяем на каждое движение ползунка — гость сразу видит результат.
+  scaleInput.addEventListener('input', () => {
+    uiScale = Number(scaleInput.value) || DEFAULT_SCALE;
+    scaleValue.textContent = uiScale + '%';
+    applyUiScale();
+    savePrefs();
+  });
+
+  autoExpandInput.addEventListener('change', () => {
+    autoExpand = autoExpandInput.checked;
+    savePrefs();
+    refreshActiveSlide(autoExpand);
+  });
+
+  // Скорость в секундах. Ровно серверное значение — значит, от переопределения
+  // отказываемся: пусть работает настройка кофейни.
+  speedInput.addEventListener('change', () => {
+    const value = Math.round(Number(speedInput.value));
+    const serverSeconds = toSeconds(serverAutoplayMs);
+    autoplaySec = !Number.isFinite(value) || value <= 0 || value === serverSeconds
+      ? null
+      : Math.min(MAX_AUTOPLAY_SEC, Math.max(MIN_AUTOPLAY_SEC, value));
+    autoplayMs = autoplaySec === null ? serverAutoplayMs : autoplaySec * 1000;
+    speedInput.value = String(toSeconds(autoplayMs));
+    savePrefs();
+    updateSpeedHint();
+    // Пока окошко открыто, слайд-шоу стоит — запустим его при закрытии.
+    if (settingsModal.hidden) scheduleAutoplay();
+  });
+
+  document.getElementById('settings-reset').addEventListener('click', () => {
+    uiScale = DEFAULT_SCALE;
+    autoExpand = false;
+    autoplaySec = null;
+    autoplayMs = serverAutoplayMs;
+    applyUiScale();
+    savePrefs();
+    syncSettingsForm();
+    refreshActiveSlide(false);
+    if (settingsModal.hidden) scheduleAutoplay();
+  });
+
+  /* =====================================================================
      5. Старт
      ===================================================================== */
 
@@ -722,7 +884,8 @@
     if (!settings) return;
     const ms = Number(settings.autoplay_ms);
     const chars = Number(settings.max_text_length);
-    autoplayMs = Number.isFinite(ms) && ms >= 1000 ? ms : DEFAULT_AUTOPLAY_MS;
+    serverAutoplayMs = Number.isFinite(ms) && ms >= 1000 ? ms : DEFAULT_AUTOPLAY_MS;
+    autoplayMs = autoplaySec === null ? serverAutoplayMs : autoplaySec * 1000;
     maxChars = Number.isFinite(chars) && chars >= 50 ? chars : DEFAULT_MAX_CHARS;
 
     textarea.maxLength = maxChars;
@@ -768,6 +931,7 @@
   }
 
   document.getElementById('year').textContent = String(new Date().getFullYear());
+  loadPrefs();                     // масштаб, автораскрытие и своя скорость слайд-шоу
   textarea.maxLength = maxChars;
   updateMeter();
   updateCta();
