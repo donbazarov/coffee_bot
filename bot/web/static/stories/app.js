@@ -16,6 +16,8 @@
   const CACHE_KEY = 'neft-cache:stories';
   const DEFAULT_AUTOPLAY_MS = 7000;
   const DEFAULT_MAX_CHARS = 600;
+  const DEFAULT_CAROUSEL_WIDTH = 900;
+  const ADAPTIVE_WIDTH = 'min(1120px, 88vw)';   // «адаптивная ширина» из панели модерации
   let autoplayMs = DEFAULT_AUTOPLAY_MS;
   let maxChars = DEFAULT_MAX_CHARS;
   let serverAutoplayMs = DEFAULT_AUTOPLAY_MS;   // скорость из панели модерации
@@ -942,7 +944,17 @@
     updateCta();
   }
 
-  /** Применяем настройки страницы (скорость прокрутки и лимит символов). */
+  /** Ширина карточки: число из настроек кофейни либо «адаптивная» формула.
+      Переменную читает CSS (.carousel/.stage/.hero), поэтому менять её достаточно здесь. */
+  function applyCarouselWidth(width, adaptive) {
+    const pixels = Number(width);
+    const value = adaptive === true
+      ? ADAPTIVE_WIDTH
+      : `${Number.isFinite(pixels) && pixels > 0 ? pixels : DEFAULT_CAROUSEL_WIDTH}px`;
+    document.documentElement.style.setProperty('--content-cap', value);
+  }
+
+  /** Применяем настройки страницы (скорость прокрутки, лимит символов, ширина карточки). */
   function applySettings(settings) {
     if (!settings) return;
     const ms = Number(settings.autoplay_ms);
@@ -950,6 +962,10 @@
     serverAutoplayMs = Number.isFinite(ms) && ms >= 1000 ? ms : DEFAULT_AUTOPLAY_MS;
     autoplayMs = autoplaySec === null ? serverAutoplayMs : autoplaySec * 1000;
     maxChars = Number.isFinite(chars) && chars >= 50 ? chars : DEFAULT_MAX_CHARS;
+
+    // Ширину ставим до отрисовки карусели: от неё зависит и перенос текста,
+    // и высота карточки, которую считает measureSlideHeight().
+    applyCarouselWidth(settings.carousel_width, settings.carousel_width_auto);
 
     textarea.maxLength = maxChars;
     updateMeter();

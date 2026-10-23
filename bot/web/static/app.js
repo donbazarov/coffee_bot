@@ -1846,11 +1846,22 @@ function fillStoriesSettingsForm() {
   if (!form || !storiesAdmin.settings) return;
   form.elements.autoplay_ms.value = storiesAdmin.settings.autoplay_ms;
   form.elements.max_text_length.value = storiesAdmin.settings.max_text_length;
+  form.elements.carousel_width.value = storiesAdmin.settings.carousel_width;
+  form.elements.carousel_width_auto.checked = storiesAdmin.settings.carousel_width_auto === true;
+  syncStoriesWidthInput();
+}
+
+/* Пока включена «адаптивная ширина», поле с числом заблокировано. */
+function syncStoriesWidthInput() {
+  const form = document.querySelector('#stories-settings-form');
+  if (!form) return;
+  form.elements.carousel_width.disabled = form.elements.carousel_width_auto.checked;
 }
 
 function setupStoriesSettings() {
   const form = document.querySelector('#stories-settings-form');
   if (!form) return;
+  form.elements.carousel_width_auto.addEventListener('change', syncStoriesWidthInput);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const error = document.querySelector('#stories-settings-error');
@@ -1859,8 +1870,12 @@ function setupStoriesSettings() {
     const payload = {
       autoplay_ms: Number(form.elements.autoplay_ms.value),
       max_text_length: Number(form.elements.max_text_length.value),
+      carousel_width: Number(form.elements.carousel_width.value),
+      carousel_width_auto: form.elements.carousel_width_auto.checked,
     };
-    if (!Number.isFinite(payload.autoplay_ms) || !Number.isFinite(payload.max_text_length)) {
+    // Ширина нужна только в ручном режиме: в адаптивном она задана формулой.
+    if (!Number.isFinite(payload.autoplay_ms) || !Number.isFinite(payload.max_text_length)
+      || (!payload.carousel_width_auto && !(payload.carousel_width > 0))) {
       showError('Укажите числа'); return;
     }
     try {

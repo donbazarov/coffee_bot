@@ -48,11 +48,19 @@ ALLOWED_PHOTO_TYPES = {
 DEFAULT_AUTHOR = "Гость НЕФТИ"
 
 # Настройки публичной страницы. Живут в db["settings"] и правятся из панели
-# модерации: скорость автопрокрутки карусели и лимит символов в истории.
-DEFAULT_SETTINGS: dict[str, int] = {"autoplay_ms": 7000, "max_text_length": 600}
+# модерации: скорость автопрокрутки карусели, лимит символов в истории и ширина
+# карточки — либо числом (px), либо «адаптивной» (min из 1120px и 88vw).
+DEFAULT_SETTINGS: dict[str, int | bool] = {
+    "autoplay_ms": 7000,
+    "max_text_length": 600,
+    "carousel_width": 900,
+    "carousel_width_auto": False,
+}
 MIN_AUTOPLAY_MS = 1000
 MAX_AUTOPLAY_MS = 60000
 MIN_TEXT_LENGTH = 50
+MIN_CAROUSEL_WIDTH = 640
+MAX_CAROUSEL_WIDTH = 1600
 
 # Кука «памяти гостя»: по ней узнаём устройство и не даём отправить несколько
 # историй с одного телефона. Только httpOnly — из JavaScript недоступна.
@@ -148,7 +156,18 @@ def _clamp_int(value: object, default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
-def get_settings() -> dict[str, int]:
+def _as_bool(value: object, default: bool) -> bool:
+    """Приводит флаг к bool. Битые значения заменяются на default."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "on", "yes", "да"}
+    return default
+
+
+def get_settings() -> dict[str, int | bool]:
     """Текущие настройки страницы историй с дефолтами и ограничениями диапазона."""
     db = load_db()
     raw = db.get("settings")
@@ -161,10 +180,24 @@ def get_settings() -> dict[str, int]:
         "max_text_length": _clamp_int(
             raw.get("max_text_length"), DEFAULT_SETTINGS["max_text_length"], MIN_TEXT_LENGTH, MAX_TEXT_LENGTH
         ),
+        "carousel_width": _clamp_int(
+            raw.get("carousel_width"),
+            DEFAULT_SETTINGS["carousel_width"],
+            MIN_CAROUSEL_WIDTH,
+            MAX_CAROUSEL_WIDTH,
+        ),
+        "carousel_width_auto": _as_bool(
+            raw.get("carousel_width_auto"), DEFAULT_SETTINGS["carousel_width_auto"]
+        ),
     }
 
 
-def update_settings(autoplay_ms: object, max_text_length: object) -> dict[str, int]:
+def update_settings(
+    autoplay_ms: object,
+    max_text_length: object,
+    carousel_width: object,
+    carousel_width_auto: object,
+) -> dict[str, int | bool]:
     """Сохраняет настройки страницы. Возвращает нормализованный результат."""
     settings = {
         "autoplay_ms": _clamp_int(
@@ -173,6 +206,10 @@ def update_settings(autoplay_ms: object, max_text_length: object) -> dict[str, i
         "max_text_length": _clamp_int(
             max_text_length, DEFAULT_SETTINGS["max_text_length"], MIN_TEXT_LENGTH, MAX_TEXT_LENGTH
         ),
+        "carousel_width": _clamp_int(
+            carousel_width, DEFAULT_SETTINGS["carousel_width"], MIN_CAROUSEL_WIDTH, MAX_CAROUSEL_WIDTH
+        ),
+        "carousel_width_auto": _as_bool(carousel_width_auto, DEFAULT_SETTINGS["carousel_width_auto"]),
     }
     db = load_db()
     current = db.get("settings")
@@ -546,6 +583,8 @@ __all__ = [
     "MAX_NAME_LENGTH",
     "MAX_TEXT_LENGTH",
     "MAX_PHOTO_BYTES",
+    "MIN_CAROUSEL_WIDTH",
+    "MAX_CAROUSEL_WIDTH",
     "StoriesError",
     "create_story",
     "delete_story",

@@ -1319,9 +1319,14 @@ async def stories_moderation_order(request: Request, _: dict[str, Any] = Depends
 
 @app.patch("/api/stories/moderation/settings")
 async def stories_moderation_settings(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
-    """Скорость автопрокрутки и лимит символов истории."""
+    """Скорость автопрокрутки, лимит символов и ширина карточки истории."""
     body = await _read_json_object(request)
-    settings = stories_service.update_settings(body.get("autoplay_ms"), body.get("max_text_length"))
+    settings = stories_service.update_settings(
+        body.get("autoplay_ms"),
+        body.get("max_text_length"),
+        body.get("carousel_width"),
+        body.get("carousel_width_auto"),
+    )
     return {"ok": True, "settings": settings}
 
 

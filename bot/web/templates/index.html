@@ -439,6 +439,8 @@
           <form class="template-form" id="stories-settings-form">
             <label>Скорость прокрутки (мс)<input type="number" name="autoplay_ms" min="1000" max="60000" step="500" required></label>
             <label>Лимит символов<input type="number" name="max_text_length" min="50" max="1200" step="10" required></label>
+            <label>Ширина карусели, px<input type="number" name="carousel_width" min="640" max="1600" step="20" required></label>
+            <label class="module-setting"><span><strong>Адаптивная ширина</strong><small>min(1120px, 88vw) — поле ширины не используется</small></span><input type="checkbox" name="carousel_width_auto"><i></i></label>
             <p class="template-form-error" id="stories-settings-error" role="alert" hidden></p>
             <div class="template-form-actions">
               <button class="button button-primary" type="submit">Сохранить настройки</button>

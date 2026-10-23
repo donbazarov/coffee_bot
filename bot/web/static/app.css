@@ -619,6 +619,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .template-form .point-picker { margin: 0; }
 .template-form-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .template-form-error { color: var(--warn); font-size: 11px; }
+#stories-settings-form input[name="carousel_width"]:disabled { opacity: .45; cursor: not-allowed; }
 
 @media (max-width: 760px) {
   .history-shot img { max-width: 100%; }

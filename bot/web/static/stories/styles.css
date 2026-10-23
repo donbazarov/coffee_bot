@@ -18,6 +18,14 @@
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* Ширина карточки истории — общая настройка кофейни (панель модерации:
+     settings.carousel_width / carousel_width_auto). app.js переопределяет
+     --content-cap на <html>; здесь только значение по умолчанию, оно же
+     DEFAULT_SETTINGS["carousel_width"] на сервере. --stage-max считается от
+     карточки, чтобы сцена не обрезала её паддингами. */
+  --content-cap: 900px;
+  --stage-max: calc(var(--content-cap) + 160px);
 }
 
 /* Масштаб интерфейса: гость двигает ползунок в настройках, а переменную
@@ -162,15 +170,15 @@ body {
   z-index: 2;
   flex: 1;
   width: 100%;
-  max-width: 1120px;
+  max-width: var(--stage-max);          /* карточка истории + воздух по бокам */
   margin: 0 auto;
-  padding: 8px clamp(16px, 5vw, 40px) 40px;
+  padding: 8px clamp(16px, 3vw, 40px) 40px;
   display: flex;
   flex-direction: column;
   align-items: center;
 }
 
-.hero { text-align: center; max-width: 720px; margin: 12px 0 34px; }
+.hero { text-align: center; max-width: min(var(--content-cap), 1120px); margin: 12px 0 34px; }
 
 .eyebrow {
   font-size: 11px;
@@ -188,11 +196,13 @@ body {
   margin: 0 0 16px;
 }
 
-.hero-lead { color: var(--muted); font-size: clamp(14px, 1.6vw, 16px); line-height: 1.65; margin: 0; }
+/* Ширину строки абзаца держим читаемой (~65–75 знаков), даже когда карточка
+   и заголовок стали широкими. */
+.hero-lead { color: var(--muted); font-size: clamp(14px, 1.6vw, 16px); line-height: 1.65; max-width: 68ch; margin: 0 auto; }
 
 /* ---------------------------- карусель --------------------------------- */
 
-.carousel { width: 100%; max-width: 780px; margin: 0 auto; }
+.carousel { width: 100%; max-width: var(--content-cap); margin: 0 auto; }
 
 /* Высота подстраивается под активную историю — её выставляет app.js,
    поэтому ни текст, ни фото не обрезаются. min-height — только страховка
