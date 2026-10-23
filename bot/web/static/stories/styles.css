@@ -261,6 +261,50 @@ body {
 }
 .slide.no-photo .slide-photo { display: none; }
 
+/* Вертикальный снимок на десктопе: фото слева, текст справа.
+   Класс is-portrait вешает app.js по натуральным пропорциям снимка. Ниже
+   768px этих правил нет, поэтому на мобильных слайд остаётся обычной
+   вертикальной колонкой и фото не выталкивает текст за пределы видимости. */
+@media (min-width: 768px) {
+  .slide.is-portrait {
+    display: flex;
+    flex-direction: row;
+    /* flex-start, а не stretch: колонка текста сохраняет собственную высоту — именно
+       её меряет app.js. С растяжением замер упирается в текущую высоту карточки,
+       и она не растёт — раскрытый текст обрезался. */
+    align-items: flex-start;
+    gap: 24px;
+  }
+  /* Колонку фото растягиваем на всю высоту карточки (align-self: stretch), поэтому
+     height: auto обязателен — с явной 250px из базового правила растяжение молчит.
+     max-height: none нужен, чтобы 70vh из .slide.is-expanded не срезал низ колонки,
+     а background совпадает с фоном карточки — полосы вокруг снимка не читаются
+     как «дыра», фейд уходит в пустоту мягко. */
+  .slide.is-portrait .slide-photo,
+  .slide.is-portrait.is-expanded .slide-photo {
+    flex: 0 0 45%;
+    max-width: 400px;
+    align-self: stretch;
+    height: auto;
+    min-height: 250px;           /* не даём колонке схлопнуться до загрузки фото */
+    max-height: none;
+    background: var(--surface);
+  }
+  .slide.is-portrait .slide-content {
+    flex: 1 1 auto;
+    min-width: 0;                       /* длинные слова не растягивают колонку */
+  }
+  /* Два фейда: правый край растворяется в текстовую колонку, нижний — «в пустоту»
+     (высоту сверхвысоких панорам ограничивает app.js). object-fit: contain
+     в раскрытом виде сохраняем: снимок виден целиком. */
+  .slide.is-portrait .slide-photo::after {
+    display: block;
+    background:
+      linear-gradient(to right, rgba(20, 20, 24, 0) 45%, var(--surface) 100%),
+      linear-gradient(to top,   rgba(20, 20, 24, 0) 82%, var(--surface) 100%);
+  }
+}
+
 /* Раскрытая история: фото видно целиком, без обрезки по краям.
    Точную высоту блока считает app.js по пропорциям снимка, а min-height
    не даёт блоку схлопнуться, пока фото ещё грузится. */

@@ -276,21 +276,30 @@
       node.querySelector('.slide-author').textContent = name;
       node.querySelector('.slide-date').textContent = formatDate(story.createdAt);
 
+      let photoReady = null;   // фото уже в памяти: обработчик вызовем сразу после вставки
       if (story.photo) {
         const img = node.querySelector('.slide-photo img');
         img.src = story.photo;
         img.alt = `Фотография из истории гостя по имени ${name}`;
         // Пропорции снимка известны только после загрузки — тогда и решаем,
-        // обрезано ли фото и нужна ли кнопка «Показать полностью».
-        img.addEventListener('load', () => {
+        // вертикальный ли он (раскладка в две колонки) и нужна ли кнопка
+        // «Показать полностью».
+        const onPhotoLoad = () => {
+          applyPhotoOrientation(node, img);
           applyExpandedPhotoHeight(node);
           if (carousel.track.children[carousel.index] === node) syncViewportHeight();
-        });
+        };
+        img.addEventListener('load', onPhotoLoad);
+        // Первый рендер идёт из кэша устройства: фото часто уже в памяти браузера,
+        // и событие load может не прийти. Тогда вызываем обработчик сами — но
+        // только после вставки слайда в документ, иначе размеры он не отдаёт.
+        if (img.complete) photoReady = onPhotoLoad;
       } else {
         node.classList.add('no-photo');
       }
 
       carousel.track.appendChild(node);
+      if (photoReady) photoReady();
 
       const dot = document.createElement('button');
       dot.className = 'dot-btn';
@@ -306,12 +315,39 @@
     scheduleAutoplay();
   }
 
+  /** Предел высоты колонки фото: сверхвысокие панорамы не раздувают карточку. */
+  const PORTRAIT_PHOTO_MAX_RATIO = 0.76;
+
+  /** Высота, которую колонка фото заняла бы по своим пропорциям. В две колонки она
+      растянута на всю высоту карточки (align-self: stretch) и своего размера не
+      отдаёт, поэтому считаем от ширины колонки и натуральных размеров снимка.
+      Нижнюю границу берём из CSS (min-height), чтобы JS и стили не расходились. */
+  function naturalPhotoHeight(photo) {
+    const floor = parseFloat(getComputedStyle(photo).minHeight) || 0;
+    const img = photo.querySelector('img');
+    if (!img || !img.naturalWidth || !photo.clientWidth) return floor;
+
+    const natural = photo.clientWidth * (img.naturalHeight / img.naturalWidth);
+    return Math.max(floor, Math.min(natural, window.innerHeight * PORTRAIT_PHOTO_MAX_RATIO));
+  }
+
   /** Высота карточки: фото + текст + рамка.
       offsetHeight не зависит от transform, поэтому мерить можно безопасно. */
   function measureSlideHeight(slide) {
     const photo = slide.querySelector('.slide-photo');
     const content = slide.querySelector('.slide-content');
-    const photoHeight = photo && getComputedStyle(photo).display !== 'none' ? photo.offsetHeight : 0;
+    const photoShown = Boolean(photo) && getComputedStyle(photo).display !== 'none';
+
+    // В две колонки (вертикальное фото на десктопе) высота карточки — максимум из двух:
+    // колонка фото растянута (её offsetHeight равен высоте карточки и для замера
+    // бесполезен), а колонка текста не растянута и отдаёт собственную высоту — по ней
+    // карточка и растёт. Источник правды о раскладке — реальный flex-direction,
+    // поэтому JS и медиазапросы не разъезжаются.
+    if (getComputedStyle(slide).flexDirection === 'row') {
+      return Math.max(photoShown ? naturalPhotoHeight(photo) : 0, content.offsetHeight) + 2;
+    }
+
+    const photoHeight = photoShown ? photo.offsetHeight : 0;
     return photoHeight + content.offsetHeight + 2;
   }
 
@@ -364,8 +400,27 @@
     slide.classList.toggle('is-clampable', textOverflows || hasPhoto);
   }
 
+  /** Вертикальный снимок на десктопе показываем в две колонки: фото слева,
+      текст справа. Само по себе это лишь вешает класс — раскладка живёт в
+      десктопном медиазапросе styles.css, поэтому на узких экранах её нет. */
+  function applyPhotoOrientation(slide, img) {
+    if (!img || !img.naturalWidth) return;
+    const portrait = img.naturalHeight > img.naturalWidth;
+    if (portrait === slide.classList.contains('is-portrait')) return;   // ничего не изменилось
+
+    slide.classList.toggle('is-portrait', portrait);
+    // Ширина колонки текста изменилась — пересчитываем климп и высоту фото.
+    refreshClampState(slide);
+    applyExpandedPhotoHeight(slide);
+  }
+
   function refreshAll() {
-    for (const slide of carousel.track.children) refreshClampState(slide);
+    for (const slide of carousel.track.children) {
+      refreshClampState(slide);
+      // При повороте экрана и смене ширины пересчитываем высоту раскрытого фото:
+      // для свёрнутых функция сама сбрасывает ранее выставленный style.height.
+      applyExpandedPhotoHeight(slide);
+    }
     syncViewportHeight();
   }
 
@@ -374,6 +429,14 @@
     const photo = slide.querySelector('.slide-photo');
     const img = photo && photo.querySelector('img');
     if (!photo || !img || slide.classList.contains('no-photo')) return;
+
+    // В две колонки (вертикальное фото на десктопе) высоту колонки задают
+    // пропорции снимка, контент и align-items: stretch — inline-высота из JS
+    // с ними конфликтует, поэтому не выставляем её и сбрасываем прежнюю.
+    if (getComputedStyle(slide).flexDirection === 'row') {
+      photo.style.height = '';
+      return;
+    }
 
     // Свёрнутое состояние — высота берётся из CSS.
     if (!slide.classList.contains('is-expanded') || !img.naturalWidth || !photo.clientWidth) {
