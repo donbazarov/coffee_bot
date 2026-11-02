@@ -1210,8 +1210,9 @@ body { transition: background-color .3s ease, color .3s ease; }
 .team-panel { min-width: 0; }
 .workload-view { display: grid; gap: 14px; }
 .workload-toolbar { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px 16px; }
+.workload-period { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .workload-month { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
-.workload-month select { min-height: 40px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--field-bg); color: var(--text); font: 500 13px var(--sans); }
+.workload-month select { min-width: 132px; min-height: 40px; padding: 0 12px; border: 1px solid var(--line-strong); background: var(--field-bg); color: var(--text); font: 500 13px var(--sans); }
 .workload-source, .workload-note { color: var(--muted); font: 10px var(--mono); letter-spacing: .04em; }
 .workload-source { margin-left: auto; text-align: right; }
 
@@ -1221,16 +1222,20 @@ body { transition: background-color .3s ease, color .3s ease; }
 .workload-metric strong { font: 600 22px/1 var(--sans); font-variant-numeric: tabular-nums; }
 .workload-metric small { color: var(--dim); font-size: 10px; }
 
-.workload-track { height: 8px; margin-bottom: 10px; border: 1px solid var(--line); background: var(--surface-sunken); }
-.workload-track i { display: block; width: 0; height: 100%; background: var(--mint); transition: width .3s ease; }
-.workload-track i.is-overload { background: var(--warn); }
-.workload-track i.is-deficit { background: var(--point-de); }
-.workload-track i.is-unknown { background: var(--dim); }
+.workload-track { position: relative; height: 10px; margin-bottom: 10px; border: 1px solid var(--line); background: var(--surface-sunken); }
+.workload-track i, .workload-track u { position: absolute; top: 0; bottom: 0; left: 0; display: block; width: 0; background: var(--mint); transition: width .3s ease; }
+/* Полупрозрачная часть — прогноз до конца месяца, плотная — уже проставленное. */
+.workload-track u { opacity: .3; }
+.workload-track i.is-overload, .workload-track u.is-overload { background: var(--warn); }
+.workload-track i.is-deficit, .workload-track u.is-deficit { background: var(--point-de); }
+.workload-track i.is-unknown, .workload-track u.is-unknown { background: var(--dim); }
 .workload-badge { align-self: start; padding: 4px 10px; border: 1px solid var(--line-strong); color: var(--text-soft); font: 9px var(--mono); letter-spacing: .08em; white-space: nowrap; }
 .workload-badge.is-normal { border-color: color-mix(in srgb, var(--mint) 45%, transparent); background: color-mix(in srgb, var(--mint) 12%, transparent); color: var(--mint); }
 .workload-badge.is-overload { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
 .workload-badge.is-deficit { border-color: var(--accent-line); background: var(--accent-faint); color: var(--accent); }
 .workload-quota { margin: 0 0 12px; color: var(--text-soft); font-size: 11.5px; }
+.workload-basis { margin: 6px 0 0; color: var(--dim); font: 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.workload-warning { margin: 0 0 12px; padding: 8px 11px; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); font-size: 11px; line-height: 1.5; }
 .workload-team-list { border-top: 1px solid var(--line); }
 .workload-row { display: grid; grid-template-columns: minmax(0, 1fr) repeat(4, 54px); align-items: center; gap: 8px; min-height: 46px; padding: 6px 0; border-bottom: 1px solid var(--line-faint); }
 .workload-row.is-head { min-height: 34px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; }
@@ -1297,6 +1302,6 @@ body { transition: background-color .3s ease, color .3s ease; }
   .workload-source { width: 100%; margin-left: 0; text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .workload-track i { transition: none; }
+  .workload-track i, .workload-track u { transition: none; }
 }
 

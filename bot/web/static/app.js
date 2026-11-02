@@ -566,16 +566,22 @@ async function loadUsers() {
 /* --- Команда: суб-табы «Доступ и роли» / «Расчет часов» ---------------- */
 
 const WORKLOAD_POINTS = [
-  { code: 'УЯ', letter: 'U', cls: 'is-uy' },
-  { code: 'ДЕ', letter: 'D', cls: 'is-de' },
+  { code: 'УЯ', cls: 'is-uy' },
+  { code: 'ДЕ', cls: 'is-de' },
 ];
-const SATURATION_LABEL = { overload: 'Перегруз', normal: 'Норма', deficit: 'Дефицит штата', unknown: 'Нет данных' };
+const SATURATION_LABEL = {
+  plan: { overload: 'Перепланировано', normal: 'Норма', deficit: 'Недопланировано', unknown: 'Нет данных' },
+  norms: { overload: 'Штат с запасом', normal: 'Штата хватает', deficit: 'Дефицит штата', unknown: 'Нет данных' },
+};
+// Совпадают с SATURATION_DEFICIT / SATURATION_OVERLOAD в workload_service.py.
+const SATURATION_DEFICIT = 0.9;
+const SATURATION_OVERLOAD = 1.1;
 const DEFAULT_WORKLOAD_HOURS = { min_hours: 80, opt_hours: 130, max_hours: 170 };
 
 let workloadState = null;
 let workloadRequiredTotal = 0;
 let workloadCursor = { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
-// Доля дней с пересменом (ползунок «n% пересменов») — отдельно для каждой точки.
+// Доля дней с пересменом (ползунок «n% дней с пересменом») — отдельно для каждой точки.
 const workloadOverlap = { 'УЯ': 100, 'ДЕ': 100 };
 
 function setText(selector, value) {
@@ -611,27 +617,35 @@ function setupTeamTabs() {
     const button = event.target.closest('[data-team-tab]');
     if (button) setTeamTab(button.dataset.teamTab);
   });
-  renderWorkloadMonths();
-  const select = document.querySelector('#workload-month');
-  select?.addEventListener('change', () => {
-    const [year, month] = String(select.value).split('-').map(Number);
-    if (!year || !month) return;
+  renderWorkloadSelectors();
+  const monthSelect = document.querySelector('#workload-month');
+  const yearSelect = document.querySelector('#workload-year');
+  const applyPeriod = () => {
+    const month = Number(monthSelect?.value);
+    const year = Number(yearSelect?.value);
+    if (!month || !year) return;
     workloadCursor = { year, month };
     loadWorkload();
-  });
+  };
+  monthSelect?.addEventListener('change', applyPeriod);
+  yearSelect?.addEventListener('change', applyPeriod);
 }
 
-function renderWorkloadMonths() {
-  const select = document.querySelector('#workload-month');
-  if (!select) return;
+/* Месяц и год — нативные select: их рисует сам браузер (в том числе на iOS),
+   поэтому не нужны ни кастомный календарь, ни ограничение по «±6 месяцев». */
+function renderWorkloadSelectors() {
+  const monthSelect = document.querySelector('#workload-month');
+  const yearSelect = document.querySelector('#workload-year');
+  if (!monthSelect || !yearSelect) return;
+  monthSelect.innerHTML = monthNames
+    .map((name, index) => `<option value="${index + 1}"${workloadCursor.month === index + 1 ? ' selected' : ''}>${name}</option>`)
+    .join('');
   const now = new Date();
-  const options = [];
-  for (let offset = -6; offset <= 6; offset += 1) {
-    const cursor = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-    const selected = cursor.getFullYear() === workloadCursor.year && cursor.getMonth() + 1 === workloadCursor.month;
-    options.push(`<option value="${cursor.getFullYear()}-${cursor.getMonth() + 1}"${selected ? ' selected' : ''}>${monthNames[cursor.getMonth()]} ${cursor.getFullYear()}</option>`);
+  const years = [];
+  for (let year = now.getFullYear() - 1; year <= now.getFullYear() + 2; year += 1) {
+    years.push(`<option value="${year}"${workloadCursor.year === year ? ' selected' : ''}>${year}</option>`);
   }
-  select.innerHTML = options.join('');
+  yearSelect.innerHTML = years.join('');
 }
 
 async function loadWorkload() {
@@ -642,8 +656,8 @@ async function loadWorkload() {
     renderWorkload();
     if (source) {
       source.textContent = workloadState.calendar.source === 'isdayoff'
-        ? 'Календарь: isdayoff.ru · Татарстан'
-        : 'Календарь: офлайн-набор РТ (встроенный)';
+        ? 'Производственный календарь: isdayoff.ru · Татарстан'
+        : 'Производственный календарь: встроенный · Татарстан';
     }
   } catch (error) {
     workloadState = null;
@@ -663,10 +677,7 @@ function renderWorkload() {
     if (list) list.innerHTML = '';
     const grid = document.querySelector('#workload-quota-grid');
     if (grid) grid.innerHTML = '';
-    const badge = document.querySelector('#workload-badge');
-    if (badge) { badge.textContent = '—'; badge.className = 'workload-badge'; }
-    const fill = document.querySelector('#workload-track-fill');
-    if (fill) { fill.style.width = '0%'; fill.className = ''; }
+    resetWorkloadIndicator();
     return;
   }
 
@@ -687,27 +698,134 @@ function renderWorkload() {
   setText('#workload-opt', totals.opt);
   setText('#workload-max', totals.max);
 
-  const level = state.saturation.level;
-  const badge = document.querySelector('#workload-badge');
-  if (badge) {
-    badge.textContent = SATURATION_LABEL[level] || level;
-    badge.className = `workload-badge is-${level}`;
-  }
-  const fill = document.querySelector('#workload-track-fill');
-  if (fill) {
-    fill.style.width = `${Math.min(100, Math.round((state.saturation.ratio || 0) * 100))}%`;
-    fill.className = `is-${level}`;
-  }
-  const quota = document.querySelector('#workload-quota');
-  if (quota) {
-    const base = totals.opt || 0;
-    const percentVsOpt = base > 0 ? Math.round((totals.fact / base) * 100) : 0;
-    quota.textContent = `Факт ${workloadHours(totals.fact)} ч — это ${percentVsOpt}% от оптимальной планки (Σy ${totals.opt} ч)`;
-  }
-
   renderWorkloadTeam(state.employees);
+  // Точки считают «Итого необходимо», которое нужно индикатору в режиме
+  // «по потребности», поэтому индикатор обновляем после них.
   renderWorkloadPoints();
   renderWorkloadRequired();
+  renderWorkloadIndicator();
+  renderWorkloadWarning(state);
+}
+
+/* Пустой ответ/ошибка: гасим все изменяемые части карточки команды. */
+function resetWorkloadIndicator() {
+  const badge = document.querySelector('#workload-badge');
+  if (badge) { badge.textContent = '—'; badge.className = 'workload-badge'; }
+  setText('#workload-basis', '—');
+  [document.querySelector('#workload-track-fill'), document.querySelector('#workload-track-ghost')]
+    .forEach((bar) => { if (bar) { bar.style.width = '0%'; bar.className = ''; } });
+  const track = document.querySelector('#workload-track');
+  if (track) track.hidden = false;
+  setText('#workload-quota', '');
+  const warning = document.querySelector('#workload-warning');
+  if (warning) { warning.hidden = true; warning.textContent = ''; }
+}
+
+function levelFromRatio(ratio) {
+  if (ratio === null || ratio === undefined || Number.isNaN(ratio)) return 'unknown';
+  if (ratio < SATURATION_DEFICIT) return 'deficit';
+  if (ratio > SATURATION_OVERLOAD) return 'overload';
+  return 'normal';
+}
+
+function plural(count, one, few, many) {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+}
+
+/* Индикатор насыщенности. База зависит от того, насколько проставлен месяц:
+   полный график — факт, частичный — прогноз по дням недели, пустой — потребность
+   точек (её считаем здесь: она зависит от ползунков «n% дней с пересменом»). */
+function workloadIndicator() {
+  const state = workloadState;
+  if (!state) return null;
+  const plan = state.plan || { state: 'empty' };
+  const totals = state.totals || {};
+  const byPlan = plan.state === 'complete' || plan.state === 'partial';
+  const ratio = byPlan
+    ? (state.saturation?.ratio ?? null)
+    : (workloadRequiredTotal > 0 ? (totals.opt || 0) / workloadRequiredTotal : null);
+  // Для графика уровень берём с сервера: он считает его по неокруглённому
+  // отношению (клиент видит уже округлённые 3 знака и на пороге ошибётся).
+  const serverLevel = state.saturation?.level;
+  const level = byPlan && serverLevel && serverLevel !== 'unknown'
+    ? serverLevel
+    : levelFromRatio(ratio);
+  return {
+    basis: byPlan ? plan.state : 'norms',
+    ratio,
+    level,
+    projected: Number(plan.projected_fact) || 0,
+    lastDay: plan.last_shift_day,
+  };
+}
+
+function workloadQuotaText(state, indicator) {
+  const totals = state.totals || {};
+  const opt = totals.opt || 0;
+  if (indicator.basis === 'fact') {
+    return opt > 0
+      ? `Проставлено ${workloadHours(totals.fact)} ч — это ${Math.round((totals.fact / opt) * 100)}% от оптимальной планки команды`
+      : 'Нормо-часы команды не заданы — процент не считается';
+  }
+  if (indicator.basis === 'forecast') {
+    const percent = opt > 0 ? `, это ${Math.round((indicator.projected / opt) * 100)}% от оптимальной планки` : '';
+    return `Проставлено ${workloadHours(totals.fact)} ч (график на 1–${indicator.lastDay}). Прогноз на конец месяца — ${workloadHours(indicator.projected)} ч${percent}`;
+  }
+  if (workloadRequiredTotal > 0) {
+    return `График на месяц ещё не проставлен. Штат закрывает ${Math.round((opt / workloadRequiredTotal) * 100)}% потребности точек`;
+  }
+  return 'График на месяц ещё не проставлен. Заполните шаблоны смен, чтобы посчитать потребность';
+}
+
+function renderWorkloadIndicator() {
+  const state = workloadState;
+  const indicator = workloadIndicator();
+  if (!state || !indicator) return;
+
+  const labelSet = indicator.basis === 'norms' ? SATURATION_LABEL.norms : SATURATION_LABEL.plan;
+  const badge = document.querySelector('#workload-badge');
+  if (badge) {
+    badge.textContent = labelSet[indicator.level] || labelSet.unknown;
+    badge.className = `workload-badge is-${indicator.level}`;
+  }
+  const basisText = indicator.basis === 'fact'
+    ? 'Факт · месяц проставлен полностью'
+    : indicator.basis === 'forecast' ? `Прогноз · график проставлен на 1–${indicator.lastDay}`
+      : 'Потребность · графика на месяц ещё нет';
+  setText('#workload-basis', basisText);
+
+  const totals = state.totals || {};
+  const opt = totals.opt || 0;
+  const showTrack = indicator.basis !== 'norms';
+  const track = document.querySelector('#workload-track');
+  if (track) track.hidden = !showTrack;
+  const solid = showTrack && opt > 0 ? (totals.fact / opt) * 100 : 0;
+  // Полупрозрачный довесок полосы — прогноз до конца месяца.
+  const planned = showTrack && opt > 0 ? (indicator.projected / opt) * 100 : 0;
+  const fill = document.querySelector('#workload-track-fill');
+  if (fill) {
+    fill.style.width = `${Math.min(100, Math.round(solid))}%`;
+    fill.className = `is-${indicator.level}`;
+  }
+  const ghost = document.querySelector('#workload-track-ghost');
+  if (ghost) {
+    ghost.style.width = `${Math.min(100, Math.round(planned))}%`;
+    ghost.className = `is-${indicator.level}`;
+  }
+  setText('#workload-quota', workloadQuotaText(state, indicator));
+}
+
+function renderWorkloadWarning(state) {
+  const warning = document.querySelector('#workload-warning');
+  if (!warning) return;
+  const count = Number(state.employees_without_iiko) || 0;
+  warning.hidden = count === 0;
+  warning.textContent = count === 0 ? ''
+    : `${count} ${plural(count, 'сотрудник', 'сотрудника', 'сотрудников')} без Iiko ID — их смены в расчёт не попадают`;
 }
 
 function renderWorkloadTeam(employees) {
@@ -718,36 +836,35 @@ function renderWorkloadTeam(employees) {
     return;
   }
   const head = '<div class="workload-row is-head"><span class="workload-person">Сотрудник</span>'
-    + '<span class="workload-cell">a</span><span class="workload-cell">x</span>'
-    + '<span class="workload-cell">y</span><span class="workload-cell">z</span></div>';
+    + '<span class="workload-cell">факт</span><span class="workload-cell">мин</span>'
+    + '<span class="workload-cell">опт</span><span class="workload-cell">макс</span></div>';
   const rows = employees.map((employee) => `
     <div class="workload-row" data-user-id="${employee.id}">
       <span class="workload-person"><span class="user-avatar">${avatarMarkup(employee.id, employee.avatar_rev, employee.name)}</span><strong title="${escapeHtml(employee.name)}">${escapeHtml(employee.name)}</strong><small>${escapeHtml(employee.role_name || '')}</small></span>
       <span class="workload-cell is-fact" title="Проставлено в графике">${workloadHours(employee.fact_hours)}</span>
-      <span class="workload-cell" title="Минимум">${employee.min_hours}</span>
-      <span class="workload-cell" title="Оптимум">${employee.opt_hours}</span>
-      <span class="workload-cell" title="Максимум">${employee.max_hours}</span>
+      <span class="workload-cell" title="Минимум часов в месяц">${employee.min_hours}</span>
+      <span class="workload-cell" title="Оптимум часов в месяц">${employee.opt_hours}</span>
+      <span class="workload-cell" title="Максимум часов в месяц">${employee.max_hours}</span>
     </div>`).join('');
   list.innerHTML = head + rows;
 }
 
 function pointCard(point, config) {
-  const letter = config.letter;
   const share = workloadOverlap[point];
   return `
     <section class="panel settings-panel workload-point ${config.cls}" data-point="${point}">
       <div class="panel-heading">
         <div><p class="eyebrow">ТОЧКА</p><h3>${point}</h3></div>
-        <span class="workload-point-total"><strong data-point-total>—</strong><small>ч · ${letter}и</small></span>
+        <span class="workload-point-total"><strong data-point-total>—</strong><small>часов всего</small></span>
       </div>
       <div class="workload-point-grid">
-        <div class="workload-point-line"><span>Утро · ${letter}у</span><b data-point-morning>—</b></div>
-        <div class="workload-point-line"><span>Утро вых · ${letter}ув</span><b data-point-weekend>—</b></div>
-        <div class="workload-point-line"><span>Пересмен · ${letter}п</span><b data-point-overlap>—</b></div>
-        <div class="workload-point-line"><span>Вечер · ${letter}в</span><b data-point-evening>—</b></div>
+        <div class="workload-point-line"><span>Утро в будни</span><b data-point-morning>—</b></div>
+        <div class="workload-point-line"><span>Утро в выходные</span><b data-point-weekend>—</b></div>
+        <div class="workload-point-line"><span>Пересмен</span><b data-point-overlap>—</b></div>
+        <div class="workload-point-line"><span>Вечер</span><b data-point-evening>—</b></div>
       </div>
       <label class="workload-slider">
-        <span class="workload-slider-value"><b data-point-share>${share}%</b> пересменов</span>
+        <span class="workload-slider-value"><b data-point-share>${share}%</b> дней с пересменом</span>
         <input type="range" min="0" max="100" step="5" value="${share}" data-point-range data-point-code="${point}" aria-label="${point}: доля дней с пересменом">
       </label>
     </section>`;
@@ -767,7 +884,8 @@ function renderWorkloadPoints() {
 }
 
 /* Часы точки при текущей доле пересменов n%:
-   mult = 2 − n/100 (n=100% → ×1, n=0% → ×2). Ползунок двигает Uп, Uу, Uув и Uв. */
+   mult = 2 − n/100 (n=100% → ×1, n=0% → ×2). Ползунок двигает часы пересмена,
+   утра (будни и выходные) и вечера, а значит и итог по точке. */
 function pointNumbers(code) {
   const means = workloadState.points[code] || {};
   const calendar = workloadState.calendar;
@@ -798,6 +916,8 @@ function recalcWorkloadPoints() {
   });
   workloadRequiredTotal = Math.round(grand);
   renderWorkloadRequired();
+  // В режиме «по потребности» индикатор зависит от ползунков — обновляем и его.
+  renderWorkloadIndicator();
 }
 
 function renderWorkloadRequired() {
@@ -805,11 +925,14 @@ function renderWorkloadRequired() {
   const grid = document.querySelector('#workload-quota-grid');
   if (!grid || !workloadState) return;
   const totals = workloadState.totals;
+  // Квота считается от гипотетической потребности точек, а не от факта:
+  // сколько команда закрывает своими минимумом/оптимумом/максимумом.
+  const required = workloadRequiredTotal || 0;
   const item = (label, target) => {
-    const percent = target > 0 ? Math.round((totals.fact / target) * 100) : 0;
-    return `<div class="workload-quota-item"><span>${label}</span><strong>${percent}%</strong><small>${workloadHours(totals.fact)} из ${target} ч</small></div>`;
+    const percent = required > 0 ? Math.round((target / required) * 100) : 0;
+    return `<div class="workload-quota-item"><span>${label}</span><strong>${percent}%</strong><small>${target} из ${required} ч</small></div>`;
   };
-  grid.innerHTML = item('Мин Σx', totals.min) + item('Опт Σy', totals.opt) + item('Макс Σz', totals.max);
+  grid.innerHTML = item('Σ Мин', totals.min) + item('Σ Опт', totals.opt) + item('Σ Макс', totals.max);
 }
 
 /* --- Нормо-часы: личный кабинет и диалог сотрудника -------------------- */

@@ -50,6 +50,11 @@ MAX_HOURS_LIMIT = 744  # 31 день × 24 часа — больше физич�
 SATURATION_DEFICIT = 0.9
 SATURATION_OVERLOAD = 1.1
 
+# Прогноз часов на конец месяца считается, только если проставлено достаточно:
+# по одному опубликованному дню экстраполяция даёт шум (40 ч × 30 = 1200 ч).
+FORECAST_MIN_DAYS = 5
+FORECAST_MIN_COVERAGE = 0.15
+
 ISDAYOFF_URL = "https://isdayoff.ru/api/getdata"
 ISDAYOFF_REGION = "ru-ta"
 ISDAYOFF_TIMEOUT = 6
@@ -341,22 +346,36 @@ def _point_means(rows: list[dict[str, Any]], point: str) -> dict[str, Any]:
 # Факт по графику и нормо-часы сотрудников
 # --------------------------------------------------------------------------- #
 
-def _fact_hours_by_iiko(engine: Engine, year: int, month: int) -> dict[str, float]:
-    """Проставленные в графике часы месяца в разрезе iiko_id."""
+def _as_date(value: Any) -> date:
+    return value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
+
+
+def _month_schedule(engine: Engine, year: int, month: int, allowed_keys: set[str] | None = None) -> dict[str, Any]:
+    """Смены месяца: часы по iiko_id и по дням (для темпа и прогноза).
+
+    `allowed_keys` ограничивает выборку активными сотрудниками, чтобы часы в
+    прогнозе складывались из тех же смен, что и «факт» в разрезе людей.
+    """
     first, last = _month_bounds(year, month)
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT s.iiko_id, st.start_time, st.end_time
+            SELECT s.shift_date, s.iiko_id, st.start_time, st.end_time
             FROM schedule AS s
             JOIN shift_types AS st ON st.id = s.shift_type_id
             WHERE s.shift_date >= :first AND s.shift_date <= :last
               AND COALESCE(s.is_active, 1) = 1
         """), {"first": first.isoformat(), "last": last.isoformat()}).mappings().all()
-    totals: dict[str, float] = {}
+    by_iiko: dict[str, float] = {}
+    by_day: dict[date, float] = {}
     for row in rows:
         key = str(row["iiko_id"])
-        totals[key] = totals.get(key, 0.0) + shift_hours(row["start_time"], row["end_time"])
-    return totals
+        if allowed_keys is not None and key not in allowed_keys:
+            continue
+        hours = shift_hours(row["start_time"], row["end_time"])
+        by_iiko[key] = by_iiko.get(key, 0.0) + hours
+        day = _as_date(row["shift_date"])
+        by_day[day] = by_day.get(day, 0.0) + hours
+    return {"by_iiko": by_iiko, "by_day": by_day}
 
 
 def list_workload_users(engine: Engine) -> list[dict[str, Any]]:
@@ -374,25 +393,118 @@ def list_workload_users(engine: Engine) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _saturation(fact_total: float, opt_total: float) -> dict[str, Any]:
-    """Насыщенность штата относительно оптимальной планки."""
-    if opt_total <= 0:
-        return {"ratio": 0.0, "level": "unknown"}
-    ratio = fact_total / opt_total
+def _level(ratio: float | None) -> str:
+    if ratio is None:
+        return "unknown"
     if ratio < SATURATION_DEFICIT:
-        level = "deficit"
-    elif ratio > SATURATION_OVERLOAD:
-        level = "overload"
-    else:
-        level = "normal"
-    return {"ratio": round(ratio, 3), "level": level}
+        return "deficit"
+    if ratio > SATURATION_OVERLOAD:
+        return "overload"
+    return "normal"
+
+
+def _plan_forecast(day_hours: dict[date, float], year: int, month: int) -> dict[str, Any]:
+    """Прогноз часов команды на конец месяца по средней нагрузке дня недели.
+
+    График публикуется частями (середина и конец месяца), поэтому «факт» за
+    неполный месяц сравнивать с нормо-часами нельзя — получается ложный дефицит.
+    Берём проставленный период (1-е … последний день со сменами), считаем средние
+    по дням недели и досчитываем оставшиеся дни этими средними. Так фиксированные
+    дни работы сотрудников («по вторникам и субботам») учитываются сами собой,
+    чего линейный темп по календарным дням не умеет.
+
+    Состояние месяца: `complete` (график дотянут до конца), `partial` (прогноз
+    имеет смысл), `empty` (графика нет или данных мало — индикатор уходит на
+    потребность точек).
+    """
+    first, last = _month_bounds(year, month)
+    total_days = last.day
+    fact = round(sum(day_hours.values()), 1)
+    days_with_shifts = sum(1 for hours in day_hours.values() if hours > 0)
+    if not days_with_shifts:
+        return {
+            "state": "empty", "days_with_shifts": 0, "last_shift_day": None,
+            "planned_days": 0, "coverage": 0.0, "factor": None,
+            "projected_fact": 0.0, "weekday_average": None,
+        }
+
+    last_shift_day = max(day_hours)
+    planned_days = last_shift_day.day
+    coverage = planned_days / total_days
+    # День без смен внутри проставленного периода — честный ноль, поэтому
+    # средние считаем по всем вхождениям дня недели, а не только по занятым.
+    sums: dict[int, float] = {}
+    counts: dict[int, int] = {}
+    day = first
+    while day <= last_shift_day:
+        weekday = day.weekday()
+        sums[weekday] = sums.get(weekday, 0.0) + day_hours.get(day, 0.0)
+        counts[weekday] = counts.get(weekday, 0) + 1
+        day += timedelta(days=1)
+    averages = {weekday: sums[weekday] / counts[weekday] for weekday in counts}
+    weekday_average = {str(weekday): round(value, 2) for weekday, value in sorted(averages.items())}
+
+    base = {
+        "days_with_shifts": days_with_shifts,
+        "last_shift_day": last_shift_day.day,
+        "planned_days": planned_days,
+        "coverage": round(coverage, 3),
+        "weekday_average": weekday_average,
+    }
+    if last_shift_day == last:
+        return {**base, "state": "complete", "factor": 1.0, "projected_fact": fact}
+    if days_with_shifts < FORECAST_MIN_DAYS or coverage < FORECAST_MIN_COVERAGE:
+        # Мало данных для прогноза: не выдумываем цифру, месяц считаем «пустым».
+        return {**base, "state": "empty", "factor": None, "projected_fact": fact}
+
+    fallback = fact / planned_days if planned_days else 0.0
+    projected = fact
+    day = last_shift_day + timedelta(days=1)
+    while day <= last:
+        projected += averages.get(day.weekday(), fallback)
+        day += timedelta(days=1)
+    projected = round(projected, 1)
+    return {
+        **base,
+        "state": "partial",
+        "factor": round(projected / fact, 3) if fact else None,
+        "projected_fact": projected,
+    }
+
+
+def _saturation(plan: dict[str, Any], totals: dict[str, Any]) -> dict[str, Any]:
+    """Индикатор насыщенности: база зависит от того, насколько проставлен месяц.
+
+    Полный месяц — факт, частичный — прогноз. Для пустого месяца базу
+    (`Σопт / потребность точек`) считает клиент: потребность зависит от
+    ползунков «n% дней с пересменом».
+    """
+    state = plan.get("state")
+    opt_total = totals.get("opt") or 0
+    if state == "empty" or opt_total <= 0:
+        return {"ratio": None, "level": "unknown", "basis": "norms", "basis_hours": None}
+    partial = state == "partial"
+    value = plan.get("projected_fact") if partial else totals.get("fact")
+    value = value or 0
+    ratio = value / opt_total
+    return {
+        "ratio": round(ratio, 3),
+        "level": _level(ratio),
+        "basis": "forecast" if partial else "fact",
+        "basis_hours": round(value, 1),
+    }
 
 
 def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = False) -> dict[str, Any]:
     """Сводка «Расчета часов»: календарь, факт/план команды и средние смены по точкам."""
     production = get_production_calendar(engine, year, month, refresh=refresh)
     users = list_workload_users(engine)
-    facts = _fact_hours_by_iiko(engine, year, month)
+    # Часы считаем только по активным сотрудникам: и «факт» в разрезе людей, и
+    # прогноз должны опираться на одни и те же смены.
+    employee_keys = {str(user["iiko_id"]) for user in users if user["iiko_id"] is not None}
+    schedule = _month_schedule(engine, year, month, employee_keys)
+    facts = schedule["by_iiko"]
+    plan = _plan_forecast(schedule["by_day"], year, month)
     templates = _template_rows(engine)
 
     employees: list[dict[str, Any]] = []
@@ -427,7 +539,8 @@ def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = Fa
         "employees": employees,
         "employees_without_iiko": without_iiko,
         "totals": totals,
-        "saturation": _saturation(totals["fact"], totals["opt"]),
+        "plan": plan,
+        "saturation": _saturation(plan, totals),
         "points": {point: _point_means(templates, point) for point in POINTS},
     }
 

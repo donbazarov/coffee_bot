@@ -319,12 +319,12 @@
         </section>
         <section class="panel settings-panel" id="workload-panel">
           <div class="panel-heading"><div><p class="eyebrow">НАГРУЗКА</p><h3>Нормо-часы в месяц</h3></div></div>
-          <p class="settings-hint">Сколько часов в месяц вам комфортно: минимум, оптимум и максимум. По этим цифрам «Расчет часов» сверяет загрузку команды. Нужно, чтобы минимум ≤ оптимум ≤ максимум.</p>
+          <p class="settings-hint">Сколько часов в месяц вам комфортно: минимум, оптимум и максимум. По этим цифрам «Расчет часов» сверяет загрузку команды. Нужно, чтобы минимум не превышал оптимум, а оптимум — максимум.</p>
           <form class="template-form workload-form" id="workload-form">
             <div class="workload-form-grid">
-              <label>Минимум (x)<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
-              <label>Оптимум (y)<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
-              <label>Максимум (z)<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
+              <label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
+              <label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
+              <label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric" required></label>
             </div>
             <p class="template-form-error" id="workload-form-error" role="alert" hidden></p>
             <div class="template-form-actions">
@@ -493,9 +493,14 @@
         </div>
         <div class="team-panel workload-view" id="team-workload-panel" hidden>
           <div class="workload-toolbar">
-            <label class="workload-month">Месяц
-              <select id="workload-month"></select>
-            </label>
+            <div class="workload-period">
+              <label class="workload-month">Месяц
+                <select id="workload-month" aria-label="Месяц"></select>
+              </label>
+              <label class="workload-month">Год
+                <select id="workload-year" aria-label="Год"></select>
+              </label>
+            </div>
             <span class="workload-source" id="workload-source" role="status">Загрузка…</span>
           </div>
           <section class="panel settings-panel workload-calendar">
@@ -507,20 +512,21 @@
             </div>
           </section>
           <section class="panel settings-panel workload-team">
-            <div class="panel-heading"><div><p class="eyebrow">КАДРОВАЯ НАСЫЩЕННОСТЬ</p><h3>Команда за месяц</h3></div><span class="workload-badge" id="workload-badge">—</span></div>
+            <div class="panel-heading"><div><p class="eyebrow">КАДРОВАЯ НАСЫЩЕННОСТЬ</p><h3>Команда за месяц</h3><p class="workload-basis" id="workload-basis">—</p></div><span class="workload-badge" id="workload-badge">—</span></div>
             <div class="workload-metrics">
-              <div class="workload-metric"><span>ФАКТ Σa</span><strong id="workload-fact">—</strong><small>проставлено</small></div>
-              <div class="workload-metric"><span>МИН Σx</span><strong id="workload-min">—</strong><small>потребность</small></div>
-              <div class="workload-metric"><span>ОПТ Σy</span><strong id="workload-opt">—</strong><small>планка</small></div>
-              <div class="workload-metric"><span>МАКС Σz</span><strong id="workload-max">—</strong><small>лимит</small></div>
+              <div class="workload-metric"><span>ФАКТ</span><strong id="workload-fact">—</strong><small>проставлено</small></div>
+              <div class="workload-metric"><span>Σ МИН</span><strong id="workload-min">—</strong><small>потребность</small></div>
+              <div class="workload-metric"><span>Σ ОПТ</span><strong id="workload-opt">—</strong><small>планка</small></div>
+              <div class="workload-metric"><span>Σ МАКС</span><strong id="workload-max">—</strong><small>лимит</small></div>
             </div>
-            <div class="workload-track" aria-hidden="true"><i id="workload-track-fill"></i></div>
+            <div class="workload-track" id="workload-track" aria-hidden="true"><u id="workload-track-ghost"></u><i id="workload-track-fill"></i></div>
             <p class="workload-quota" id="workload-quota" role="status"></p>
+            <p class="workload-warning" id="workload-warning" role="status" hidden></p>
             <div class="workload-team-list" id="workload-team-list"></div>
           </section>
           <section class="workload-points" id="workload-points"></section>
           <section class="panel settings-panel workload-required">
-            <div><p class="eyebrow">ИТОГО НЕОБХОДИМО</p><strong id="workload-required">—</strong><span>часов на Uи + Dи</span></div>
+            <div><p class="eyebrow">ИТОГО НЕОБХОДИМО</p><strong id="workload-required">—</strong><span>часов на все точки</span></div>
             <div class="workload-quota-grid" id="workload-quota-grid"></div>
           </section>
         </div>
@@ -562,7 +568,7 @@
     </div>
   </aside>
   {% if user.role in ['senior', 'mentor'] %}
-  <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="newbie">Стажёр</option><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум (x)<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум (y)<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум (z)<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
+  <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="newbie">Стажёр</option><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
   <dialog class="user-dialog evaluation-dialog" id="evaluation-dialog">
     <form id="evaluation-form">
       <div class="dialog-top"><div><p class="eyebrow">ОЦЕНКА</p><h2>Оценить сотрудника</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
