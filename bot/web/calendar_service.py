@@ -110,6 +110,11 @@ def initialize_calendar_schema(engine: Engine) -> None:
             _ensure_columns(connection, "users", {
                 "display_name": "TEXT",
                 "avatar_rev": "INTEGER NOT NULL DEFAULT 0",
+                # Личная почасовая нагрузка: заполняет сам бариста в профиле,
+                # наставник может править в «Команда → Доступ и роли».
+                "min_hours": "INTEGER NOT NULL DEFAULT 80",
+                "opt_hours": "INTEGER NOT NULL DEFAULT 130",
+                "max_hours": "INTEGER NOT NULL DEFAULT 170",
             })
         # Шаблоны смен — общий набор команды: их ведут наставники, применяют все.
         connection.execute(text("""
@@ -121,6 +126,10 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 end_time TEXT NOT NULL,
                 point TEXT NOT NULL,
                 order_index INTEGER NOT NULL DEFAULT 0,
+                is_morning INTEGER NOT NULL DEFAULT 0,
+                is_evening INTEGER NOT NULL DEFAULT 0,
+                is_overlap INTEGER NOT NULL DEFAULT 0,
+                is_weekend INTEGER NOT NULL DEFAULT 0,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -129,6 +138,15 @@ def initialize_calendar_schema(engine: Engine) -> None:
             CREATE INDEX IF NOT EXISTS idx_web_shift_templates_user
             ON web_shift_templates (user_id, order_index, id)
         """))
+        if engine.dialect.name == "sqlite":
+            # Существующие базы: докидываем флаги смены (утро/вечер/пересмен/выходные).
+            # По ним «Расчет часов» раскладывает нагрузку на УЯ и ДЕ.
+            _ensure_columns(connection, "web_shift_templates", {
+                "is_morning": "INTEGER NOT NULL DEFAULT 0",
+                "is_evening": "INTEGER NOT NULL DEFAULT 0",
+                "is_overlap": "INTEGER NOT NULL DEFAULT 0",
+                "is_weekend": "INTEGER NOT NULL DEFAULT 0",
+            })
         # Общие настройки сайта (каналы Telegram для публикаций).
         connection.execute(text("""
             CREATE TABLE IF NOT EXISTS web_app_settings (
@@ -145,8 +163,11 @@ def initialize_calendar_schema(engine: Engine) -> None:
         """), {"swap": DEFAULT_SWAP_CHAT})
 
 
+TEMPLATE_FLAGS = ("is_morning", "is_evening", "is_overlap", "is_weekend")
+
+
 def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -> dict[str, Any]:
-    allowed = {"name", "start_time", "end_time", "point"}
+    allowed = {"name", "start_time", "end_time", "point", *TEMPLATE_FLAGS}
     if set(payload) - allowed:
         raise ValueError("Переданы неизвестные поля шаблона")
     values = dict(payload)
@@ -166,6 +187,11 @@ def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -
     if "point" in values or not partial:
         if values.get("point") not in SHIFT_TEMPLATE_POINTS:
             raise ValueError("Точка должна быть УЯ или ДЕ")
+    for flag in TEMPLATE_FLAGS:
+        if flag in values:
+            if not isinstance(values[flag], bool):
+                raise ValueError("Флаги смены должны быть boolean")
+            values[flag] = int(values[flag])
     return values
 
 
@@ -177,6 +203,10 @@ def _template_dict(row: Any) -> dict[str, Any]:
         "end": _time_text(row["end_time"]),
         "point": row["point"],
         "order_index": row["order_index"],
+        "is_morning": bool(row["is_morning"]),
+        "is_evening": bool(row["is_evening"]),
+        "is_overlap": bool(row["is_overlap"]),
+        "is_weekend": bool(row["is_weekend"]),
     }
 
 
@@ -184,7 +214,8 @@ def list_shift_templates(engine: Engine) -> list[dict[str, Any]]:
     """Общий набор шаблонов команды: их ведут наставники, применяют все."""
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT id, name, start_time, end_time, point, order_index
+            SELECT id, name, start_time, end_time, point, order_index,
+                   is_morning, is_evening, is_overlap, is_weekend
             FROM web_shift_templates
             ORDER BY order_index, id
         """)).mappings().all()
@@ -199,13 +230,21 @@ def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[st
         order_index = connection.execute(text(
             "SELECT COALESCE(MAX(order_index), 0) + 1 FROM web_shift_templates"
         )).scalar_one()
+        params = {flag: 0 for flag in TEMPLATE_FLAGS}
+        params.update(values)
+        params.update({"user_id": user_id, "order_index": order_index})
         template_id = connection.execute(text("""
-            INSERT INTO web_shift_templates (user_id, name, start_time, end_time, point, order_index)
-            VALUES (:user_id, :name, :start_time, :end_time, :point, :order_index)
+            INSERT INTO web_shift_templates
+                (user_id, name, start_time, end_time, point, order_index,
+                 is_morning, is_evening, is_overlap, is_weekend)
+            VALUES
+                (:user_id, :name, :start_time, :end_time, :point, :order_index,
+                 :is_morning, :is_evening, :is_overlap, :is_weekend)
             RETURNING id
-        """), {**values, "user_id": user_id, "order_index": order_index}).scalar_one()
+        """), params).scalar_one()
         row = connection.execute(text("""
-            SELECT id, name, start_time, end_time, point, order_index
+            SELECT id, name, start_time, end_time, point, order_index,
+                   is_morning, is_evening, is_overlap, is_weekend
             FROM web_shift_templates WHERE id = :id
         """), {"id": template_id}).mappings().one()
     return _template_dict(row)
@@ -233,7 +272,8 @@ def update_shift_template(engine: Engine, template_id: int, payload: Any) -> dic
             "WHERE id = :id"
         ), {**values, "id": template_id})
         row = connection.execute(text("""
-            SELECT id, name, start_time, end_time, point, order_index
+            SELECT id, name, start_time, end_time, point, order_index,
+                   is_morning, is_evening, is_overlap, is_weekend
             FROM web_shift_templates WHERE id = :id
         """), {"id": template_id}).mappings().one()
     return _template_dict(row)

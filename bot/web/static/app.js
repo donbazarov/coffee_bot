@@ -563,6 +563,314 @@ async function loadUsers() {
   catch (error) { showToast(error.message); }
 }
 
+/* --- Команда: суб-табы «Доступ и роли» / «Расчет часов» ---------------- */
+
+const WORKLOAD_POINTS = [
+  { code: 'УЯ', letter: 'U', cls: 'is-uy' },
+  { code: 'ДЕ', letter: 'D', cls: 'is-de' },
+];
+const SATURATION_LABEL = { overload: 'Перегруз', normal: 'Норма', deficit: 'Дефицит штата', unknown: 'Нет данных' };
+const DEFAULT_WORKLOAD_HOURS = { min_hours: 80, opt_hours: 130, max_hours: 170 };
+
+let workloadState = null;
+let workloadRequiredTotal = 0;
+let workloadCursor = { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
+// Доля дней с пересменом (ползунок «n% пересменов») — отдельно для каждой точки.
+const workloadOverlap = { 'УЯ': 100, 'ДЕ': 100 };
+
+function setText(selector, value) {
+  const node = document.querySelector(selector);
+  if (node) node.textContent = value;
+}
+
+function workloadHours(value) {
+  const number = Number(value) || 0;
+  const rounded = Math.round(number * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+}
+
+function setTeamTab(tab) {
+  document.querySelectorAll('#team-view [data-team-tab]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.teamTab === tab);
+  });
+  const access = document.querySelector('#team-access-panel');
+  const workload = document.querySelector('#team-workload-panel');
+  if (access) access.hidden = tab !== 'access';
+  if (workload) workload.hidden = tab !== 'workload';
+  setText('#team-eyebrow', tab === 'workload' ? 'РАСЧЕТ ЧАСОВ' : 'ДОСТУП И РОЛИ');
+  setText('#team-title', tab === 'workload' ? 'Кадровая насыщенность' : 'Команда');
+  const addButton = document.querySelector('#add-user-button');
+  if (addButton) addButton.hidden = tab === 'workload';
+  if (tab === 'workload') loadWorkload();
+}
+
+function setupTeamTabs() {
+  const tabs = document.querySelector('#team-view .team-tabs');
+  if (!tabs) return;
+  tabs.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-team-tab]');
+    if (button) setTeamTab(button.dataset.teamTab);
+  });
+  renderWorkloadMonths();
+  const select = document.querySelector('#workload-month');
+  select?.addEventListener('change', () => {
+    const [year, month] = String(select.value).split('-').map(Number);
+    if (!year || !month) return;
+    workloadCursor = { year, month };
+    loadWorkload();
+  });
+}
+
+function renderWorkloadMonths() {
+  const select = document.querySelector('#workload-month');
+  if (!select) return;
+  const now = new Date();
+  const options = [];
+  for (let offset = -6; offset <= 6; offset += 1) {
+    const cursor = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    const selected = cursor.getFullYear() === workloadCursor.year && cursor.getMonth() + 1 === workloadCursor.month;
+    options.push(`<option value="${cursor.getFullYear()}-${cursor.getMonth() + 1}"${selected ? ' selected' : ''}>${monthNames[cursor.getMonth()]} ${cursor.getFullYear()}</option>`);
+  }
+  select.innerHTML = options.join('');
+}
+
+async function loadWorkload() {
+  const source = document.querySelector('#workload-source');
+  if (source) source.textContent = 'Загрузка…';
+  try {
+    workloadState = await api(`/api/team/workload-stats?year=${workloadCursor.year}&month=${workloadCursor.month}`);
+    renderWorkload();
+    if (source) {
+      source.textContent = workloadState.calendar.source === 'isdayoff'
+        ? 'Календарь: isdayoff.ru · Татарстан'
+        : 'Календарь: офлайн-набор РТ (встроенный)';
+    }
+  } catch (error) {
+    workloadState = null;
+    if (source) source.textContent = error.message;
+    renderWorkload();
+  }
+}
+
+function renderWorkload() {
+  const state = workloadState;
+  if (!state) {
+    ['#workload-total-days', '#workload-working-days', '#workload-holiday-days', '#workload-fact',
+      '#workload-min', '#workload-opt', '#workload-max', '#workload-required'].forEach((selector) => setText(selector, '—'));
+    const points = document.querySelector('#workload-points');
+    if (points) points.innerHTML = '<p class="empty-state">Не удалось загрузить расчёт</p>';
+    const list = document.querySelector('#workload-team-list');
+    if (list) list.innerHTML = '';
+    const grid = document.querySelector('#workload-quota-grid');
+    if (grid) grid.innerHTML = '';
+    const badge = document.querySelector('#workload-badge');
+    if (badge) { badge.textContent = '—'; badge.className = 'workload-badge'; }
+    const fill = document.querySelector('#workload-track-fill');
+    if (fill) { fill.style.width = '0%'; fill.className = ''; }
+    return;
+  }
+
+  const calendar = state.calendar;
+  setText('#workload-total-days', calendar.total_days);
+  setText('#workload-working-days', calendar.working_days);
+  setText('#workload-holiday-days', calendar.holidays);
+  const note = document.querySelector('#workload-calendar-note');
+  if (note) {
+    note.textContent = calendar.source === 'isdayoff'
+      ? 'IsDayOff · Татарстан'
+      : calendar.source === 'fallback' ? 'Офлайн-календарь · Татарстан' : 'IsDayOff + праздники РТ';
+  }
+
+  const totals = state.totals;
+  setText('#workload-fact', workloadHours(totals.fact));
+  setText('#workload-min', totals.min);
+  setText('#workload-opt', totals.opt);
+  setText('#workload-max', totals.max);
+
+  const level = state.saturation.level;
+  const badge = document.querySelector('#workload-badge');
+  if (badge) {
+    badge.textContent = SATURATION_LABEL[level] || level;
+    badge.className = `workload-badge is-${level}`;
+  }
+  const fill = document.querySelector('#workload-track-fill');
+  if (fill) {
+    fill.style.width = `${Math.min(100, Math.round((state.saturation.ratio || 0) * 100))}%`;
+    fill.className = `is-${level}`;
+  }
+  const quota = document.querySelector('#workload-quota');
+  if (quota) {
+    const base = totals.opt || 0;
+    const percentVsOpt = base > 0 ? Math.round((totals.fact / base) * 100) : 0;
+    quota.textContent = `Факт ${workloadHours(totals.fact)} ч — это ${percentVsOpt}% от оптимальной планки (Σy ${totals.opt} ч)`;
+  }
+
+  renderWorkloadTeam(state.employees);
+  renderWorkloadPoints();
+  renderWorkloadRequired();
+}
+
+function renderWorkloadTeam(employees) {
+  const list = document.querySelector('#workload-team-list');
+  if (!list) return;
+  if (!employees.length) {
+    list.innerHTML = '<p class="empty-state">Активных сотрудников нет</p>';
+    return;
+  }
+  const head = '<div class="workload-row is-head"><span class="workload-person">Сотрудник</span>'
+    + '<span class="workload-cell">a</span><span class="workload-cell">x</span>'
+    + '<span class="workload-cell">y</span><span class="workload-cell">z</span></div>';
+  const rows = employees.map((employee) => `
+    <div class="workload-row" data-user-id="${employee.id}">
+      <span class="workload-person"><span class="user-avatar">${avatarMarkup(employee.id, employee.avatar_rev, employee.name)}</span><strong title="${escapeHtml(employee.name)}">${escapeHtml(employee.name)}</strong><small>${escapeHtml(employee.role_name || '')}</small></span>
+      <span class="workload-cell is-fact" title="Проставлено в графике">${workloadHours(employee.fact_hours)}</span>
+      <span class="workload-cell" title="Минимум">${employee.min_hours}</span>
+      <span class="workload-cell" title="Оптимум">${employee.opt_hours}</span>
+      <span class="workload-cell" title="Максимум">${employee.max_hours}</span>
+    </div>`).join('');
+  list.innerHTML = head + rows;
+}
+
+function pointCard(point, config) {
+  const letter = config.letter;
+  const share = workloadOverlap[point];
+  return `
+    <section class="panel settings-panel workload-point ${config.cls}" data-point="${point}">
+      <div class="panel-heading">
+        <div><p class="eyebrow">ТОЧКА</p><h3>${point}</h3></div>
+        <span class="workload-point-total"><strong data-point-total>—</strong><small>ч · ${letter}и</small></span>
+      </div>
+      <div class="workload-point-grid">
+        <div class="workload-point-line"><span>Утро · ${letter}у</span><b data-point-morning>—</b></div>
+        <div class="workload-point-line"><span>Утро вых · ${letter}ув</span><b data-point-weekend>—</b></div>
+        <div class="workload-point-line"><span>Пересмен · ${letter}п</span><b data-point-overlap>—</b></div>
+        <div class="workload-point-line"><span>Вечер · ${letter}в</span><b data-point-evening>—</b></div>
+      </div>
+      <label class="workload-slider">
+        <span class="workload-slider-value"><b data-point-share>${share}%</b> пересменов</span>
+        <input type="range" min="0" max="100" step="5" value="${share}" data-point-range data-point-code="${point}" aria-label="${point}: доля дней с пересменом">
+      </label>
+    </section>`;
+}
+
+function renderWorkloadPoints() {
+  const container = document.querySelector('#workload-points');
+  if (!container || !workloadState) return;
+  container.innerHTML = WORKLOAD_POINTS.map((config) => pointCard(config.code, config)).join('');
+  recalcWorkloadPoints();
+  container.querySelectorAll('[data-point-range]').forEach((input) => {
+    input.addEventListener('input', () => {
+      workloadOverlap[input.dataset.pointCode] = Number(input.value);
+      recalcWorkloadPoints();
+    });
+  });
+}
+
+/* Часы точки при текущей доле пересменов n%:
+   mult = 2 − n/100 (n=100% → ×1, n=0% → ×2). Ползунок двигает Uп, Uу, Uув и Uв. */
+function pointNumbers(code) {
+  const means = workloadState.points[code] || {};
+  const calendar = workloadState.calendar;
+  const share = workloadOverlap[code] / 100;
+  const mult = 2 - share;
+  const morning = calendar.working_days * (means.morning_weekday_hours || 0) * mult;
+  const weekend = calendar.holidays * (means.morning_weekend_hours || 0) * mult;
+  const overlap = calendar.total_days * (means.overlap_hours || 0) * share;
+  const evening = calendar.total_days * (means.evening_hours || 0) * mult;
+  return { morning, weekend, overlap, evening, total: morning + weekend + overlap + evening };
+}
+
+function recalcWorkloadPoints() {
+  if (!workloadState) return;
+  let grand = 0;
+  WORKLOAD_POINTS.forEach((config) => {
+    const card = document.querySelector(`.workload-point[data-point="${config.code}"]`);
+    if (!card) return;
+    const numbers = pointNumbers(config.code);
+    grand += numbers.total;
+    const set = (selector, value) => { const node = card.querySelector(selector); if (node) node.textContent = value; };
+    set('[data-point-morning]', workloadHours(numbers.morning));
+    set('[data-point-weekend]', workloadHours(numbers.weekend));
+    set('[data-point-overlap]', workloadHours(numbers.overlap));
+    set('[data-point-evening]', workloadHours(numbers.evening));
+    set('[data-point-total]', workloadHours(numbers.total));
+    set('[data-point-share]', `${workloadOverlap[config.code]}%`);
+  });
+  workloadRequiredTotal = Math.round(grand);
+  renderWorkloadRequired();
+}
+
+function renderWorkloadRequired() {
+  setText('#workload-required', workloadRequiredTotal);
+  const grid = document.querySelector('#workload-quota-grid');
+  if (!grid || !workloadState) return;
+  const totals = workloadState.totals;
+  const item = (label, target) => {
+    const percent = target > 0 ? Math.round((totals.fact / target) * 100) : 0;
+    return `<div class="workload-quota-item"><span>${label}</span><strong>${percent}%</strong><small>${workloadHours(totals.fact)} из ${target} ч</small></div>`;
+  };
+  grid.innerHTML = item('Мин Σx', totals.min) + item('Опт Σy', totals.opt) + item('Макс Σz', totals.max);
+}
+
+/* --- Нормо-часы: личный кабинет и диалог сотрудника -------------------- */
+
+function applyWorkloadFields(form, values) {
+  if (!form) return;
+  const data = values || DEFAULT_WORKLOAD_HOURS;
+  form.elements.min_hours.value = data.min_hours;
+  form.elements.opt_hours.value = data.opt_hours;
+  form.elements.max_hours.value = data.max_hours;
+}
+
+async function loadMyWorkload() {
+  const form = document.querySelector('#workload-form');
+  if (!form) return;
+  const userId = document.body.dataset.userId;
+  if (!userId) return;
+  try {
+    applyWorkloadFields(form, await api(`/api/users/${userId}/workload`));
+  } catch (error) { applyWorkloadFields(form, null); }
+}
+
+function setupWorkloadForm() {
+  const form = document.querySelector('#workload-form');
+  if (!form) return;
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorNode = document.querySelector('#workload-form-error');
+    const note = document.querySelector('#workload-note');
+    const showError = (message) => { if (errorNode) { errorNode.textContent = message; errorNode.hidden = !message; } };
+    showError('');
+    const userId = document.body.dataset.userId;
+    if (!userId) return;
+    const payload = {
+      min_hours: form.elements.min_hours.value,
+      opt_hours: form.elements.opt_hours.value,
+      max_hours: form.elements.max_hours.value,
+    };
+    if (Number(payload.min_hours) > Number(payload.opt_hours) || Number(payload.opt_hours) > Number(payload.max_hours)) {
+      showError('Нужно, чтобы минимум ≤ оптимум ≤ максимум');
+      return;
+    }
+    const submit = document.querySelector('#workload-submit');
+    if (submit) submit.disabled = true;
+    try {
+      await api(`/api/users/${userId}/workload`, { method: 'PATCH', body: JSON.stringify(payload) });
+      if (note) note.textContent = 'Нормо-часы сохранены';
+      showToast('Нормо-часы сохранены');
+      if (workloadState) loadWorkload();
+    } catch (requestError) { showError(requestError.message); }
+    finally { if (submit) submit.disabled = false; }
+  });
+  loadMyWorkload();
+}
+
+async function loadUserWorkloadFields(form, userId) {
+  try {
+    applyWorkloadFields(form, await api(`/api/users/${userId}/workload`));
+  } catch (error) { applyWorkloadFields(form, null); }
+}
+
 const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const weekdayNames = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'];
 
@@ -1037,6 +1345,37 @@ function templateLabel(template) {
   return `${template.name} · ${template.start}–${template.end} ${template.point}`;
 }
 
+/* Флаги типа смены: по ним «Расчет часов» раскладывает нагрузку УЯ/ДЕ. */
+const TEMPLATE_FLAG_LABELS = [
+  ['is_morning', 'Утро'],
+  ['is_evening', 'Вечер'],
+  ['is_overlap', 'Пересмен'],
+  ['is_weekend', 'Выходные'],
+];
+
+function templateFlagTags(template) {
+  return TEMPLATE_FLAG_LABELS
+    .filter(([key]) => template[key])
+    .map(([, label]) => `<i class="template-flag">${label}</i>`)
+    .join('');
+}
+
+function readTemplateFlags(form) {
+  const flags = {};
+  TEMPLATE_FLAG_LABELS.forEach(([key]) => {
+    const input = form.elements[key];
+    flags[key] = Boolean(input && input.checked);
+  });
+  return flags;
+}
+
+function writeTemplateFlags(form, template) {
+  TEMPLATE_FLAG_LABELS.forEach(([key]) => {
+    const input = form.elements[key];
+    if (input) input.checked = Boolean(template && template[key]);
+  });
+}
+
 function calendarEmployees() {
   return (calendarState?.employees || []).filter((person) => person.iiko_id !== null && person.iiko_id !== undefined);
 }
@@ -1143,7 +1482,7 @@ function renderTemplateSettings() {
     <div class="template-row" data-template-row="${template.id}" draggable="true">
       <span class="template-drag" title="Перетащите, чтобы изменить порядок" aria-hidden="true">⠿</span>
       <span class="template-row-name"><i class="point-swatch ${template.point === 'УЯ' ? 'point-uy' : 'point-de'}"></i>${escapeHtml(template.name)}</span>
-      <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}</span>
+      <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}${templateFlagTags(template)}</span>
       <span class="template-row-actions">
         ${templateReorderMode ? `
           <button class="button button-quiet template-move" type="button" data-template-move="up" data-template-id="${template.id}" ${index === 0 ? 'disabled' : ''} title="Выше">▲</button>
@@ -1162,6 +1501,7 @@ function resetTemplateForm() {
   form.reset();
   form.elements.template_id.value = '';
   form.elements.point.value = 'УЯ';
+  writeTemplateFlags(form, null);
   const error = document.querySelector('#template-form-error');
   if (error) { error.textContent = ''; error.hidden = true; }
   const submit = document.querySelector('#template-submit');
@@ -1178,6 +1518,7 @@ function editTemplate(template) {
   form.elements.start_time.value = template.start;
   form.elements.end_time.value = template.end;
   form.elements.point.value = template.point;
+  writeTemplateFlags(form, template);
   const submit = document.querySelector('#template-submit');
   if (submit) submit.textContent = 'Сохранить шаблон';
   const cancel = document.querySelector('#template-cancel');
@@ -1199,6 +1540,7 @@ function setupShiftTemplates() {
       start_time: form.elements.start_time.value,
       end_time: form.elements.end_time.value,
       point: form.elements.point.value,
+      ...readTemplateFlags(form),
     };
     if (!payload.name) { showError('Укажите название'); return; }
     if (!payload.start_time || !payload.end_time) { showError('Укажите время'); return; }
@@ -1600,7 +1942,11 @@ function setView(name) {
   } else {
     apply();
   }
-  if (name === 'team') loadUsers();
+  if (name === 'team') {
+    loadUsers();
+    // Возврат на «Расчет часов» — освежаем цифры, они могли измениться.
+    if (document.querySelector('#team-workload-panel')?.hidden === false) loadWorkload();
+  }
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
@@ -2941,6 +3287,7 @@ function setupDashboard() {
   setupAppearance();
   setupDrawer();
   setupProfile();
+  setupWorkloadForm();
   setupAnnouncements();
   loadAnnouncements();
   setupDevelopment();
@@ -2969,6 +3316,9 @@ function setupDashboard() {
       form.elements.role.value = user.role;
       form.elements.iiko_id.value = user.iiko_id ?? '';
       form.elements.telegram_username.value = user.telegram_username ?? '';
+      loadUserWorkloadFields(form, user.id);
+    } else {
+      applyWorkloadFields(form, null);
     }
     dialog.showModal();
   };
@@ -2982,11 +3332,24 @@ function setupDashboard() {
     const errorNode = formError;
     const formData = new FormData(form);
     const payload = Object.fromEntries(formData.entries());
+    // Нормо-часы уходят отдельным PATCH: у пользователя их принимает /workload.
+    const workload = {
+      min_hours: payload.min_hours,
+      opt_hours: payload.opt_hours,
+      max_hours: payload.max_hours,
+    };
+    delete payload.min_hours;
+    delete payload.opt_hours;
+    delete payload.max_hours;
     payload.iiko_id = payload.iiko_id || null;
     payload.telegram_username = payload.telegram_username || null;
     try {
       const userId = form.dataset.userId;
-      await api(userId ? `/api/users/${userId}` : '/api/users', { method: userId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
+      const saved = await api(userId ? `/api/users/${userId}` : '/api/users', { method: userId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
+      const targetId = userId || saved?.id;
+      if (targetId && workload.opt_hours) {
+        await api(`/api/users/${targetId}/workload`, { method: 'PATCH', body: JSON.stringify(workload) });
+      }
       dialog.close(); await loadUsers(); showToast(userId ? 'Изменения сохранены' : 'Сотрудник добавлен');
     } catch (error) { errorNode.textContent = error.message; errorNode.hidden = false; }
   });
@@ -3291,6 +3654,7 @@ function setupDashboard() {
     setupStoriesAdmin();
     setupShiftTemplates();
     setupChannelSettings();
+    setupTeamTabs();
   }
 }
 

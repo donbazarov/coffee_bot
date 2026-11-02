@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, chat, gamification, push, schedule_snapshot, stories_service, telegram_login, telegram_publish
+from bot.web import access_code, announcements, avatars, chat, gamification, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -43,6 +43,11 @@ from bot.web.calendar_service import (
     update_shift_template,
 )
 from bot.web.migrations import migrate_legacy_telegram_ids
+from bot.web.workload_service import (
+    get_user_workload,
+    get_workload_stats,
+    update_user_workload,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 ROLE_VALUES = {"newbie", "barista", "senior", "mentor"}
@@ -170,6 +175,7 @@ def migrate_database():
     init_db()
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
+    workload_service.initialize_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
     push.initialize_schema(engine)
@@ -679,6 +685,65 @@ async def reorder_shift_templates_route(request: Request, _: dict[str, Any] = De
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@app.put("/api/shift-templates/{template_id}")
+async def replace_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+    """Полное обновление шаблона. В ТЗ фигурирует POST/PUT, интерфейс шлёт PATCH —
+    метод-алиас добавлен, чтобы API совпадал с описанием."""
+    payload = await _read_json_object(request)
+    try:
+        return update_shift_template(engine, template_id, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+# --------------------------------------------------------------------------- #
+# «Расчет часов»: кадровая насыщенность, план по точкам и нормо-часам
+# --------------------------------------------------------------------------- #
+
+@app.get("/api/team/workload-stats")
+async def team_workload_stats(
+    year: int,
+    month: int,
+    refresh: bool = False,
+    _: dict[str, Any] = Depends(require_manager),
+):
+    """Сводка для дашборда: производственный календарь, факт/план команды,
+    средние длительности смен УЯ и ДЕ. Разрешено старшему и наставнику.
+
+    Расчёт может сходить в isdayoff.ru, поэтому уводим его из event loop.
+    """
+    if year < 2000 or year > 2100 or month < 1 or month > 12:
+        raise HTTPException(status_code=422, detail="Некорректный месяц")
+    return await run_in_threadpool(get_workload_stats, engine, year, month, refresh)
+
+
+@app.get("/api/users/{user_id}/workload")
+def user_workload(user_id: int, user: dict[str, Any] = Depends(require_user)):
+    """Нормо-часы сотрудника: свои видит любой, чужие — наставник/старший."""
+    if user_id != user["id"] and user["role"] not in {"senior", "mentor"}:
+        raise HTTPException(status_code=403, detail="Доступны только свои нормо-часы")
+    try:
+        return get_user_workload(engine, user_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.patch("/api/users/{user_id}/workload")
+async def update_user_workload_route(user_id: int, request: Request, user: dict[str, Any] = Depends(require_csrf)):
+    """Правка нормо-часов (x ≤ y ≤ z): сам сотрудник в профиле или наставник в команде."""
+    if user_id != user["id"] and user["role"] not in {"senior", "mentor"}:
+        raise HTTPException(status_code=403, detail="Можно менять только свои нормо-часы")
+    payload = await _read_json_object(request)
+    try:
+        return update_user_workload(engine, user_id, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
 @app.get("/api/app-settings")
 def app_settings(_: dict[str, Any] = Depends(require_manager)):
     """Каналы Telegram для публикаций — видит и меняет только наставник/старший."""
@@ -1046,7 +1111,9 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
         # Бариста и старшему — базовый опыт сразу при создании: наставнику не
         # нужно помнить о дополнительном действии, уровень появляется сам.
         gamification.grant_base_xp(connection, int(result.lastrowid), values["role"])
-    return {"ok": True}
+        new_user_id = int(result.lastrowid)
+    # id возвращаем, чтобы интерфейс сразу дописал нормо-часы новому сотруднику.
+    return {"ok": True, "id": new_user_id}
 
 
 @app.patch("/api/users/{user_id}")
