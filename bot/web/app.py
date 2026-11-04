@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, chat, gamification, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, announcements, avatars, chat, gamification, knowledge_base, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -91,6 +91,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 # Чат вынесен в отдельный роутер (bot/web/chat.py): общий канал, личные сообщения,
 # загрузка изображений и WebSocket реального времени.
 app.include_router(chat.chat_router)
+# База знаний (bot/web/knowledge_base.py): страницы и справочники зерна/напитков.
+app.include_router(knowledge_base.kb_router)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
@@ -181,6 +183,7 @@ def migrate_database():
     push.initialize_schema(engine)
     chat.initialize_schema(engine)
     gamification.initialize_schema(engine)
+    knowledge_base.initialize_schema(engine)
     # Базовый опыт уже работающей команде выдаётся один раз: у каждого barista и
     # senior уровень должен появиться сразу после раскатки, а не после первой
     # оценки наставника. Повторные запуски ничего не добавляют (идемпотентно).
