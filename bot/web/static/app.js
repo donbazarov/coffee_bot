@@ -2132,6 +2132,7 @@ function setView(name) {
         name === 'development' ? 'Развитие' :
         name === 'control' ? 'Панель управления' :
         name === 'announcements' ? 'Анонсы' :
+        name === 'kb' ? 'База знаний' :
         name === 'chat' ? 'Чат' :
         name === 'profile' ? 'Личный кабинет' :
         `Добрый день, ${title.dataset.name}`;
@@ -2153,6 +2154,7 @@ function setView(name) {
   }
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
+  if (name === 'kb') openKnowledgeBase();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
   closeDrawer();
@@ -3486,6 +3488,423 @@ function setupAnnouncements() {
   refreshPushState();
 }
 
+/* --- База знаний (Notion-lite) --------------------------------------------
+   Разделы: зерно (beans), напитки (drinks), вики (wiki), стандарты (standards).
+   Дерево строится из parent_id, чтение доступно всем сотрудникам, а правка —
+   только senior/mentor (managerRole); запись повторно проверяет бэкенд. */
+
+const CACHE_KEY_KB_LIST = 'neft-cache:kb-list';
+const CACHE_KEY_KB_PAGE = 'neft-cache:kb-page';
+
+const KB_CATEGORIES = [
+  { key: 'beans', label: 'Зерно' },
+  { key: 'drinks', label: 'Напитки' },
+  { key: 'wiki', label: 'Вики' },
+  { key: 'standards', label: 'Стандарты' },
+];
+const KB_CATEGORY_ALL = 'all';
+const KB_ROAST_LABELS = { espresso: 'Эспрессо', filter: 'Фильтр', omni: 'Омни' };
+
+/* Палитра Pantone из ТЗ. hex — приблизительный, только для свотча; значения
+   свои (не пользовательские), поэтому в inline-style подставляются безопасно. */
+const KB_PANTONE = [
+  { value: 'Pantone 178 C', hex: '#f36b5f' },
+  { value: 'Pantone 153 C', hex: '#a35c27' },
+  { value: 'Pantone 7406 C', hex: '#e3a82b' },
+  { value: 'Pantone 1485 C', hex: '#f0a06b' },
+  { value: 'Pantone 7499 C', hex: '#f2f0d6' },
+  { value: 'Pantone 7746 C', hex: '#a8b33d' },
+  { value: 'Pantone 359 C', hex: '#77bd4a' },
+  { value: 'Pantone 325 C', hex: '#4cbfa9' },
+  { value: 'Pantone 277 C', hex: '#9fb8de' },
+  { value: 'Pantone 2577 C', hex: '#c39cd0' },
+  { value: 'Pantone 517 C', hex: '#e8c4d4' },
+  { value: 'Pantone 191 C', hex: '#f0658a' },
+  { value: 'Pantone 423 C', hex: '#92938d' },
+];
+const KB_PANTONE_OTHER = 'другое';
+
+const kbState = {
+  items: [],
+  categories: KB_CATEGORIES.map((item) => item.key),
+  filter: KB_CATEGORY_ALL,
+  selectedId: null,
+  current: null,
+  ready: false,
+  canEdit: managerRole,
+};
+
+function kbCategoryLabel(key) {
+  const found = KB_CATEGORIES.find((item) => item.key === key);
+  return found ? found.label : key;
+}
+
+function kbPantoneHex(value) {
+  const found = KB_PANTONE.find((item) => item.value === value);
+  return found ? found.hex : '#92938d';
+}
+
+/* Краткая метка справочника рядом с пунктом дерева: свотч обжарки — для зерна,
+   категория — для напитка. */
+function kbReferenceBadge(reference) {
+  if (!reference) return '';
+  if (reference.type === 'beans') {
+    const roast = KB_ROAST_LABELS[reference.roast_type] || reference.roast_type || '';
+    return `<span class="kb-ref"><i class="kb-swatch" style="--kb-swatch:${kbPantoneHex(reference.pantone_color)}"></i>${escapeHtml(roast)}</span>`;
+  }
+  if (reference.type === 'drinks') {
+    return `<span class="kb-ref kb-ref-plain">${escapeHtml(reference.category || '')}</span>`;
+  }
+  return '';
+}
+
+function kbFilterChips() {
+  const node = document.querySelector('#kb-filters');
+  if (!node) return;
+  const chips = [`<button class="chip ${kbState.filter === KB_CATEGORY_ALL ? 'is-selected' : ''}" type="button" data-kb-filter="${KB_CATEGORY_ALL}">Все</button>`];
+  for (const key of kbState.categories) {
+    chips.push(`<button class="chip ${kbState.filter === key ? 'is-selected' : ''}" type="button" data-kb-filter="${key}">${escapeHtml(kbCategoryLabel(key))}</button>`);
+  }
+  node.innerHTML = chips.join('');
+}
+
+/* Дерево одной категории: корни — страницы без родителя (или с родителем вне
+   выборки), дети — по parent_id. */
+function kbCategoryTree(items) {
+  const ids = new Set(items.map((item) => item.id));
+  const byParent = (parentId) => items
+    .filter((item) => item.parent_id === parentId)
+    .sort((a, b) => String(a.title).localeCompare(String(b.title), 'ru'));
+  const build = (list, depth) => `<ul class="kb-group">${list.map((item) => {
+    const active = item.id === kbState.selectedId;
+    const children = byParent(item.id);
+    return `<li class="kb-leaf"><button class="kb-node${active ? ' is-active' : ''}" type="button"${active ? ' aria-current="true"' : ''} data-kb-open="${item.id}" style="--kb-depth:${depth}"><span class="kb-node-label">${escapeHtml(item.title)}</span>${kbReferenceBadge(item.reference)}</button>${children.length ? build(children, depth + 1) : ''}</li>`;
+  }).join('')}</ul>`;
+  const roots = items
+    .filter((item) => item.parent_id == null || !ids.has(item.parent_id))
+    .sort((a, b) => String(a.title).localeCompare(String(b.title), 'ru'));
+  return build(roots, 0);
+}
+
+function renderKbTree() {
+  const node = document.querySelector('#kb-tree');
+  if (!node) return;
+  const all = kbState.items;
+  const visible = kbState.filter === KB_CATEGORY_ALL ? all : all.filter((item) => item.category === kbState.filter);
+  const count = document.querySelector('#kb-count');
+  if (count) count.textContent = String(visible.length);
+  if (!visible.length) {
+    node.innerHTML = '<p class="kb-empty kb-empty-tree">Пока нет страниц</p>';
+    return;
+  }
+  const categories = kbState.filter === KB_CATEGORY_ALL ? kbState.categories : [kbState.filter];
+  const parts = [];
+  for (const key of categories) {
+    const items = all.filter((item) => item.category === key);
+    if (!items.length) continue;
+    parts.push(`<section class="kb-category" data-kb-category="${key}"><p class="kb-category-title">${escapeHtml(kbCategoryLabel(key))}<span class="kb-category-count">${items.length}</span></p>${kbCategoryTree(items)}</section>`);
+  }
+  node.innerHTML = parts.join('');
+}
+
+function kbTime(iso) {
+  const date = iso ? new Date(iso) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('ru-RU', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function kbFieldMarkup(label, value) {
+  if (value == null || String(value).trim() === '') return '';
+  return `<div class="kb-field"><p class="kb-field-label">${escapeHtml(label)}</p><p class="kb-field-value">${escapeHtml(value)}</p></div>`;
+}
+
+function kbBeanMarkup(bean) {
+  if (!bean) return '';
+  const pantone = bean.pantone_color
+    ? `<div class="kb-pantone"><i class="kb-swatch kb-swatch-lg" style="--kb-swatch:${kbPantoneHex(bean.pantone_color)}"></i><div><strong>${escapeHtml(bean.pantone_color)}</strong><small>Pantone · фирменный цвет зерна</small></div></div>`
+    : '';
+  const roast = KB_ROAST_LABELS[bean.roast_type] || bean.roast_type;
+  const status = Number(bean.is_active) ? '' : '<span class="kb-badge kb-badge-muted">Не активно</span>';
+  return `${pantone}<div class="kb-fields">${kbFieldMarkup('Обжарка', roast)}${kbFieldMarkup('Описание', bean.description)}</div>${status}`;
+}
+
+function kbDrinkMarkup(drink) {
+  if (!drink) return '';
+  const status = Number(drink.is_active) ? '' : '<span class="kb-badge kb-badge-muted">Не активно</span>';
+  return `<div class="kb-fields">${kbFieldMarkup('Категория', drink.category)}${kbFieldMarkup('Технологическая карта (ТТК)', drink.ttk)}${kbFieldMarkup('Состав', drink.ingredients)}${kbFieldMarkup('Правила подачи', drink.serve_rules)}${kbFieldMarkup('Описание', drink.description)}</div>${status}`;
+}
+
+/* Тело страницы (wiki/standards) может лежать как обычный текст или как JSON —
+   показываем читаемо в обоих случаях. */
+function kbBodyMarkup(page) {
+  const raw = page.content_json;
+  if (!raw) return '';
+  let text = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === 'string') text = parsed;
+    else if (parsed && typeof parsed === 'object' && typeof parsed.text === 'string') text = parsed.text;
+    else text = JSON.stringify(parsed, null, 2);
+  } catch (error) { /* не JSON — выводим как есть */ }
+  return kbFieldMarkup('Содержимое', text);
+}
+
+function renderKbPage() {
+  const node = document.querySelector('#kb-page');
+  if (!node) return;
+  const status = document.querySelector('#kb-tree-status');
+  if (status) status.textContent = '';
+  const page = kbState.current;
+  if (!page) {
+    node.innerHTML = '<p class="kb-empty">Выберите страницу слева, чтобы открыть её. Зерно — фирменные цвета Pantone, напитки — ТТК, состав и правила подачи.</p>';
+    return;
+  }
+  const meta = [`<span class="kb-chip">${escapeHtml(kbCategoryLabel(page.category))}</span>`];
+  if (page.author_name) meta.push(`<span class="kb-meta">${escapeHtml(page.author_name)}</span>`);
+  if (page.updated_at) meta.push(`<span class="kb-meta">обновлено ${escapeHtml(kbTime(page.updated_at))}</span>`);
+  const actions = kbState.canEdit
+    ? `<div class="kb-actions"><button class="button button-quiet" type="button" data-kb-edit="${page.id}"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg> Редактировать</button><button class="button button-quiet kb-danger" type="button" data-kb-delete="${page.id}"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg> Удалить</button></div>`
+    : '';
+  let body = '';
+  if (page.category === 'beans') body = kbBeanMarkup(page.bean);
+  else if (page.category === 'drinks') body = kbDrinkMarkup(page.drink);
+  const content = kbBodyMarkup(page);
+  node.innerHTML = `<header class="kb-page-head"><div><p class="eyebrow">${escapeHtml(kbCategoryLabel(page.category))}</p><h3 class="kb-page-title">${escapeHtml(page.title)}</h3><div class="kb-meta-row">${meta.join('')}</div></div>${actions}</header><div class="kb-page-body">${body}${content}</div>`;
+}
+
+async function openKbPage(id) {
+  const numeric = Number(id);
+  kbState.selectedId = numeric;
+  renderKbTree();
+  const status = document.querySelector('#kb-tree-status');
+  if (status) status.textContent = 'Загрузка страницы…';
+  const cached = readCache(`${CACHE_KEY_KB_PAGE}:${numeric}`);
+  if (cached) { kbState.current = cached; renderKbPage(); }
+  try {
+    const page = await api(`/api/kb/pages/${numeric}`);
+    kbState.current = page;
+    writeCache(`${CACHE_KEY_KB_PAGE}:${numeric}`, page);
+    if (status) status.textContent = '';
+    renderKbPage();
+  } catch (error) {
+    if (error.isOffline) {
+      setNetworkStatus(false, lastSyncTimestamp());
+      if (status && !cached) status.textContent = 'Нет связи — страница ещё не сохранена для офлайна';
+    } else {
+      showToast(error.message);
+    }
+  }
+}
+
+async function loadKnowledgeBase() {
+  // Офлайн-режим: сразу показываем сохранённую структуру разделов.
+  const cached = readCache(CACHE_KEY_KB_LIST);
+  if (cached && Array.isArray(cached.items)) {
+    kbState.items = cached.items;
+    if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
+    kbFilterChips();
+    renderKbTree();
+  }
+  try {
+    const data = await api('/api/kb/pages');
+    kbState.items = data.items || [];
+    if (Array.isArray(data.categories) && data.categories.length) kbState.categories = data.categories;
+    writeCache(CACHE_KEY_KB_LIST, { items: kbState.items, categories: kbState.categories });
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
+    kbFilterChips();
+    renderKbTree();
+    return true;
+  } catch (error) {
+    if (error.isOffline) {
+      setNetworkStatus(false, lastSyncTimestamp());
+      if (!cached) showToast('Связь с сервером потеряна');
+    } else {
+      showToast(error.message);
+    }
+    return false;
+  }
+}
+
+/* Открытие раздела: первая загрузка рисует каркас, а пустой раздел сразу
+   открывает первую доступную страницу, чтобы не было пустого экрана. */
+async function openKnowledgeBase() {
+  if (!kbState.ready) { kbFilterChips(); renderKbTree(); kbState.ready = true; }
+  const ok = await loadKnowledgeBase();
+  if (ok && !kbState.current && kbState.items.length) openKbPage(kbState.items[0].id);
+}
+
+/* Заполняет select Pantone один раз (единый источник — KB_PANTONE). */
+function kbFillPantone() {
+  const select = document.querySelector('#kb-field-pantone');
+  if (!select || select.dataset.filled) return;
+  select.innerHTML = KB_PANTONE.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.value)}</option>`).join('')
+    + `<option value="${escapeHtml(KB_PANTONE_OTHER)}">Другое…</option>`;
+  select.dataset.filled = '1';
+}
+
+/* Показывает поля выбранной категории и «другой» Pantone. */
+function kbSyncFields() {
+  const form = document.querySelector('#kb-page-form');
+  if (!form) return;
+  const category = form.elements.category.value;
+  form.querySelectorAll('[data-kb-for]').forEach((field) => {
+    field.hidden = !String(field.dataset.kbFor).split(/\s+/).includes(category);
+  });
+  const custom = document.querySelector('#kb-pantone-custom');
+  if (custom) custom.hidden = form.elements.pantone_select.value !== KB_PANTONE_OTHER;
+}
+
+function kbFormError(message) {
+  const node = document.querySelector('#kb-form-error');
+  if (!node) { showToast(message); return; }
+  node.textContent = message;
+  node.hidden = false;
+}
+
+function openKbDialog(page) {
+  const dialog = document.querySelector('#kb-page-dialog');
+  const form = document.querySelector('#kb-page-form');
+  if (!dialog || !form) return;
+  kbFillPantone();
+  form.reset();
+  const errorNode = document.querySelector('#kb-form-error');
+  if (errorNode) errorNode.hidden = true;
+  form.dataset.pageId = page ? String(page.id) : '';
+  document.querySelector('#kb-dialog-kicker').textContent = page ? 'ПРАВКА СТРАНИЦЫ' : 'НОВАЯ СТРАНИЦА';
+  document.querySelector('#kb-dialog-title').textContent = page ? 'Изменить страницу' : 'Страница';
+  document.querySelector('#kb-form-submit').textContent = page ? 'Сохранить' : 'Создать';
+  form.elements.is_active.checked = true;
+  if (!page) {
+    form.elements.category.value = kbState.filter !== KB_CATEGORY_ALL ? kbState.filter : 'beans';
+    form.elements.parent_id.value = '';
+  } else {
+    form.elements.category.value = page.category;
+    form.elements.parent_id.value = page.parent_id != null ? String(page.parent_id) : '';
+    form.elements.title.value = page.title || '';
+    if (page.category === 'beans' && page.bean) {
+      form.elements.roast_type.value = page.bean.roast_type || 'espresso';
+      const pantone = page.bean.pantone_color || '';
+      const known = KB_PANTONE.some((item) => item.value === pantone);
+      form.elements.pantone_select.value = known ? pantone : (pantone ? KB_PANTONE_OTHER : KB_PANTONE[0].value);
+      form.elements.pantone_custom.value = known ? '' : pantone;
+      form.elements.bean_description.value = page.bean.description || '';
+      form.elements.is_active.checked = Number(page.bean.is_active) !== 0;
+    } else if (page.category === 'drinks' && page.drink) {
+      form.elements.drink_category.value = page.drink.category || 'черный кофе';
+      form.elements.ttk.value = page.drink.ttk || '';
+      form.elements.ingredients.value = page.drink.ingredients || '';
+      form.elements.serve_rules.value = page.drink.serve_rules || '';
+      form.elements.drink_description.value = page.drink.description || '';
+      form.elements.is_active.checked = Number(page.drink.is_active) !== 0;
+    } else {
+      form.elements.content_json.value = page.content_json || '';
+    }
+  }
+  kbSyncFields();
+  dialog.showModal();
+}
+
+async function submitKbForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const errorNode = document.querySelector('#kb-form-error');
+  if (errorNode) errorNode.hidden = true;
+  const category = form.elements.category.value;
+  const title = form.elements.title.value.trim();
+  if (!title) { kbFormError('Укажите название страницы'); return; }
+  const payload = { title, category };
+  const parentId = form.elements.parent_id.value;
+  payload.parent_id = parentId ? Number(parentId) : null;
+  if (category === 'beans') {
+    let pantone = form.elements.pantone_select.value;
+    if (pantone === KB_PANTONE_OTHER) pantone = form.elements.pantone_custom.value.trim();
+    payload.bean = {
+      name: title,
+      roast_type: form.elements.roast_type.value,
+      pantone_color: pantone || null,
+      description: form.elements.bean_description.value.trim() || null,
+      is_active: form.elements.is_active.checked,
+    };
+  } else if (category === 'drinks') {
+    payload.drink = {
+      title,
+      category: form.elements.drink_category.value,
+      ttk: form.elements.ttk.value.trim() || null,
+      ingredients: form.elements.ingredients.value.trim() || null,
+      description: form.elements.drink_description.value.trim() || null,
+      serve_rules: form.elements.serve_rules.value.trim() || null,
+      is_active: form.elements.is_active.checked,
+    };
+  } else {
+    payload.content_json = form.elements.content_json.value.trim() || null;
+  }
+  const pageId = form.dataset.pageId;
+  const submit = document.querySelector('#kb-form-submit');
+  if (submit) submit.disabled = true;
+  try {
+    let targetId = pageId ? Number(pageId) : null;
+    if (pageId) {
+      await api(`/api/kb/pages/${pageId}`, { method: 'PUT', body: JSON.stringify(payload) });
+      showToast('Страница сохранена');
+    } else {
+      const data = await api('/api/kb/pages', { method: 'POST', body: JSON.stringify(payload) });
+      targetId = Number(data.id);
+      showToast('Страница создана');
+    }
+    document.querySelector('#kb-page-dialog')?.close();
+    await loadKnowledgeBase();
+    if (targetId) openKbPage(targetId);
+  } catch (error) {
+    kbFormError(error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function deleteKbPage(id) {
+  const page = kbState.items.find((item) => item.id === id)
+    || (kbState.current && kbState.current.id === id ? kbState.current : null);
+  const name = page ? page.title : 'страницу';
+  if (!window.confirm(`Удалить «${name}»? Действие необратимо.`)) return;
+  try {
+    await api(`/api/kb/pages/${id}`, { method: 'DELETE' });
+    showToast('Страница удалена');
+    kbState.current = null;
+    kbState.selectedId = null;
+    renderKbPage();
+    await loadKnowledgeBase();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function setupKnowledgeBase() {
+  document.querySelector('#kb-filters')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-kb-filter]');
+    if (!chip) return;
+    kbState.filter = chip.dataset.kbFilter;
+    kbFilterChips();
+    renderKbTree();
+  });
+  document.querySelector('#kb-tree')?.addEventListener('click', (event) => {
+    const node = event.target.closest('[data-kb-open]');
+    if (node) openKbPage(Number(node.dataset.kbOpen));
+  });
+  document.querySelector('#kb-add-page')?.addEventListener('click', () => openKbDialog(null));
+  document.querySelector('#kb-page')?.addEventListener('click', (event) => {
+    const edit = event.target.closest('[data-kb-edit]');
+    if (edit) { openKbDialog(kbState.current); return; }
+    const remove = event.target.closest('[data-kb-delete]');
+    if (remove) deleteKbPage(Number(remove.dataset.kbDelete));
+  });
+  const form = document.querySelector('#kb-page-form');
+  if (form) {
+    form.elements.category.addEventListener('change', kbSyncFields);
+    form.elements.pantone_select.addEventListener('change', kbSyncFields);
+    form.addEventListener('submit', submitKbForm);
+  }
+}
+
 function setupDashboard() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
   setupAppearance();
@@ -3494,6 +3913,7 @@ function setupDashboard() {
   setupWorkloadForm();
   setupAnnouncements();
   loadAnnouncements();
+  setupKnowledgeBase();
   setupDevelopment();
   setupAchievements();
   loadDevelopment();

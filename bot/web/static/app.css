@@ -1317,3 +1317,65 @@ body { transition: background-color .3s ease, color .3s ease; }
   .workload-track i, .workload-track u { transition: none; }
 }
 
+
+/* =========================================================================
+   База знаний (Notion-lite): дерево разделов, карточки зерна и напитков,
+   структурированный текст. Две колонки на десктопе, одна — на телефоне.
+   ========================================================================= */
+.kb-layout { display: grid; gap: 14px; }
+.kb-tree-panel { padding: 19px 21px; }
+.kb-page-panel { padding: 22px 24px 24px; }
+.kb-tree { display: flex; flex-direction: column; gap: 14px; }
+.kb-category { display: flex; flex-direction: column; gap: 6px; }
+.kb-category-title { display: flex; align-items: center; justify-content: space-between; margin: 0; color: var(--muted); font: 10px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.kb-category-count { color: var(--dim); font-size: 10px; }
+.kb-group { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.kb-leaf { display: flex; flex-direction: column; }
+.kb-node { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 8px 10px 8px calc(10px + var(--kb-depth, 0) * 14px); border: 1px solid transparent; background: transparent; color: var(--text-soft); text-align: left; cursor: pointer; border-radius: 8px; transition: background-color .2s, border-color .2s, color .2s; }
+.kb-node:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
+.kb-node.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+.kb-node-label { flex: 1 1 auto; min-width: 0; font-size: 14px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-ref { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font: 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+.kb-ref-plain { text-transform: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 4px; background: var(--kb-swatch, #92938d); box-shadow: inset 0 0 0 1px rgba(var(--hl), .28); }
+.kb-swatch-lg { width: 44px; height: 44px; border-radius: 10px; flex: 0 0 auto; }
+.kb-tree-status { margin: 12px 0 0; min-height: 1em; color: var(--muted); font-size: 12px; }
+.kb-empty { margin: 0; color: var(--muted); font-size: 18px; line-height: 1.6; }
+.kb-empty-tree { padding: 2px 0; font-size: 13px; }
+.kb-page-head { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+.kb-page-title { margin: 6px 0 10px; font: 600 24px/1.25 var(--sans); letter-spacing: -.01em; }
+.kb-meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.kb-chip { display: inline-flex; align-items: center; padding: 4px 11px; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--text); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; }
+.kb-meta { color: var(--muted); font-size: 11px; }
+.kb-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.kb-actions .button { min-height: 38px; }
+.kb-danger { color: var(--danger-text); }
+.kb-page-body { display: flex; flex-direction: column; gap: 18px; }
+.kb-pantone { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--line); background: var(--surface-sunken); border-radius: 12px; }
+.kb-pantone strong { display: block; font-size: 15px; }
+.kb-pantone small { color: var(--muted); font-size: 11px; }
+.kb-fields { display: grid; grid-template-columns: 1fr; gap: 16px; }
+.kb-field { min-width: 0; }
+.kb-field-label { margin: 0 0 5px; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.kb-field-value { margin: 0; color: var(--text); font-size: 15px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
+.kb-badge { align-self: flex-start; display: inline-block; padding: 4px 10px; border: 1px solid var(--line-strong); color: var(--muted); font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; }
+.kb-badge-muted { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+/* Поля формы редактора переключаются по категории (data-kb-for). */
+.kb-dialog .kb-form-group { display: flex; flex-direction: column; border: 0; margin: 0; padding: 0; }
+.kb-dialog .kb-form-group[hidden] { display: none; }
+.kb-dialog .kb-form-group legend { padding: 4px 0; color: var(--muted); font: 9px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+@media (min-width: 900px) {
+  .kb-layout { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: start; }
+  .kb-fields { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) {
+  .kb-page-panel { padding: 18px 16px 20px; }
+  .kb-page-title { font-size: 20px; }
+  .kb-empty { font-size: 15px; }
+  .kb-actions { width: 100%; }
+  .kb-actions .button { flex: 1 1 auto; justify-content: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-node { transition: none; }
+}
+
