@@ -4437,7 +4437,10 @@ function kbRoastLabel(value) {
 /* Ставит выбранные типы обжарки в чипах — типов может быть несколько. */
 function kbSetRoast(value) {
   const values = kbRoastValues(value);
-  const hidden = document.querySelector('#kb-roast input[name="roast_type"]');
+  // Скрытое поле лежит рядом с чипами (сосед #kb-roast внутри формы), а не
+  // внутри него, поэтому ищем в области формы, иначе значение обжарки не
+  // сохраняется и при отправке уходит дефолтный «espresso».
+  const hidden = document.querySelector('#kb-page-form input[name="roast_type"]');
   if (hidden) hidden.value = values.join(',');
   document.querySelectorAll('#kb-roast .kb-seg-button').forEach((node) => {
     const active = values.includes(node.dataset.roast);
@@ -4453,7 +4456,7 @@ function kbToggleRoast(value) {
   const active = !button.classList.contains('is-selected');
   button.classList.toggle('is-selected', active);
   button.setAttribute('aria-pressed', active ? 'true' : 'false');
-  const hidden = document.querySelector('#kb-roast input[name="roast_type"]');
+  const hidden = document.querySelector('#kb-page-form input[name="roast_type"]');
   if (hidden) {
     hidden.value = [...document.querySelectorAll('#kb-roast .kb-seg-button.is-selected')]
       .map((node) => node.dataset.roast).join(',');
