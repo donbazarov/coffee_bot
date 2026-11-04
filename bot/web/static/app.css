@@ -179,7 +179,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .view.is-visible { display: block; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 23px; }
 .section-heading h2 { margin: 6px 0 0; font: 600 30px/1.2 var(--sans); letter-spacing: -.015em; }
-.panel { min-width: 0; border: 1px solid var(--line); background: var(--surface); }
+/* Панель сразу с внутренними отступами по умолчанию: «голые» секции вроде
+   истории оценок больше не прижимают текст к рамке. Модификаторы
+   (.settings-panel, .analytics-panel, .level-panel, .announcements-panel, …)
+   задают собственный padding ниже по файлу и переопределяют это значение. */
+.panel { min-width: 0; padding: 19px 21px; border: 1px solid var(--line); background: var(--surface); }
 .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .panel-heading h3 { margin: 5px 0 0; font: 600 18px/1.3 var(--sans); letter-spacing: -.01em; }
 .panel-index { color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
@@ -335,6 +339,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .user-telegram { display: none; }
 }
 @media (max-width: 760px) {
+  /* Базовые панели на телефоне — теснее, но всё равно с отступами. */
+  .panel { padding: 16px 14px; }
   .login-screen { padding: 22px 23px 19px; }
   .login-content { padding: 60px 0 75px; }
   .login-content h1 { font-size: clamp(43px, 13vw, 64px); }
