@@ -47,6 +47,55 @@ PHOTO_MAX_SIDE = 1600
 PHOTO_FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.webp$")
 PHOTO_URL_RE = re.compile(r"^/api/evaluations/photos/[0-9a-f]{32}\.webp$")
 
+# Шкала дискретных значений в интерфейсе контроля качества: 0 и 2.0…5.0 шагом 0.5.
+SCORE_STEPS = (0.0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0)
+
+# Параметры оценки напитка по категории `menu_drinks`: (код, подпись, ветка, вес).
+# Вес > 1 — множитель из ТЗ («баланс (x2)», «точность описания (x2)»): параметр
+# входит в среднее ветки большее число раз. Категории без спец-набора (чай,
+# не кофе) оцениваются базовым набором DEFAULT_DRINK_PARAMS.
+DRINK_PARAMS: dict[str, tuple[tuple[str, str, str, int], ...]] = {
+    "черный кофе": (
+        ("presentation", "Подача", "standards", 1),
+        ("balance", "Баланс", "sensory", 2),
+        ("body", "Тело", "sensory", 1),
+        ("bouquet", "Букет", "sensory", 1),
+        ("aftertaste", "Послевкусие", "sensory", 1),
+        ("description_accuracy", "Точность описания", "sensory", 2),
+    ),
+    "кофе с молоком": (
+        ("presentation", "Подача", "standards", 1),
+        ("balance", "Баланс", "sensory", 1),
+        ("bouquet", "Букет", "sensory", 1),
+        ("latte_art", "Латте-арт", "milk", 1),
+        ("milk_quality", "Качество молока", "milk", 2),
+        ("description_accuracy", "Точность описания", "sensory", 2),
+    ),
+    "авторский": (
+        ("presentation", "Подача", "standards", 1),
+        ("balance", "Баланс", "sensory", 1),
+        ("appearance", "Внешний вид", "standards", 1),
+        ("description_accuracy", "Точность описания", "sensory", 1),
+    ),
+}
+
+DEFAULT_DRINK_PARAMS: tuple[tuple[str, str, str, int], ...] = (
+    ("presentation", "Подача", "standards", 1),
+    ("balance", "Баланс", "sensory", 1),
+    ("description_accuracy", "Точность описания", "sensory", 1),
+)
+
+# Критерии порядка и чистоты заведения — все начисляют опыт в ветку «Стандарты».
+CLEANLINESS_PARAMS: tuple[tuple[str, str, str, int], ...] = (
+    ("shift_order", "Порядок на смене", "standards", 1),
+    ("work_zones", "Чистота рабочих зон", "standards", 1),
+    ("hall_cleanliness", "Чистота зала", "standards", 1),
+    ("restroom", "Туалет", "standards", 1),
+    ("hygiene", "Гигиена", "standards", 1),
+    ("service", "Сервис", "standards", 1),
+    ("appearance", "Внешний вид", "standards", 1),
+)
+
 # Код ачивки: строчная латиница, цифры и подчёркивания. Совпадает с сидами и
 # гарантирует, что code пригоден для JSON-payload правил и будущего рендера.
 ACHIEVEMENT_CODE_RE = re.compile(r"^[a-z0-9_]{2,64}$")
@@ -182,6 +231,22 @@ def initialize_schema(engine: Engine) -> None:
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_evaluations_bean
             ON evaluations (bean_id)
+        """))
+        # Контроль качества: точка оценки, тип сессии (напиток/чистота), флаг
+        # общей оценки чистоты (записывается каждому бариста на смене), снимок
+        # категории напитка и текстовые поля. Колонки добавляем идемпотентно —
+        # на базах до этого релиза их нет.
+        _add_column_if_missing(connection, "evaluations", "shift_point", "TEXT")
+        _add_column_if_missing(connection, "evaluations", "evaluation_type",
+                               "TEXT NOT NULL DEFAULT 'drink'")
+        _add_column_if_missing(connection, "evaluations", "is_general_cleanliness",
+                               "INTEGER NOT NULL DEFAULT 0")
+        _add_column_if_missing(connection, "evaluations", "comment", "TEXT")
+        _add_column_if_missing(connection, "evaluations", "mentor_comment", "TEXT")
+        _add_column_if_missing(connection, "evaluations", "drink_category", "TEXT")
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_evaluations_type
+            ON evaluations (evaluation_type, created_at)
         """))
         for position, (code, name, description) in enumerate(BRANCH_SEEDS):
             connection.execute(text("""
@@ -334,42 +399,75 @@ def xp_for_score(score: float) -> int:
     return 0
 
 
-def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int,
-                     scores: dict[str, float], photo_url: str | None,
-                     drink_id: int | None = None, bean_id: int | None = None) -> dict[str, Any]:
-    """Конвертирует оценки в XP и пишет их в лог + баланс веток.
+def params_for_category(category: str | None) -> tuple[tuple[str, str, str, int], ...]:
+    """Набор параметров напитка по категории `menu_drinks` (с фоллбеком)."""
+    return DRINK_PARAMS.get(category or "", DEFAULT_DRINK_PARAMS)
 
-    `drink_id` и `bean_id` — необязательная привязка к справочникам базы знаний
-    (напиток и зерно), уже проверенная на стороне API.
 
-    Возвращает разбивку начислений по веткам и id сохранённой оценки.
-    Запись `evaluations` и начисления идут в одной транзакции — частичных
-    результатов не бывает.
+def branch_scores_from_params(spec: tuple[tuple[str, str, str, int], ...],
+                              scores: dict[str, float]) -> dict[str, float]:
+    """Взвешенное среднее по веткам из параметров оценки.
+
+    Каждый параметр относится к ветке и имеет вес (множитель из ТЗ). Возвращает
+    {branch_code: средневзвешенный балл} только по веткам с заполненными
+    параметрами.
     """
-    awarded: dict[str, int] = {}
-    for branch in active_branches(connection):
-        score = scores.get(branch["code"])
-        if score is None:
+    totals: dict[str, float] = {}
+    weights: dict[str, float] = {}
+    for code, _label, branch, weight in spec:
+        value = scores.get(code)
+        if value is None:
             continue
-        awarded[branch["code"]] = xp_for_score(float(score))
+        factor = max(1, int(weight))
+        totals[branch] = totals.get(branch, 0.0) + float(value) * factor
+        weights[branch] = weights.get(branch, 0.0) + factor
+    return {branch: round(totals[branch] / weights[branch], 4)
+            for branch in totals if weights.get(branch)}
 
-    total = sum(awarded.values())
+
+def overall_score_from_params(spec: tuple[tuple[str, str, str, int], ...],
+                              scores: dict[str, float]) -> float:
+    """Единый итоговый балл напитка: взвешенное среднее всех параметров."""
+    total = 0.0
+    weight_sum = 0.0
+    for code, _label, _branch, weight in spec:
+        value = scores.get(code)
+        if value is None:
+            continue
+        factor = max(1, int(weight))
+        total += float(value) * factor
+        weight_sum += factor
+    return round(total / weight_sum, 2) if weight_sum else 0.0
+
+
+def _write_evaluation(connection: Connection, *, evaluator_id: int, employee_id: int,
+                      raw_scores: dict[str, Any], photo_url: str | None, xp_awarded: int,
+                      drink_id: int | None, bean_id: int | None, evaluation_type: str,
+                      shift_point: str | None, comment: str | None, mentor_comment: str | None,
+                      drink_category: str | None, is_general_cleanliness: int) -> int:
+    """Пишет одну строку оценки и возвращает её id."""
     result = connection.execute(text("""
         INSERT INTO evaluations
-            (evaluator_id, employee_id, raw_scores, photo_url, xp_awarded, drink_id, bean_id)
+            (evaluator_id, employee_id, raw_scores, photo_url, xp_awarded, drink_id, bean_id,
+             evaluation_type, shift_point, comment, mentor_comment, drink_category, is_general_cleanliness)
         VALUES
-            (:evaluator_id, :employee_id, :raw_scores, :photo_url, :xp_awarded, :drink_id, :bean_id)
+            (:evaluator_id, :employee_id, :raw_scores, :photo_url, :xp_awarded, :drink_id, :bean_id,
+             :evaluation_type, :shift_point, :comment, :mentor_comment, :drink_category, :is_general_cleanliness)
     """), {
-        "evaluator_id": evaluator_id,
-        "employee_id": employee_id,
-        "raw_scores": json.dumps(scores, ensure_ascii=False),
-        "photo_url": photo_url,
-        "xp_awarded": total,
-        "drink_id": drink_id,
-        "bean_id": bean_id,
+        "evaluator_id": evaluator_id, "employee_id": employee_id,
+        "raw_scores": json.dumps(raw_scores, ensure_ascii=False),
+        "photo_url": photo_url, "xp_awarded": xp_awarded,
+        "drink_id": drink_id, "bean_id": bean_id,
+        "evaluation_type": evaluation_type, "shift_point": shift_point,
+        "comment": comment, "mentor_comment": mentor_comment,
+        "drink_category": drink_category, "is_general_cleanliness": is_general_cleanliness,
     })
-    evaluation_id = int(result.lastrowid)
+    return int(result.lastrowid)
 
+
+def _award_branch_xp(connection: Connection, *, employee_id: int, awarded: dict[str, int],
+                     evaluation_id: int, evaluator_id: int) -> None:
+    """Пишет транзакции опыта и обновляет баланс веток сотрудника."""
     for branch in active_branches(connection):
         xp = awarded.get(branch["code"], 0)
         if xp <= 0:
@@ -384,13 +482,113 @@ def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int
             WHERE user_id = :user_id AND branch_id = :branch_id
         """), {"user_id": employee_id, "branch_id": branch["id"], "amount": xp})
 
-    # Ачивки проверяем после начисления опыта и записи оценки: их правила видят
-    # уже обновлённые `user_skills` и свежую строку в `evaluations`. Транзакция
-    # та же, что у оценки, — частичной выдачи не бывает.
-    unlocked = check_user_achievements(connection, employee_id, "evaluation")
 
+def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int,
+                     scores: dict[str, float], photo_url: str | None,
+                     drink_id: int | None = None, bean_id: int | None = None) -> dict[str, Any]:
+    """Оценка «по веткам» (обратная совместимость): scores — {branch_code: балл}.
+
+    Возвращает разбивку начислений по веткам и id сохранённой оценки. Запись
+    `evaluations` и начисления идут в одной транзакции — частичных результатов
+    не бывает.
+    """
+    awarded: dict[str, int] = {}
+    for branch in active_branches(connection):
+        score = scores.get(branch["code"])
+        if score is None:
+            continue
+        awarded[branch["code"]] = xp_for_score(float(score))
+
+    total = sum(awarded.values())
+    evaluation_id = _write_evaluation(
+        connection, evaluator_id=evaluator_id, employee_id=employee_id,
+        raw_scores=scores, photo_url=photo_url, xp_awarded=total,
+        drink_id=drink_id, bean_id=bean_id, evaluation_type="drink",
+        shift_point=None, comment=None, mentor_comment=None,
+        drink_category=None, is_general_cleanliness=0,
+    )
+    _award_branch_xp(connection, employee_id=employee_id, awarded=awarded,
+                     evaluation_id=evaluation_id, evaluator_id=evaluator_id)
+
+    unlocked = check_user_achievements(connection, employee_id, "evaluation")
     return {"ok": True, "id": evaluation_id, "xp_awarded": awarded,
             "total_xp": total, "achievements": unlocked}
+
+
+def apply_drink_evaluation(connection: Connection, evaluator_id: int, employee_id: int,
+                           category: str | None, scores: dict[str, float],
+                           photo_url: str | None = None, drink_id: int | None = None,
+                           bean_id: int | None = None, shift_point: str | None = None,
+                           comment: str | None = None,
+                           mentor_comment: str | None = None) -> dict[str, Any]:
+    """Оценка напитка по гранулярным параметрам.
+
+    Параметры со множителями сворачиваются в баллы веток (взвешенное среднее),
+    затем по каждой ветке начисляется XP. Итоговый балл напитка (`overall`)
+    считается отдельно — для единого показателя в интерфейсе наставника.
+    """
+    spec = params_for_category(category)
+    branch_scores = branch_scores_from_params(spec, scores)
+    awarded = {code: xp_for_score(value) for code, value in branch_scores.items()}
+    total = sum(awarded.values())
+    overall = overall_score_from_params(spec, scores)
+
+    raw_scores: dict[str, Any] = dict(branch_scores)
+    raw_scores["overall"] = overall
+    raw_scores["params"] = {code: float(scores[code]) for code, *_ in spec if scores.get(code) is not None}
+
+    evaluation_id = _write_evaluation(
+        connection, evaluator_id=evaluator_id, employee_id=employee_id,
+        raw_scores=raw_scores, photo_url=photo_url, xp_awarded=total,
+        drink_id=drink_id, bean_id=bean_id, evaluation_type="drink",
+        shift_point=shift_point, comment=comment, mentor_comment=mentor_comment,
+        drink_category=category, is_general_cleanliness=0,
+    )
+    _award_branch_xp(connection, employee_id=employee_id, awarded=awarded,
+                     evaluation_id=evaluation_id, evaluator_id=evaluator_id)
+
+    unlocked = check_user_achievements(connection, employee_id, "evaluation")
+    return {"ok": True, "id": evaluation_id, "xp_awarded": awarded, "total_xp": total,
+            "overall": overall, "branch_scores": branch_scores, "achievements": unlocked}
+
+
+def apply_cleanliness_evaluation(connection: Connection, evaluator_id: int,
+                                 employee_ids: list[int], scores: dict[str, float],
+                                 shift_point: str | None = None, photo_url: str | None = None,
+                                 comment: str | None = None,
+                                 mentor_comment: str | None = None) -> dict[str, Any]:
+    """Оценка порядка и чистоты: одна сессия, начисление всем на смене.
+
+    Критерии чистоты относятся к ветке «Стандарты», поэтому каждому бариста
+    пишем отдельную строку `evaluations` (с флагом общей оценки) и начисляем XP.
+    """
+    branch_scores = branch_scores_from_params(CLEANLINESS_PARAMS, scores)
+    awarded = {code: xp_for_score(value) for code, value in branch_scores.items()}
+    total = sum(awarded.values())
+    overall = overall_score_from_params(CLEANLINESS_PARAMS, scores)
+
+    raw_scores: dict[str, Any] = dict(branch_scores)
+    raw_scores["overall"] = overall
+    raw_scores["params"] = {code: float(scores[code]) for code, *_ in CLEANLINESS_PARAMS if scores.get(code) is not None}
+
+    ids: list[int] = []
+    unlocked: list[dict[str, Any]] = []
+    for employee_id in employee_ids:
+        evaluation_id = _write_evaluation(
+            connection, evaluator_id=evaluator_id, employee_id=int(employee_id),
+            raw_scores=raw_scores, photo_url=photo_url, xp_awarded=total,
+            drink_id=None, bean_id=None, evaluation_type="cleanliness",
+            shift_point=shift_point, comment=comment, mentor_comment=mentor_comment,
+            drink_category=None, is_general_cleanliness=1,
+        )
+        _award_branch_xp(connection, employee_id=int(employee_id), awarded=awarded,
+                         evaluation_id=evaluation_id, evaluator_id=evaluator_id)
+        unlocked.extend(check_user_achievements(connection, int(employee_id), "evaluation"))
+        ids.append(evaluation_id)
+
+    return {"ok": True, "ids": ids, "evaluated": len(ids), "xp_awarded": awarded,
+            "total_xp": total, "overall": overall, "branch_scores": branch_scores,
+            "achievements": unlocked}
 
 
 # --- Достижения (ачивки) ------------------------------------------------------- #
@@ -743,10 +941,13 @@ def dashboard_me(engine: Engine, user_id: int) -> dict[str, Any]:
             "created_at": row["created_at"],
             "scores": scores,
             # Готовые подписи для интерфейса: клиенту не нужно знать коды веток.
+            # Берём только известные ветки — служебные ключи (`params`, `overall`)
+            # в новой модели оценок не являются ветками и здесь не нужны.
             "branches": [
                 {"code": code, "name": branch_names.get(code, code), "score": score}
-                for code, score in scores.items()
+                for code, score in scores.items() if code in branch_names
             ],
+            "overall": scores.get("overall"),
             "xp_awarded": row["xp_awarded"],
             "photo_url": row["photo_url"],
             "evaluator": row["evaluator"],
@@ -816,6 +1017,77 @@ def evaluation_options(engine: Engine) -> dict[str, Any]:
             """)).mappings().all()
         ]
     return {"drinks": drinks, "beans": beans}
+
+
+def drinks_for_evaluation(engine: Engine, limit: int = 5, window_days: int = 180) -> dict[str, Any]:
+    """Активные напитки для судейского листа: по частоте оценок (убывание).
+
+    Возвращает `top` (быстрые чипы) и `all` (полный список для селекта). Частота
+    считается в окне `window_days`, чтобы сортировка отражала текущие привычки,
+    а не всю историю.
+    """
+    window = f"-{max(1, int(window_days))} days"
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT d.id, d.title, d.category, COUNT(e.id) AS usage
+            FROM menu_drinks d
+            LEFT JOIN evaluations e
+              ON e.drink_id = d.id AND e.created_at >= datetime('now', :window)
+            WHERE d.is_active = 1
+            GROUP BY d.id
+            ORDER BY usage DESC, d.category, d.title
+        """), {"window": window}).mappings().all()
+    drinks = [
+        {"id": int(row["id"]), "title": row["title"], "category": row["category"],
+         "usage": int(row["usage"] or 0)}
+        for row in rows
+    ]
+    return {"top": drinks[:max(0, int(limit))], "all": drinks}
+
+
+def evaluation_sessions(engine: Engine, limit: int = 30) -> dict[str, Any]:
+    """Список проведённых сессий контроля качества (для интерфейса наставника)."""
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT e.id, e.created_at, e.evaluation_type, e.is_general_cleanliness,
+                   e.xp_awarded, e.photo_url, e.shift_point, e.raw_scores,
+                   e.comment, e.mentor_comment,
+                   COALESCE(emp.display_name, emp.name) AS employee,
+                   COALESCE(ev.display_name, ev.name) AS evaluator,
+                   COALESCE(e.drink_category, d.category) AS drink_category,
+                   d.title AS drink_title
+            FROM evaluations e
+            JOIN users emp ON emp.id = e.employee_id
+            JOIN users ev ON ev.id = e.evaluator_id
+            LEFT JOIN menu_drinks d ON d.id = e.drink_id
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT :limit
+        """), {"limit": max(1, int(limit))}).mappings().all()
+
+    sessions = []
+    for row in rows:
+        try:
+            scores = json.loads(row["raw_scores"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            scores = {}
+        overall = scores.get("overall") if isinstance(scores, dict) else None
+        sessions.append({
+            "id": int(row["id"]),
+            "created_at": row["created_at"],
+            "evaluation_type": row["evaluation_type"] or "drink",
+            "is_general_cleanliness": bool(row["is_general_cleanliness"]),
+            "xp_awarded": int(row["xp_awarded"] or 0),
+            "photo_url": row["photo_url"],
+            "shift_point": row["shift_point"],
+            "employee": row["employee"],
+            "evaluator": row["evaluator"],
+            "drink": row["drink_title"],
+            "category": row["drink_category"],
+            "overall": overall,
+            "comment": row["comment"],
+            "mentor_comment": row["mentor_comment"],
+        })
+    return {"items": sessions}
 
 
 def evaluation_analytics(engine: Engine, days: int = 30) -> dict[str, Any]:

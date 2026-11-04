@@ -392,6 +392,54 @@ def _shift_dict(row: Any, current_user_id: int) -> dict[str, Any]:
     }
 
 
+def active_staff(engine: Engine, point: str, when: datetime | None = None) -> list[dict[str, Any]]:
+    """Сотрудники на смене в точке `point` в момент `when` (по умолчанию — сейчас).
+
+    Сверяем график: берём смены выбранной точки за текущий и предыдущий день
+    (смена может идти через полночь) и оставляем те, в интервал которых попадает
+    момент. Возвращаем по каждому сотруднику его роль и границы смены.
+    """
+    zone = app_timezone()
+    moment = when or datetime.now(zone)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=zone)
+    else:
+        moment = moment.astimezone(zone)
+    day = moment.date()
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT s.shift_date, st.start_time, st.end_time, st.point,
+                   u.id AS user_id, COALESCE(u.display_name, u.name) AS employee_name,
+                   u.role AS role
+            FROM schedule AS s
+            JOIN shift_types AS st ON st.id = s.shift_type_id
+            JOIN users AS u ON CAST(u.iiko_id AS TEXT) = s.iiko_id AND u.is_active = 1
+            WHERE st.point = :point
+              AND s.shift_date IN (:day, :prev)
+              AND COALESCE(s.is_active, 1) = 1
+            ORDER BY st.start_time
+        """), {"point": point, "day": day.isoformat(),
+               "prev": (day - timedelta(days=1)).isoformat()}).mappings().all()
+    staff: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for row in rows:
+        start, end = _shift_bounds(row["shift_date"], row["start_time"], row["end_time"], zone)
+        if not (start <= moment < end):
+            continue
+        user_id = int(row["user_id"])
+        if user_id in seen:
+            continue
+        seen.add(user_id)
+        staff.append({
+            "id": user_id,
+            "name": row["employee_name"],
+            "role": row["role"],
+            "shift_start": start.isoformat(),
+            "shift_end": end.isoformat(),
+        })
+    return staff
+
+
 def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: int) -> dict[str, Any]:
     first_day = date(year, month, 1)
     last_day = date(year, month, calendar.monthrange(year, month)[1])

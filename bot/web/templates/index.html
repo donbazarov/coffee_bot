@@ -164,9 +164,15 @@
 
       <section class="view" id="development-view" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">ПРОКАЧКА</p><h2>Развитие</h2></div>
-          {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="evaluation-open"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Оценить сотрудника</button>{% endif %}
+          <div><p class="eyebrow" id="development-eyebrow">ПРОКАЧКА</p><h2 id="development-title">Развитие</h2></div>
         </div>
+        {% if user.role in ['senior', 'mentor'] %}
+        <div class="theme-switch development-tabs" role="group" aria-label="Разделы развития">
+          <button type="button" data-development-tab="progress" class="is-selected">Мой прогресс</button>
+          <button type="button" data-development-tab="quality">Контроль качества</button>
+        </div>
+        {% endif %}
+        <div id="development-progress-panel">
 
         <section class="panel level-panel" id="level-panel">
           <div class="level-ring" id="level-ring" aria-hidden="true">
@@ -210,11 +216,23 @@
           <div class="review-list" id="my-evaluations"></div>
         </section>
 
+        </div>
+
         {% if user.role in ['senior', 'mentor'] %}
-        <section class="panel analytics-panel" id="evaluation-analytics-panel">
-          <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
-          <div class="analytics-body" id="evaluation-analytics"></div>
-        </section>
+        <div id="quality-panel" hidden>
+          <div class="section-heading">
+            <div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Оценочные сессии</h3></div>
+            <button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>
+          </div>
+          <section class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Проведённые сессии</h3></div><span class="panel-index">ДО 30</span></div>
+            <div class="session-list" id="quality-sessions"></div>
+          </section>
+          <section class="panel analytics-panel" id="evaluation-analytics-panel">
+            <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
+            <div class="analytics-body" id="evaluation-analytics"></div>
+          </section>
+        </div>
         {% endif %}
       </section>
 
@@ -616,20 +634,52 @@
   <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="newbie">Стажёр</option><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
   <dialog class="user-dialog evaluation-dialog" id="evaluation-dialog">
     <form id="evaluation-form">
-      <div class="dialog-top"><div><p class="eyebrow">ОЦЕНКА</p><h2>Оценить сотрудника</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
-      <label>Сотрудник<select name="employee_id" id="evaluation-employee" required></select></label>
-      <div class="evaluation-refs">
-        <label>Напиток <span class="optional">необязательно</span><select id="evaluation-drink"><option value="">— не указан —</option></select></label>
-        <label>Зерно <span class="optional">необязательно</span><select id="evaluation-bean"><option value="">— не указан —</option></select></label>
+      <div class="dialog-top"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h2>Новая оценка</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
+
+      <div class="quality-type" role="group" aria-label="Тип оценки">
+        <button type="button" data-quality-type="drink" class="is-selected">Напиток</button>
+        <button type="button" data-quality-type="cleanliness">Порядок и чистота</button>
       </div>
-      <p class="settings-hint">Оценка по ветке — одна кнопка. Ниже 4.0 опыт не начисляется: 3.0 и 3.5 значит «пока рано».</p>
-      <div class="evaluation-branches" id="evaluation-branches"></div>
+
+      <label>Торговая точка
+        <select id="quality-point">
+          <option value="ДЕ">ДЕ</option>
+          <option value="УЯ">УЯ</option>
+        </select>
+      </label>
+
+      <div id="quality-drink-fields">
+        <div class="evaluation-refs">
+          <label>Напиток<select id="evaluation-drink"><option value="">— выберите напиток —</option></select></label>
+          <label>Зерно <span class="optional">необязательно</span><select id="evaluation-bean"><option value="">— не указан —</option></select></label>
+        </div>
+        <div class="quality-chips" id="quality-top-drinks" hidden></div>
+        <div class="quality-staff">
+          <div class="quality-staff-head">
+            <strong>Бариста на смене</strong>
+            <button class="text-button" type="button" id="quality-other-barista">Выбрать другого бариста</button>
+          </div>
+          <div class="quality-staff-list" id="quality-active-staff" role="group" aria-label="Бариста на смене"></div>
+        </div>
+        <label id="quality-staff-fallback" hidden>Сотрудник<select name="employee_id" id="evaluation-employee"><option value="">— выберите —</option></select></label>
+      </div>
+
+      <p class="settings-hint" id="quality-hint">Выберите параметры и выставьте баллы. Ниже 4.0 опыт не начисляется.</p>
+      <div class="evaluation-branches" id="evaluation-params"></div>
+
+      <label>Описание от бариста <span class="optional">необязательно</span><textarea id="quality-drink-comment" maxlength="2000" rows="2" placeholder="Что приготовил, на чём, детали"></textarea></label>
+      <label>Комментарий наставника <span class="optional">необязательно</span><textarea id="quality-mentor-comment" maxlength="2000" rows="2" placeholder="Замечания и рекомендации"></textarea></label>
+
       <div class="evaluation-photo">
-        <label class="evaluation-photo-pick"><input type="file" id="evaluation-photo-input" accept="image/*"><span>Добавить фото напитка</span></label>
-        <div class="evaluation-photo-preview" id="evaluation-photo-preview" hidden><img alt="Фото напитка"><button class="button button-quiet" type="button" id="evaluation-photo-remove">Убрать</button></div>
+        <label class="evaluation-photo-pick"><input type="file" id="evaluation-photo-input" accept="image/*"><span>Прикрепить фото</span></label>
+        <div class="evaluation-photo-preview" id="evaluation-photo-preview" hidden><img alt="Фото оценки"><button class="button button-quiet" type="button" id="evaluation-photo-remove">Убрать</button></div>
       </div>
       <p class="dialog-error" id="evaluation-form-error" role="alert" hidden></p>
-      <div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="evaluation-submit" type="submit">Сохранить оценку</button></div>
+      <div class="dialog-actions">
+        <button class="button button-quiet dialog-close" type="button">Отмена</button>
+        <button class="button button-quiet" type="button" id="quality-add-another"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Ещё оценка</button>
+        <button class="button button-primary" id="evaluation-submit" type="submit">Сохранить</button>
+      </div>
     </form>
   </dialog>
   {% endif %}

@@ -24,6 +24,7 @@ from bot.web import access_code, announcements, avatars, chat, gamification, kno
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
+    active_staff,
     app_timezone,
     apply_schedule_changes,
     build_calendar_feed,
@@ -1207,22 +1208,74 @@ def _require_active_reference(connection, table: str, ref_id: int | None, label:
         raise HTTPException(status_code=422, detail=f"{label} не найден или отключён")
 
 
-def _validate_evaluation_scores(scores: Any, allowed: set[str]) -> dict[str, float]:
+# Торговые точки, на которых проходит оценка (совпадает с shift_types.point).
+SHIFT_POINTS = {"УЯ", "ДЕ"}
+
+
+def _optional_text(payload: dict[str, Any], key: str, limit: int = 2000) -> str | None:
+    """Необязательное текстовое поле: None, если не передано/пусто, иначе строка."""
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status_code=422, detail="Ожидалась строка")
+    cleaned = value.strip()
+    return cleaned[:limit] or None
+
+
+def _validate_param_scores(scores: Any, allowed: set[str]) -> dict[str, float]:
+    """Проверяет оценки по параметрам: известные коды, шаг 0.5, диапазон [0, 5]."""
     if not isinstance(scores, dict) or not scores:
         raise HTTPException(status_code=422, detail="Нужна хотя бы одна оценка")
     if set(scores) - allowed:
-        raise HTTPException(status_code=422, detail="Неизвестная ветка оценки")
+        raise HTTPException(status_code=422, detail="Неизвестный параметр оценки")
     parsed: dict[str, float] = {}
     for code, value in scores.items():
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise HTTPException(status_code=422, detail="Оценка должна быть числом")
-        # Округляем до шага 0.5: кнопки в интерфейсе дают ровно такие значения,
+        # Округляем до шага 0.5: селектор в интерфейсе даёт ровно такие значения,
         # но API не должно зависеть от аккуратности клиента.
         number = round(float(value) * 2) / 2
         if number < 0 or number > 5:
             raise HTTPException(status_code=422, detail="Оценка должна быть от 0 до 5")
         parsed[code] = number
     return parsed
+
+
+def _cleanliness_employee_ids(connection, payload: dict[str, Any], point: str | None) -> list[int]:
+    """Кому начислить оценку чистоты: явный список или все на смене точки.
+
+    Если `employee_ids` не передан — берём активных бариста выбранной точки по
+    графику на текущий момент (это ровно тот список, что показывает шаг
+    «авто-бариста»). Каждый id проверяем на активность и право быть оценённым.
+    """
+    raw = payload.get("employee_ids")
+    if raw is None:
+        if not point:
+            raise HTTPException(status_code=422, detail="Укажите торговую точку")
+        active = active_staff(engine, point, None)
+        candidates = [int(person["id"]) for person in active if person["role"] in EVALUATED_ROLES]
+    else:
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=422, detail="Некорректный список сотрудников")
+        candidates = []
+        for value in raw:
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise HTTPException(status_code=422, detail="Некорректный список сотрудников")
+            candidates.append(value)
+    if not candidates:
+        raise HTTPException(status_code=422, detail="Нет сотрудников для оценки")
+
+    employee_ids: list[int] = []
+    for candidate in candidates:
+        row = connection.execute(
+            text("SELECT role, is_active FROM users WHERE id = :id"), {"id": candidate}
+        ).mappings().first()
+        if not row or not row["is_active"] or row["role"] not in EVALUATED_ROLES:
+            raise HTTPException(status_code=422, detail="Сотрудник недоступен для оценки")
+        if candidate not in employee_ids:
+            employee_ids.append(candidate)
+    return employee_ids
 
 
 @app.get("/api/dashboard/me")
@@ -1261,26 +1314,69 @@ async def upload_evaluation_photo(request: Request, user: dict[str, Any] = Depen
     return {"ok": True, "url": url}
 
 
+@app.get("/api/shifts/active-staff")
+def shifts_active_staff(point: str, timestamp: str | None = None,
+                        _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Бариста на смене в точке `point` в момент `timestamp` (ISO, по умолчанию — сейчас)."""
+    if point not in SHIFT_POINTS:
+        raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
+    when = None
+    if timestamp:
+        try:
+            when = datetime.fromisoformat(timestamp)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Некорректное время") from error
+    staff = active_staff(engine, point, when)
+    active = [person for person in staff if person["role"] in EVALUATED_ROLES]
+    return {"point": point, "active": active, "found": len(active)}
+
+
 @app.post("/api/evaluations")
 async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depends(require_csrf)):
-    """Оценка сотрудника: конвертируется в XP и сразу попадает в ветки."""
+    """Оценка напитка или заведения (порядок и чистота).
+
+    Напиток оценивается по гранулярным параметрам категории; чистота — одной
+    сессией, опыт за которую начисляется всем бариста на смене точки.
+    """
     if evaluator["role"] not in EVALUATION_ROLES:
         raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
     payload = await _read_json_object(request)
-    employee_id = payload.get("employee_id")
-    if isinstance(employee_id, bool) or not isinstance(employee_id, int):
-        raise HTTPException(status_code=422, detail="Не указан сотрудник")
+    evaluation_type = payload.get("evaluation_type") or "drink"
+    if evaluation_type not in {"drink", "cleanliness"}:
+        raise HTTPException(status_code=422, detail="Неизвестный тип оценки")
+    point = payload.get("point")
+    if point is not None and point not in SHIFT_POINTS:
+        raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
     photo_url = payload.get("photo_url")
     if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
         raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
+    comment = _optional_text(payload, "comment")
+    mentor_comment = _optional_text(payload, "mentor_comment")
+
+    if evaluation_type == "cleanliness":
+        with engine.connect() as connection:
+            employee_ids = _cleanliness_employee_ids(connection, payload, point)
+        with engine.begin() as connection:
+            allowed = {code for code, *_ in gamification.CLEANLINESS_PARAMS}
+            scores = _validate_param_scores(payload.get("scores"), allowed)
+            return gamification.apply_cleanliness_evaluation(
+                connection, int(evaluator["id"]), employee_ids, scores,
+                shift_point=point, photo_url=photo_url, comment=comment,
+                mentor_comment=mentor_comment,
+            )
+
+    employee_id = payload.get("employee_id")
+    if isinstance(employee_id, bool) or not isinstance(employee_id, int):
+        raise HTTPException(status_code=422, detail="Не указан сотрудник")
     # Необязательная привязка к справочникам базы знаний: конкретный напиток
-    # и/или зерно. Чистоту, сервис и другие ветки можно оценивать без привязки.
+    # и/или зерно. Категория берётся из карточки напитка (или из payload).
     drink_id = _optional_reference_id(payload, "drink_id")
     bean_id = _optional_reference_id(payload, "bean_id")
+    category = payload.get("category")
+    if category is not None and not isinstance(category, str):
+        raise HTTPException(status_code=422, detail="Некорректная категория напитка")
 
     with engine.begin() as connection:
-        allowed = {branch["code"] for branch in gamification.active_branches(connection)}
-        scores = _validate_evaluation_scores(payload.get("scores"), allowed)
         employee = connection.execute(
             text("SELECT id, role, is_active FROM users WHERE id = :id"), {"id": employee_id}
         ).mappings().first()
@@ -1292,9 +1388,18 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
             raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
         _require_active_reference(connection, "menu_drinks", drink_id, "Напиток")
         _require_active_reference(connection, "coffee_beans", bean_id, "Зерно")
-        return gamification.apply_evaluation(
-            connection, int(evaluator["id"]), int(employee_id), scores, photo_url,
-            drink_id=drink_id, bean_id=bean_id,
+        if drink_id is not None:
+            row = connection.execute(
+                text("SELECT category FROM menu_drinks WHERE id = :id"), {"id": drink_id}
+            ).first()
+            if row:
+                category = row[0]
+        spec = gamification.params_for_category(category)
+        scores = _validate_param_scores(payload.get("scores"), {code for code, *_ in spec})
+        return gamification.apply_drink_evaluation(
+            connection, int(evaluator["id"]), int(employee_id), category, scores,
+            photo_url=photo_url, drink_id=drink_id, bean_id=bean_id,
+            shift_point=point, comment=comment, mentor_comment=mentor_comment,
         )
 
 
@@ -1302,6 +1407,18 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
 def evaluation_options(_: dict[str, Any] = Depends(require_user)):
     """Активные напитки и зерно для судейского листа (из базы знаний)."""
     return gamification.evaluation_options(engine)
+
+
+@app.get("/api/evaluations/drinks")
+def evaluation_drinks(_: dict[str, Any] = Depends(require_user)):
+    """Активные напитки по частоте оценок: `top` (чипы) и `all` (селект)."""
+    return gamification.drinks_for_evaluation(engine)
+
+
+@app.get("/api/evaluations/sessions")
+def evaluation_sessions(_: dict[str, Any] = Depends(require_manager)):
+    """Последние сессии контроля качества для интерфейса наставника."""
+    return gamification.evaluation_sessions(engine)
 
 
 @app.get("/api/evaluations/analytics")

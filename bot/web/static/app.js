@@ -395,40 +395,120 @@ async function loadDevelopment() {
   catch (error) { showToast(error.message); }
 }
 
-/* Судейский лист: большие кнопки 3.0–5.0 на каждую ветку. Оценки ниже 4.0
-   остаются в истории, но опыта не дают — это честное «пока рано». */
-function renderEvaluationBranches() {
-  const container = document.querySelector('#evaluation-branches');
+/* --- Контроль качества -------------------------------------------------- */
+
+// Дискретные значения селектора оценок: 0 и пороги 2.0–5.0 (шаг 0.5).
+const SCORE_STEPS = [0, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0];
+// Наборы параметров по категории напитка (совпадают с бэкендом DRINK_PARAMS).
+// Подпись «×2» отражает множитель: параметр входит в среднее ветки дважды.
+const DRINK_PARAMS = {
+  'черный кофе': [
+    { code: 'presentation', label: 'Подача' },
+    { code: 'balance', label: 'Баланс ×2' },
+    { code: 'body', label: 'Тело' },
+    { code: 'bouquet', label: 'Букет' },
+    { code: 'aftertaste', label: 'Послевкусие' },
+    { code: 'description_accuracy', label: 'Точность описания ×2' },
+  ],
+  'кофе с молоком': [
+    { code: 'presentation', label: 'Подача' },
+    { code: 'balance', label: 'Баланс' },
+    { code: 'bouquet', label: 'Букет' },
+    { code: 'latte_art', label: 'Латте-арт' },
+    { code: 'milk_quality', label: 'Качество молока ×2' },
+    { code: 'description_accuracy', label: 'Точность описания ×2' },
+  ],
+  'авторский': [
+    { code: 'presentation', label: 'Подача' },
+    { code: 'balance', label: 'Баланс' },
+    { code: 'appearance', label: 'Внешний вид' },
+    { code: 'description_accuracy', label: 'Точность описания' },
+  ],
+};
+const DEFAULT_DRINK_PARAMS = [
+  { code: 'presentation', label: 'Подача' },
+  { code: 'balance', label: 'Баланс' },
+  { code: 'description_accuracy', label: 'Точность описания' },
+];
+// Критерии порядка и чистоты заведения (все идут в ветку «Стандарты»).
+const CLEANLINESS_PARAMS = [
+  { code: 'shift_order', label: 'Порядок на смене' },
+  { code: 'work_zones', label: 'Чистота рабочих зон' },
+  { code: 'hall_cleanliness', label: 'Чистота зала' },
+  { code: 'restroom', label: 'Туалет' },
+  { code: 'hygiene', label: 'Гигиена' },
+  { code: 'service', label: 'Сервис' },
+  { code: 'appearance', label: 'Внешний вид' },
+];
+
+let qualityType = 'drink';
+let qualityDrinks = [];
+let qualityDrinkCards = new Map();
+let qualitySelectedEmployee = 0;
+
+/* Набор параметров для текущего режима: чистота или категория выбранного напитка. */
+function paramSpec() {
+  if (qualityType === 'cleanliness') return CLEANLINESS_PARAMS;
+  const drinkId = Number(document.querySelector('#evaluation-drink')?.value || 0);
+  const category = qualityDrinkCards.get(drinkId)?.category;
+  return DRINK_PARAMS[category] || DEFAULT_DRINK_PARAMS;
+}
+
+/* Панель параметров: на каждый критерий — ряд кнопок [0][2.0]…[5.0]. */
+function renderQualityParams() {
+  const container = document.querySelector('#evaluation-params');
   if (!container) return;
-  const branches = developmentState?.branches || [];
-  if (!branches.length) {
-    container.innerHTML = '<p class="empty-state">Ветки ещё не настроены</p>';
-    return;
-  }
-  const values = [5.0, 4.5, 4.0, 3.5, 3.0];
-  container.innerHTML = branches.map((branch) => `
-    <div class="evaluation-branch" data-branch="${escapeHtml(branch.code)}">
-      <div class="evaluation-branch-head">
-        <strong>${escapeHtml(branch.name)}</strong>
-        <span>${escapeHtml(branch.description)}${branch.kind === 'social' ? ' · социальная' : ''}</span>
-      </div>
-      <div class="evaluation-score-row" role="group" aria-label="${escapeHtml(branch.name)}">
-        ${values.map((value) => `<button type="button" class="evaluation-score" data-score="${value}" aria-pressed="false">${value.toFixed(1)}</button>`).join('')}
+  container.innerHTML = paramSpec().map((param) => `
+    <div class="evaluation-branch" data-param="${escapeHtml(param.code)}">
+      <div class="evaluation-branch-head"><strong>${escapeHtml(param.label)}</strong></div>
+      <div class="evaluation-score-row" role="group" aria-label="${escapeHtml(param.label)}">
+        ${SCORE_STEPS.map((value) => `<button type="button" class="evaluation-score" data-score="${value}" aria-pressed="false">${value.toFixed(1)}</button>`).join('')}
       </div>
     </div>`).join('');
 }
 
-function resetEvaluationDialog() {
+/* Быстрые чипы «Топ-5 напитков» — выбор одним тапом. */
+function renderTopDrinks() {
+  const container = document.querySelector('#quality-top-drinks');
+  if (!container) return;
+  const top = qualityDrinks.filter((drink) => drink.usage > 0).slice(0, 5);
+  if (!top.length) { container.hidden = true; container.innerHTML = ''; return; }
+  container.hidden = false;
+  container.innerHTML = '<span class="quality-chips-label">Часто оценивают</span>'
+    + top.map((drink) => `<button type="button" class="quality-chip" data-drink-id="${drink.id}">${escapeHtml(drink.title)}</button>`).join('');
+}
+
+function resetQualityDialog() {
   evaluationPhotoUrl = null;
+  qualitySelectedEmployee = 0;
   document.querySelector('#evaluation-form')?.reset();
   const errorNode = document.querySelector('#evaluation-form-error');
   if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
   const preview = document.querySelector('#evaluation-photo-preview');
   if (preview) { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
-  renderEvaluationBranches();
+  document.querySelector('#quality-staff-fallback')?.setAttribute('hidden', '');
+  document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.qualityType === 'drink');
+  });
+  setQualityType('drink');
 }
 
-async function fillEvaluationEmployees() {
+/* Переключение «Напиток» ⇄ «Порядок и чистота»: панель полей и набор параметров. */
+function setQualityType(type) {
+  qualityType = type === 'cleanliness' ? 'cleanliness' : 'drink';
+  const drinkFields = document.querySelector('#quality-drink-fields');
+  const hint = document.querySelector('#quality-hint');
+  if (drinkFields) drinkFields.hidden = qualityType === 'cleanliness';
+  if (hint) {
+    hint.textContent = qualityType === 'cleanliness'
+      ? 'Баллы за заведение получат все бариста, кто сейчас на смене по графику.'
+      : 'Выберите параметры и выставьте баллы. Ниже 4.0 опыт не начисляется.';
+  }
+  renderQualityParams();
+  if (qualityType === 'drink') loadQualityActiveStaff();
+}
+
+async function fillQualityEmployees() {
   const select = document.querySelector('#evaluation-employee');
   if (!select) return;
   try {
@@ -436,7 +516,8 @@ async function fillEvaluationEmployees() {
     const me = Number(document.body.dataset.userId || 0);
     const staff = users.filter((user) => user.is_active && user.role !== 'mentor' && Number(user.id) !== me);
     select.innerHTML = staff.length
-      ? staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name)}</option>`).join('')
+      ? '<option value="">— выберите —</option>'
+        + staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name || user.role)}</option>`).join('')
       : '<option value="">Нет сотрудников для оценки</option>';
   } catch (error) {
     select.innerHTML = '<option value="">Не удалось загрузить список</option>';
@@ -444,23 +525,58 @@ async function fillEvaluationEmployees() {
   }
 }
 
-/* Селекты напитка и зерна — активные справочники базы знаний
-   (/api/evaluations/options). Привязка необязательна: «— не указан —» остаётся. */
-async function fillEvaluationOptions() {
+/* Напитки по частоте оценок (/api/evaluations/drinks): селект + чипы «Топ-5».
+   Зерно остаётся необязательной привязкой из базы знаний. */
+async function fillQualityDrinks() {
   const drinkSelect = document.querySelector('#evaluation-drink');
   const beanSelect = document.querySelector('#evaluation-bean');
   if (!drinkSelect || !beanSelect) return;
   try {
-    const options = await api('/api/evaluations/options');
-    const drinks = options.drinks || [];
-    drinkSelect.innerHTML = '<option value="">— не указан —</option>'
-      + drinks.map((drink) => `<option value="${drink.id}">${escapeHtml(drink.title)} — ${escapeHtml(drink.category)}</option>`).join('');
+    const [drinksData, options] = await Promise.all([
+      api('/api/evaluations/drinks'),
+      api('/api/evaluations/options'),
+    ]);
+    qualityDrinks = drinksData.all || [];
+    qualityDrinkCards = new Map(qualityDrinks.map((drink) => [Number(drink.id), drink]));
+    drinkSelect.innerHTML = '<option value="">— выберите напиток —</option>'
+      + qualityDrinks.map((drink) => `<option value="${drink.id}">${escapeHtml(drink.title)} — ${escapeHtml(drink.category)}</option>`).join('');
+    drinkSelect.disabled = !qualityDrinks.length;
     const beans = options.beans || [];
     beanSelect.innerHTML = '<option value="">— не указан —</option>'
       + beans.map((bean) => `<option value="${bean.id}">${escapeHtml(bean.name)} — ${escapeHtml(bean.roast_type)}</option>`).join('');
-    drinkSelect.disabled = !drinks.length;
     beanSelect.disabled = !beans.length;
+    renderTopDrinks();
+    renderQualityParams();
   } catch (error) {
+    showToast(error.message);
+  }
+}
+
+/* Бариста, которые по графику сейчас на смене в выбранной точке. */
+async function loadQualityActiveStaff() {
+  const container = document.querySelector('#quality-active-staff');
+  if (!container || qualityType !== 'drink') return;
+  const point = document.querySelector('#quality-point')?.value || 'ДЕ';
+  container.innerHTML = '<span class="quality-staff-empty">Ищем бариста на смене…</span>';
+  try {
+    const data = await api(`/api/shifts/active-staff?point=${encodeURIComponent(point)}`);
+    const active = data.active || [];
+    if (!active.length) {
+      container.innerHTML = '<span class="quality-staff-empty">По графику на смене никого нет</span>';
+      qualitySelectedEmployee = 0;
+      return;
+    }
+    if (!active.some((person) => Number(person.id) === qualitySelectedEmployee)) {
+      qualitySelectedEmployee = Number(active[0].id);
+    }
+    container.innerHTML = active.map((person) => {
+      const start = String(person.shift_start || '').slice(11, 16);
+      const end = String(person.shift_end || '').slice(11, 16);
+      const selected = Number(person.id) === qualitySelectedEmployee ? ' is-selected' : '';
+      return `<button type="button" class="quality-staff-chip${selected}" data-staff-id="${person.id}"><strong>${escapeHtml(person.name)}</strong><span>${escapeHtml(start)}–${escapeHtml(end)}</span></button>`;
+    }).join('');
+  } catch (error) {
+    container.innerHTML = '<span class="quality-staff-empty">Не удалось загрузить смену</span>';
     showToast(error.message);
   }
 }
@@ -540,20 +656,60 @@ async function uploadEvaluationPhoto(file) {
 
 function setupDevelopment() {
   const dialog = document.querySelector('#evaluation-dialog');
-  const openButton = document.querySelector('#evaluation-open');
-  if (!dialog || !openButton) return;
+  const newButton = document.querySelector('#quality-new');
+  if (!dialog || !newButton) return;
+  setupDevelopmentTabs();
 
-  openButton.addEventListener('click', async () => {
-    resetEvaluationDialog();
+  newButton.addEventListener('click', async () => {
+    resetQualityDialog();
     dialog.showModal();
-    if (!developmentState) await loadDevelopment();
-    renderEvaluationBranches();
-    fillEvaluationEmployees();
-    fillEvaluationOptions();
-    loadEvaluationAnalytics();
+    if (!developmentState) loadDevelopment();
+    await fillQualityDrinks();
+    fillQualityEmployees();
+    loadQualityActiveStaff();
   });
 
-  document.querySelector('#evaluation-branches')?.addEventListener('click', (event) => {
+  // Переключатель типа оценки «Напиток» ⇄ «Порядок и чистота».
+  document.querySelector('#evaluation-dialog .quality-type')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-quality-type]');
+    if (!button) return;
+    document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((item) => {
+      item.classList.toggle('is-selected', item === button);
+    });
+    setQualityType(button.dataset.qualityType);
+  });
+
+  // Смена точки — перезагружаем бариста на смене; смена напитка — параметры.
+  document.querySelector('#quality-point')?.addEventListener('change', loadQualityActiveStaff);
+  document.querySelector('#evaluation-drink')?.addEventListener('change', renderQualityParams);
+
+  // Быстрые чипы «Топ-5 напитков».
+  document.querySelector('#quality-top-drinks')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('.quality-chip');
+    if (!chip) return;
+    const select = document.querySelector('#evaluation-drink');
+    if (select) select.value = chip.dataset.drinkId;
+    renderQualityParams();
+  });
+
+  // Бариста на смене: переключаем выбор чипом.
+  document.querySelector('#quality-active-staff')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('.quality-staff-chip');
+    if (!chip) return;
+    qualitySelectedEmployee = Number(chip.dataset.staffId);
+    chip.parentElement?.querySelectorAll('.quality-staff-chip').forEach((item) => {
+      item.classList.toggle('is-selected', item === chip);
+    });
+  });
+
+  // Фоллбек: ручной выбор из полного списка сотрудников.
+  document.querySelector('#quality-other-barista')?.addEventListener('click', () => {
+    const fallback = document.querySelector('#quality-staff-fallback');
+    if (fallback) fallback.hidden = !fallback.hidden;
+  });
+
+  // Баллы: одна кнопка на параметр.
+  document.querySelector('#evaluation-params')?.addEventListener('click', (event) => {
     const button = event.target.closest('.evaluation-score');
     if (!button) return;
     const row = button.closest('.evaluation-branch');
@@ -575,45 +731,130 @@ function setupDevelopment() {
     if (input) input.value = '';
   });
 
-  document.querySelector('#evaluation-form')?.addEventListener('submit', async (event) => {
+  document.querySelector('#evaluation-form')?.addEventListener('submit', (event) => {
     event.preventDefault();
-    const errorNode = document.querySelector('#evaluation-form-error');
-    const employeeId = Number(document.querySelector('#evaluation-employee')?.value || 0);
-    const scores = {};
-    document.querySelectorAll('#evaluation-branches .evaluation-branch').forEach((row) => {
-      const selected = row.querySelector('.evaluation-score.is-selected');
-      if (selected) scores[row.dataset.branch] = Number(selected.dataset.score);
-    });
-    if (!employeeId || !Object.keys(scores).length) {
-      if (errorNode) { errorNode.textContent = 'Выберите сотрудника и хотя бы одну оценку'; errorNode.hidden = false; }
-      return;
-    }
-    const submit = document.querySelector('#evaluation-submit');
-    if (submit) submit.disabled = true;
-    try {
-      const drinkId = Number(document.querySelector('#evaluation-drink')?.value || 0);
-      const beanId = Number(document.querySelector('#evaluation-bean')?.value || 0);
-      const result = await api('/api/evaluations', {
-        method: 'POST',
-        body: JSON.stringify({
-          employee_id: employeeId,
-          scores,
-          photo_url: evaluationPhotoUrl,
-          drink_id: drinkId || null,
-          bean_id: beanId || null,
-        }),
-      });
-      showToast(result.total_xp ? `Оценка сохранена: +${result.total_xp} XP` : 'Оценка сохранена, опыт не начислен');
-      dialog.close();
-      loadDevelopment();
-      loadEvaluationAnalytics();
-      if (managerRole) loadUsers();
-    } catch (error) {
-      if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
-    } finally {
-      if (submit) submit.disabled = false;
-    }
+    submitQualityEvaluation(dialog, false);
   });
+  document.querySelector('#quality-add-another')?.addEventListener('click', () => {
+    submitQualityEvaluation(dialog, true);
+  });
+}
+
+/* Вкладки раздела «Развитие»: «Мой прогресс» / «Контроль качества». */
+function setDevelopmentTab(tab) {
+  const quality = tab === 'quality';
+  document.querySelectorAll('#development-view [data-development-tab]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.developmentTab === (quality ? 'quality' : 'progress'));
+  });
+  const progress = document.querySelector('#development-progress-panel');
+  const qualityPanel = document.querySelector('#quality-panel');
+  if (progress) progress.hidden = quality;
+  if (qualityPanel) qualityPanel.hidden = !quality;
+  setText('#development-eyebrow', quality ? 'КОНТРОЛЬ КАЧЕСТВА' : 'ПРОКАЧКА');
+  setText('#development-title', quality ? 'Оценка качества' : 'Развитие');
+  if (quality) { loadQualitySessions(); loadEvaluationAnalytics(); }
+}
+
+function setupDevelopmentTabs() {
+  const tabs = document.querySelector('#development-view .development-tabs');
+  if (!tabs) return;
+  tabs.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-development-tab]');
+    if (button) setDevelopmentTab(button.dataset.developmentTab);
+  });
+}
+
+/* Список проведённых сессий контроля качества. */
+async function loadQualitySessions() {
+  const container = document.querySelector('#quality-sessions');
+  if (!container) return;
+  try {
+    const data = await api('/api/evaluations/sessions');
+    renderQualitySessions(data.items || []);
+  } catch (error) {
+    container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderQualitySessions(items) {
+  const container = document.querySelector('#quality-sessions');
+  if (!container) return;
+  if (!items.length) { container.innerHTML = '<p class="empty-state">Оценочных сессий пока нет</p>'; return; }
+  container.innerHTML = items.map((item) => {
+    const date = String(item.created_at || '').slice(0, 16).replace('T', ' ');
+    const overall = item.overall == null ? '—' : Number(item.overall).toFixed(1);
+    const subject = item.evaluation_type === 'cleanliness'
+      ? 'Порядок и чистота'
+      : escapeHtml(item.drink || 'Напиток');
+    const category = item.category ? ` · ${escapeHtml(item.category)}` : '';
+    const point = item.shift_point ? `<span class="session-point">${escapeHtml(item.shift_point)}</span>` : '';
+    return `
+      <article class="session-row">
+        <div class="session-main"><strong>${escapeHtml(item.employee || '')}</strong><span>${subject}${category}</span></div>
+        <div class="session-meta">${point}<span>${escapeHtml(date)}</span><span>${escapeHtml(item.evaluator || '')}</span></div>
+        <span class="session-score">${overall}</span>
+        <span class="session-xp">+${Number(item.xp_awarded || 0)} XP</span>
+      </article>`;
+  }).join('');
+}
+
+/* Отправка оценки. keepOpen — «Ещё оценка»: сохраняем без закрытия окна. */
+async function submitQualityEvaluation(dialog, keepOpen) {
+  const type = qualityType;
+  const errorNode = document.querySelector('#evaluation-form-error');
+  const setError = (message) => { if (errorNode) { errorNode.textContent = message; errorNode.hidden = false; } };
+  if (errorNode) errorNode.hidden = true;
+
+  const scores = {};
+  document.querySelectorAll('#evaluation-params .evaluation-branch').forEach((row) => {
+    const selected = row.querySelector('.evaluation-score.is-selected');
+    if (selected) scores[row.dataset.param] = Number(selected.dataset.score);
+  });
+  if (!Object.keys(scores).length) { setError('Выставьте хотя бы один балл'); return; }
+
+  const payload = {
+    evaluation_type: type,
+    point: document.querySelector('#quality-point')?.value || null,
+    scores,
+    photo_url: evaluationPhotoUrl,
+    comment: document.querySelector('#quality-drink-comment')?.value.trim() || null,
+    mentor_comment: document.querySelector('#quality-mentor-comment')?.value.trim() || null,
+  };
+
+  if (type === 'drink') {
+    const drinkId = Number(document.querySelector('#evaluation-drink')?.value || 0);
+    const employeeId = qualitySelectedEmployee || Number(document.querySelector('#evaluation-employee')?.value || 0);
+    if (!drinkId) { setError('Выберите напиток'); return; }
+    if (!employeeId) { setError('Выберите бариста'); return; }
+    payload.drink_id = drinkId;
+    payload.employee_id = employeeId;
+    payload.bean_id = Number(document.querySelector('#evaluation-bean')?.value || 0) || null;
+    payload.category = qualityDrinkCards.get(drinkId)?.category || null;
+  }
+
+  const submit = document.querySelector('#evaluation-submit');
+  const addAnother = document.querySelector('#quality-add-another');
+  if (submit) submit.disabled = true;
+  if (addAnother) addAnother.disabled = true;
+  try {
+    const result = await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
+    const overall = result.overall != null ? ` (${Number(result.overall).toFixed(1)})` : '';
+    const xp = result.total_xp ? ` · +${result.total_xp} XP` : '';
+    showToast(`Оценка сохранена${overall}${xp}`);
+    if (keepOpen && type === 'drink') {
+      resetQualityDialog();
+    } else {
+      dialog.close();
+    }
+    loadDevelopment();
+    loadQualitySessions();
+    loadEvaluationAnalytics();
+  } catch (error) {
+    setError(error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+    if (addAnother) addAnother.disabled = false;
+  }
 }
 
 function renderUsers(users) {
@@ -2139,7 +2380,11 @@ function setView(name) {
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
     // Прогресс мог измениться, пока сотрудник был в другом разделе.
-    if (name === 'development') { loadDevelopment(); loadEvaluationAnalytics(); }
+    if (name === 'development') {
+      loadDevelopment();
+      loadEvaluationAnalytics();
+      if (managerRole && document.querySelector('#quality-panel')?.hidden === false) loadQualitySessions();
+    }
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
