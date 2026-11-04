@@ -195,6 +195,13 @@
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Последние оценки</h3></div><span class="panel-index">ДО 5</span></div>
           <div class="review-list" id="my-evaluations"></div>
         </section>
+
+        {% if user.role in ['senior', 'mentor'] %}
+        <section class="panel analytics-panel" id="evaluation-analytics-panel">
+          <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
+          <div class="analytics-body" id="evaluation-analytics"></div>
+        </section>
+        {% endif %}
       </section>
 
       <section class="view" id="announcements-view" hidden>
@@ -573,6 +580,10 @@
     <form id="evaluation-form">
       <div class="dialog-top"><div><p class="eyebrow">ОЦЕНКА</p><h2>Оценить сотрудника</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
       <label>Сотрудник<select name="employee_id" id="evaluation-employee" required></select></label>
+      <div class="evaluation-refs">
+        <label>Напиток <span class="optional">необязательно</span><select id="evaluation-drink"><option value="">— не указан —</option></select></label>
+        <label>Зерно <span class="optional">необязательно</span><select id="evaluation-bean"><option value="">— не указан —</option></select></label>
+      </div>
       <p class="settings-hint">Оценка по ветке — одна кнопка. Ниже 4.0 опыт не начисляется: 3.0 и 3.5 значит «пока рано».</p>
       <div class="evaluation-branches" id="evaluation-branches"></div>
       <div class="evaluation-photo">

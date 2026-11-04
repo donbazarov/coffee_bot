@@ -98,6 +98,19 @@ def photos_dir() -> Path:
     return _PHOTOS_DIR
 
 
+def _add_column_if_missing(connection: Connection, table: str, column: str,
+                           definition: str) -> None:
+    """`ALTER TABLE ... ADD COLUMN`, если колонки ещё нет.
+
+    SQLite не поддерживает `ADD COLUMN IF NOT EXISTS`, поэтому колонки
+    ретрофита (привязка оценки к напитку и зерну) добавляем по факту наличия —
+    идемпотентно при каждом старте.
+    """
+    existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def initialize_schema(engine: Engine) -> None:
     """Идемпотентно создаёт таблицы геймификации и наполняет ветки."""
     with engine.begin() as connection:
@@ -154,6 +167,21 @@ def initialize_schema(engine: Engine) -> None:
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_user_skills_branch
             ON user_skills (branch_id)
+        """))
+        # Ретрофит под базу знаний: оценка может быть привязана к конкретному
+        # напитку (menu_drinks) и зерну (coffee_beans). Колонки добавляем
+        # идемпотентно — на базах, созданных до появления справочников, их нет.
+        _add_column_if_missing(connection, "evaluations", "drink_id",
+                               "INTEGER REFERENCES menu_drinks(id)")
+        _add_column_if_missing(connection, "evaluations", "bean_id",
+                               "INTEGER REFERENCES coffee_beans(id)")
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_evaluations_drink
+            ON evaluations (drink_id)
+        """))
+        connection.execute(text("""
+            CREATE INDEX IF NOT EXISTS idx_evaluations_bean
+            ON evaluations (bean_id)
         """))
         for position, (code, name, description) in enumerate(BRANCH_SEEDS):
             connection.execute(text("""
@@ -307,8 +335,12 @@ def xp_for_score(score: float) -> int:
 
 
 def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int,
-                     scores: dict[str, float], photo_url: str | None) -> dict[str, Any]:
+                     scores: dict[str, float], photo_url: str | None,
+                     drink_id: int | None = None, bean_id: int | None = None) -> dict[str, Any]:
     """Конвертирует оценки в XP и пишет их в лог + баланс веток.
+
+    `drink_id` и `bean_id` — необязательная привязка к справочникам базы знаний
+    (напиток и зерно), уже проверенная на стороне API.
 
     Возвращает разбивку начислений по веткам и id сохранённой оценки.
     Запись `evaluations` и начисления идут в одной транзакции — частичных
@@ -323,14 +355,18 @@ def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int
 
     total = sum(awarded.values())
     result = connection.execute(text("""
-        INSERT INTO evaluations (evaluator_id, employee_id, raw_scores, photo_url, xp_awarded)
-        VALUES (:evaluator_id, :employee_id, :raw_scores, :photo_url, :xp_awarded)
+        INSERT INTO evaluations
+            (evaluator_id, employee_id, raw_scores, photo_url, xp_awarded, drink_id, bean_id)
+        VALUES
+            (:evaluator_id, :employee_id, :raw_scores, :photo_url, :xp_awarded, :drink_id, :bean_id)
     """), {
         "evaluator_id": evaluator_id,
         "employee_id": employee_id,
         "raw_scores": json.dumps(scores, ensure_ascii=False),
         "photo_url": photo_url,
         "xp_awarded": total,
+        "drink_id": drink_id,
+        "bean_id": bean_id,
     })
     evaluation_id = int(result.lastrowid)
 
@@ -755,3 +791,105 @@ def store_photo(data: bytes) -> str | None:
 
 def photo_path(filename: str) -> Path:
     return photos_dir() / filename
+
+
+# --- Оценка напитков и аналитика наставника ------------------------------------ #
+
+
+def evaluation_options(engine: Engine) -> dict[str, Any]:
+    """Активные справочники для судейского листа: напитки и зерно базы знаний."""
+    with engine.connect() as connection:
+        drinks = [
+            {"id": int(row["id"]), "title": row["title"], "category": row["category"]}
+            for row in connection.execute(text("""
+                SELECT id, title, category FROM menu_drinks
+                WHERE is_active = 1
+                ORDER BY category, title
+            """)).mappings().all()
+        ]
+        beans = [
+            {"id": int(row["id"]), "name": row["name"], "roast_type": row["roast_type"]}
+            for row in connection.execute(text("""
+                SELECT id, name, roast_type FROM coffee_beans
+                WHERE is_active = 1
+                ORDER BY name
+            """)).mappings().all()
+        ]
+    return {"drinks": drinks, "beans": beans}
+
+
+def evaluation_analytics(engine: Engine, days: int = 30) -> dict[str, Any]:
+    """Аналитика оценок для наставников: агрегаты команды.
+
+    Намеренно не отдаём средние оценки по конкретным бариста — интерфейс
+    фокусируется на прогрессе команды, а не на «двойках». Показываем активность
+    за период, вклад веток, распределение напитков и последние оценки.
+    """
+    days = max(1, min(int(days), 365))
+    window = f"-{days} days"
+    with engine.connect() as connection:
+        totals = connection.execute(text("""
+            SELECT COUNT(*) AS evaluations,
+                   COALESCE(SUM(xp_awarded), 0) AS xp
+            FROM evaluations
+            WHERE created_at >= datetime('now', :window)
+        """), {"window": window}).mappings().first()
+        branch_rows = connection.execute(text("""
+            SELECT sb.code, sb.name, COALESCE(SUM(xt.amount), 0) AS xp
+            FROM xp_transactions xt
+            JOIN skill_branches sb ON sb.id = xt.branch_id
+            WHERE xt.source_type = 'evaluation'
+              AND xt.created_at >= datetime('now', :window)
+            GROUP BY sb.id
+            ORDER BY xp DESC, sb.position
+        """), {"window": window}).mappings().all()
+        drink_rows = connection.execute(text("""
+            SELECT d.id, d.title, d.category, COUNT(*) AS evaluations
+            FROM evaluations e
+            JOIN menu_drinks d ON d.id = e.drink_id
+            WHERE e.drink_id IS NOT NULL
+              AND e.created_at >= datetime('now', :window)
+            GROUP BY d.id
+            ORDER BY evaluations DESC, d.title
+            LIMIT 10
+        """), {"window": window}).mappings().all()
+        recent_rows = connection.execute(text("""
+            SELECT e.created_at, e.xp_awarded, e.photo_url,
+                   COALESCE(emp.display_name, emp.name) AS employee,
+                   COALESCE(ev.display_name, ev.name) AS evaluator,
+                   d.title AS drink_title, b.name AS bean_name
+            FROM evaluations e
+            JOIN users emp ON emp.id = e.employee_id
+            JOIN users ev ON ev.id = e.evaluator_id
+            LEFT JOIN menu_drinks d ON d.id = e.drink_id
+            LEFT JOIN coffee_beans b ON b.id = e.bean_id
+            ORDER BY e.created_at DESC, e.id DESC
+            LIMIT 10
+        """)).mappings().all()
+
+    return {
+        "window_days": days,
+        "evaluations": int(totals["evaluations"] or 0),
+        "xp_awarded": int(totals["xp"] or 0),
+        "branches": [
+            {"code": row["code"], "name": row["name"], "xp": int(row["xp"] or 0)}
+            for row in branch_rows
+        ],
+        "drinks": [
+            {"id": int(row["id"]), "title": row["title"], "category": row["category"],
+             "evaluations": int(row["evaluations"])}
+            for row in drink_rows
+        ],
+        "recent": [
+            {
+                "created_at": row["created_at"],
+                "xp_awarded": int(row["xp_awarded"] or 0),
+                "photo_url": row["photo_url"],
+                "employee": row["employee"],
+                "evaluator": row["evaluator"],
+                "drink": row["drink_title"],
+                "bean": row["bean_name"],
+            }
+            for row in recent_rows
+        ],
+    }

@@ -182,8 +182,11 @@ def migrate_database():
     announcements.initialize_schema(engine)
     push.initialize_schema(engine)
     chat.initialize_schema(engine)
-    gamification.initialize_schema(engine)
+    # Справочники базы знаний (menu_drinks/coffee_beans) создаём до таблиц
+    # геймификации: `evaluations` ссылается на них через drink_id/bean_id, и на
+    # чистой базе FK-цели должны существовать раньше.
     knowledge_base.initialize_schema(engine)
+    gamification.initialize_schema(engine)
     # Базовый опыт уже работающей команде выдаётся один раз: у каждого barista и
     # senior уровень должен появиться сразу после раскатки, а не после первой
     # оценки наставника. Повторные запуски ничего не добавляют (идемпотентно).
@@ -1183,6 +1186,27 @@ EVALUATION_ROLES = {"senior", "mentor"}
 EVALUATED_ROLES = {"newbie", "barista", "senior"}
 
 
+def _optional_reference_id(payload: dict[str, Any], key: str) -> int | None:
+    """Необязательный id справочника: None, если не передан, иначе целое > 0."""
+    value = payload.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise HTTPException(status_code=422, detail="Некорректная ссылка на справочник")
+    return value
+
+
+def _require_active_reference(connection, table: str, ref_id: int | None, label: str) -> None:
+    """Проверяет, что запись справочника существует и активна (`is_active = 1`)."""
+    if ref_id is None:
+        return
+    found = connection.execute(
+        text(f"SELECT 1 FROM {table} WHERE id = :id AND is_active = 1"), {"id": ref_id}
+    ).first()
+    if not found:
+        raise HTTPException(status_code=422, detail=f"{label} не найден или отключён")
+
+
 def _validate_evaluation_scores(scores: Any, allowed: set[str]) -> dict[str, float]:
     if not isinstance(scores, dict) or not scores:
         raise HTTPException(status_code=422, detail="Нужна хотя бы одна оценка")
@@ -1249,6 +1273,10 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
     photo_url = payload.get("photo_url")
     if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
         raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
+    # Необязательная привязка к справочникам базы знаний: конкретный напиток
+    # и/или зерно. Чистоту, сервис и другие ветки можно оценивать без привязки.
+    drink_id = _optional_reference_id(payload, "drink_id")
+    bean_id = _optional_reference_id(payload, "bean_id")
 
     with engine.begin() as connection:
         allowed = {branch["code"] for branch in gamification.active_branches(connection)}
@@ -1262,9 +1290,24 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
             raise HTTPException(status_code=400, detail="Оценивать можно только сотрудников")
         if int(employee["id"]) == int(evaluator["id"]):
             raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
+        _require_active_reference(connection, "menu_drinks", drink_id, "Напиток")
+        _require_active_reference(connection, "coffee_beans", bean_id, "Зерно")
         return gamification.apply_evaluation(
-            connection, int(evaluator["id"]), int(employee_id), scores, photo_url
+            connection, int(evaluator["id"]), int(employee_id), scores, photo_url,
+            drink_id=drink_id, bean_id=bean_id,
         )
+
+
+@app.get("/api/evaluations/options")
+def evaluation_options(_: dict[str, Any] = Depends(require_user)):
+    """Активные напитки и зерно для судейского листа (из базы знаний)."""
+    return gamification.evaluation_options(engine)
+
+
+@app.get("/api/evaluations/analytics")
+def evaluation_analytics(_: dict[str, Any] = Depends(require_manager)):
+    """Аналитика оценок для наставников: агрегаты команды без средних по бариста."""
+    return gamification.evaluation_analytics(engine)
 
 
 @app.get("/api/achievements/manage")

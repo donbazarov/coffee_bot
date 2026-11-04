@@ -444,6 +444,76 @@ async function fillEvaluationEmployees() {
   }
 }
 
+/* Селекты напитка и зерна — активные справочники базы знаний
+   (/api/evaluations/options). Привязка необязательна: «— не указан —» остаётся. */
+async function fillEvaluationOptions() {
+  const drinkSelect = document.querySelector('#evaluation-drink');
+  const beanSelect = document.querySelector('#evaluation-bean');
+  if (!drinkSelect || !beanSelect) return;
+  try {
+    const options = await api('/api/evaluations/options');
+    const drinks = options.drinks || [];
+    drinkSelect.innerHTML = '<option value="">— не указан —</option>'
+      + drinks.map((drink) => `<option value="${drink.id}">${escapeHtml(drink.title)} — ${escapeHtml(drink.category)}</option>`).join('');
+    const beans = options.beans || [];
+    beanSelect.innerHTML = '<option value="">— не указан —</option>'
+      + beans.map((bean) => `<option value="${bean.id}">${escapeHtml(bean.name)} — ${escapeHtml(bean.roast_type)}</option>`).join('');
+    drinkSelect.disabled = !drinks.length;
+    beanSelect.disabled = !beans.length;
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+/* Аналитика наставника: агрегаты команды, без средних оценок по сотрудникам
+   (/api/evaluations/analytics). Интерфейс намеренно не показывает «средние» —
+   фокус на прогрессе, а не на демотивирующих цифрах. */
+async function loadEvaluationAnalytics() {
+  if (!managerRole) return;
+  const container = document.querySelector('#evaluation-analytics');
+  if (!container) return;
+  try {
+    renderEvaluationAnalytics(await api('/api/evaluations/analytics'));
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function renderEvaluationAnalytics(data) {
+  const container = document.querySelector('#evaluation-analytics');
+  if (!container) return;
+  const branches = data.branches || [];
+  const branchesHtml = branches.length
+    ? `<div class="analytics-branches">${branches.map((branch) => `
+        <div class="analytics-branch"><span>${escapeHtml(branch.name)}</span><strong>${Number(branch.xp)} XP</strong></div>`).join('')}</div>`
+    : '<p class="empty-state">Оценок за период пока нет</p>';
+  const drinks = data.drinks || [];
+  const drinksHtml = drinks.length
+    ? `<div class="analytics-drinks">${drinks.map((drink) => `
+        <span class="analytics-chip">${escapeHtml(drink.title)} · ${Number(drink.evaluations)}</span>`).join('')}</div>`
+    : '';
+  const recent = data.recent || [];
+  const recentHtml = recent.length
+    ? recent.map((row) => {
+        const date = row.created_at ? String(row.created_at).slice(0, 16).replace('T', ' ') : '';
+        const subject = [row.drink, row.bean].filter(Boolean).map(escapeHtml).join(' · ') || 'Без привязки';
+        return `<article class="review-row">
+          <div class="review-person"><strong>${escapeHtml(row.employee || '')}</strong><span>${escapeHtml(date)} · ${escapeHtml(row.evaluator || '')}</span></div>
+          <span class="review-meta">${subject}</span>
+          <span class="review-score">+${Number(row.xp_awarded || 0)} XP</span>
+        </article>`;
+      }).join('')
+    : '';
+  container.innerHTML = `
+    <div class="analytics-summary">
+      <div><strong>${Number(data.evaluations || 0)}</strong><span>оценок</span></div>
+      <div><strong>${Number(data.xp_awarded || 0)}</strong><span>XP начислено</span></div>
+    </div>
+    ${branchesHtml}
+    ${drinksHtml}
+    ${recentHtml ? `<div class="review-list">${recentHtml}</div>` : ''}`;
+}
+
 async function uploadEvaluationPhoto(file) {
   if (!file) return;
   const preview = document.querySelector('#evaluation-photo-preview');
@@ -479,6 +549,8 @@ function setupDevelopment() {
     if (!developmentState) await loadDevelopment();
     renderEvaluationBranches();
     fillEvaluationEmployees();
+    fillEvaluationOptions();
+    loadEvaluationAnalytics();
   });
 
   document.querySelector('#evaluation-branches')?.addEventListener('click', (event) => {
@@ -519,13 +591,22 @@ function setupDevelopment() {
     const submit = document.querySelector('#evaluation-submit');
     if (submit) submit.disabled = true;
     try {
+      const drinkId = Number(document.querySelector('#evaluation-drink')?.value || 0);
+      const beanId = Number(document.querySelector('#evaluation-bean')?.value || 0);
       const result = await api('/api/evaluations', {
         method: 'POST',
-        body: JSON.stringify({ employee_id: employeeId, scores, photo_url: evaluationPhotoUrl }),
+        body: JSON.stringify({
+          employee_id: employeeId,
+          scores,
+          photo_url: evaluationPhotoUrl,
+          drink_id: drinkId || null,
+          bean_id: beanId || null,
+        }),
       });
       showToast(result.total_xp ? `Оценка сохранена: +${result.total_xp} XP` : 'Оценка сохранена, опыт не начислен');
       dialog.close();
       loadDevelopment();
+      loadEvaluationAnalytics();
       if (managerRole) loadUsers();
     } catch (error) {
       if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
@@ -2057,7 +2138,7 @@ function setView(name) {
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
     // Прогресс мог измениться, пока сотрудник был в другом разделе.
-    if (name === 'development') loadDevelopment();
+    if (name === 'development') { loadDevelopment(); loadEvaluationAnalytics(); }
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
   if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
@@ -3416,6 +3497,7 @@ function setupDashboard() {
   setupDevelopment();
   setupAchievements();
   loadDevelopment();
+  loadEvaluationAnalytics();
 
   const logout = async () => {
     try { await api('/api/logout', { method: 'POST' }); window.location.reload(); }
