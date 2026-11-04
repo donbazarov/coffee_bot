@@ -244,6 +244,9 @@ def initialize_schema(engine: Engine) -> None:
         _add_column_if_missing(connection, "evaluations", "comment", "TEXT")
         _add_column_if_missing(connection, "evaluations", "mentor_comment", "TEXT")
         _add_column_if_missing(connection, "evaluations", "drink_category", "TEXT")
+        # Правка задним числом: отметка времени последнего изменения оценки.
+        # Колонку добавляем идемпотентно — на базах до этого релиза её нет.
+        _add_column_if_missing(connection, "evaluations", "updated_at", "DATETIME")
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_evaluations_type
             ON evaluations (evaluation_type, created_at)
@@ -1045,13 +1048,21 @@ def drinks_for_evaluation(engine: Engine, limit: int = 5, window_days: int = 180
     return {"top": drinks[:max(0, int(limit))], "all": drinks}
 
 
-def evaluation_sessions(engine: Engine, limit: int = 30) -> dict[str, Any]:
-    """Список проведённых сессий контроля качества (для интерфейса наставника)."""
+def evaluation_sessions(engine: Engine, limit: int = 10, offset: int = 0) -> dict[str, Any]:
+    """Страница проведённых сессий контроля качества (для интерфейса наставника).
+
+    Постранично (новые сверху): берём `limit + 1` строку, чтобы без COUNT понять,
+    есть ли ещё записи (`has_more`), и отдать клиенту ровно `limit`. Порядок
+    стабильный (`created_at DESC, id DESC`) — offset-пагинация корректна.
+    """
+    limit = max(1, min(int(limit), 50))
+    offset = max(0, int(offset))
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT e.id, e.created_at, e.evaluation_type, e.is_general_cleanliness,
-                   e.xp_awarded, e.photo_url, e.shift_point, e.raw_scores,
-                   e.comment, e.mentor_comment,
+            SELECT e.id, e.created_at, e.updated_at, e.evaluation_type,
+                   e.is_general_cleanliness, e.xp_awarded, e.photo_url, e.shift_point,
+                   e.raw_scores, e.comment, e.mentor_comment,
+                   e.employee_id, e.drink_id, e.bean_id,
                    COALESCE(emp.display_name, emp.name) AS employee,
                    COALESCE(ev.display_name, ev.name) AS evaluator,
                    COALESCE(e.drink_category, d.category) AS drink_category,
@@ -1061,33 +1072,144 @@ def evaluation_sessions(engine: Engine, limit: int = 30) -> dict[str, Any]:
             JOIN users ev ON ev.id = e.evaluator_id
             LEFT JOIN menu_drinks d ON d.id = e.drink_id
             ORDER BY e.created_at DESC, e.id DESC
-            LIMIT :limit
-        """), {"limit": max(1, int(limit))}).mappings().all()
+            LIMIT :limit OFFSET :offset
+        """), {"limit": limit + 1, "offset": offset}).mappings().all()
 
+    has_more = len(rows) > limit
     sessions = []
-    for row in rows:
+    for row in rows[:limit]:
         try:
             scores = json.loads(row["raw_scores"] or "{}")
         except (json.JSONDecodeError, TypeError):
             scores = {}
         overall = scores.get("overall") if isinstance(scores, dict) else None
+        params = scores.get("params") if isinstance(scores, dict) else None
         sessions.append({
             "id": int(row["id"]),
             "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
             "evaluation_type": row["evaluation_type"] or "drink",
             "is_general_cleanliness": bool(row["is_general_cleanliness"]),
             "xp_awarded": int(row["xp_awarded"] or 0),
             "photo_url": row["photo_url"],
             "shift_point": row["shift_point"],
             "employee": row["employee"],
+            "employee_id": int(row["employee_id"]),
             "evaluator": row["evaluator"],
             "drink": row["drink_title"],
+            "drink_id": int(row["drink_id"]) if row["drink_id"] is not None else None,
+            "bean_id": int(row["bean_id"]) if row["bean_id"] is not None else None,
             "category": row["drink_category"],
             "overall": overall,
+            "params": params if isinstance(params, dict) else {},
             "comment": row["comment"],
             "mentor_comment": row["mentor_comment"],
         })
-    return {"items": sessions}
+    return {"items": sessions, "limit": limit, "offset": offset, "has_more": has_more}
+
+
+def update_evaluation(connection: Connection, evaluation_id: int, *,
+                      evaluator_id: int, category: str | None,
+                      scores: dict[str, float], photo_url: str | None = None,
+                      comment: str | None = None, mentor_comment: str | None = None,
+                      drink_id: int | None = None,
+                      bean_id: int | None = None) -> dict[str, Any]:
+    """Правка уже сохранённой оценки задним числом.
+
+    Баллы пересобираются в ветки и XP так же, как при создании, а опыт
+    корректируется дельтой: старые начисления остаются в append-only логе
+    `xp_transactions`, рядом пишется компенсирующая транзакция, а свёрнутый
+    баланс `user_skills` меняется на разницу. Сотрудник и тип оценки
+    фиксированы — «перепривязать» запись нельзя.
+
+    Возвращает итоговый балл, суммарный XP и новые ачивки. Оценка не найдена →
+    `ValueError`.
+    """
+    row = connection.execute(text("""
+        SELECT employee_id, evaluation_type FROM evaluations WHERE id = :id
+    """), {"id": evaluation_id}).mappings().first()
+    if not row:
+        raise ValueError("Оценка не найдена")
+
+    employee_id = int(row["employee_id"])
+    evaluation_type = row["evaluation_type"] or "drink"
+
+    if evaluation_type == "cleanliness":
+        spec = CLEANLINESS_PARAMS
+        category = None
+        drink_id = None
+        bean_id = None
+    else:
+        spec = params_for_category(category)
+
+    branch_scores = branch_scores_from_params(spec, scores)
+    awarded = {code: xp_for_score(value) for code, value in branch_scores.items()}
+    total = sum(awarded.values())
+    overall = overall_score_from_params(spec, scores)
+
+    raw_scores: dict[str, Any] = dict(branch_scores)
+    raw_scores["overall"] = overall
+    raw_scores["params"] = {
+        code: float(scores[code]) for code, *_ in spec if scores.get(code) is not None
+    }
+
+    _reconcile_evaluation_xp(
+        connection, evaluation_id=evaluation_id, employee_id=employee_id,
+        awarded=awarded, evaluator_id=evaluator_id,
+    )
+
+    connection.execute(text("""
+        UPDATE evaluations
+        SET raw_scores = :raw_scores, xp_awarded = :xp_awarded, photo_url = :photo_url,
+            comment = :comment, mentor_comment = :mentor_comment,
+            drink_id = :drink_id, bean_id = :bean_id, drink_category = :drink_category,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+    """), {
+        "raw_scores": json.dumps(raw_scores, ensure_ascii=False),
+        "xp_awarded": total, "photo_url": photo_url,
+        "comment": comment, "mentor_comment": mentor_comment,
+        "drink_id": drink_id, "bean_id": bean_id, "drink_category": category,
+        "id": evaluation_id,
+    })
+
+    unlocked = check_user_achievements(connection, employee_id, "evaluation")
+    return {"ok": True, "id": evaluation_id, "xp_awarded": awarded, "total_xp": total,
+            "overall": overall, "branch_scores": branch_scores, "achievements": unlocked}
+
+
+def _reconcile_evaluation_xp(connection: Connection, *, evaluation_id: int, employee_id: int,
+                             awarded: dict[str, int], evaluator_id: int) -> None:
+    """Приводит XP веток к новым баллам дельтой, не удаляя старый лог.
+
+    Старые суммы читаем из `xp_transactions` по этой оценке, считаем разницу с
+    новыми баллами и пишем компенсирующие транзакции, синхронно правя баланс
+    `user_skills`. Так `xp_transactions` остаётся append-only.
+    """
+    branches = active_branches(connection)
+    old_amounts: dict[int, int] = {
+        int(row[0]): int(row[1])
+        for row in connection.execute(text("""
+            SELECT branch_id, COALESCE(SUM(amount), 0)
+            FROM xp_transactions
+            WHERE source_type = 'evaluation' AND source_id = :id
+            GROUP BY branch_id
+        """), {"id": evaluation_id})
+    }
+    for branch in branches:
+        branch_id = int(branch["id"])
+        delta = awarded.get(branch["code"], 0) - old_amounts.get(branch_id, 0)
+        if delta == 0:
+            continue
+        connection.execute(text("""
+            INSERT INTO xp_transactions (user_id, branch_id, amount, source_type, source_id, created_by)
+            VALUES (:user_id, :branch_id, :amount, 'evaluation', :source_id, :created_by)
+        """), {"user_id": employee_id, "branch_id": branch_id, "amount": delta,
+               "source_id": evaluation_id, "created_by": evaluator_id})
+        connection.execute(text("""
+            UPDATE user_skills SET xp = xp + :amount, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = :user_id AND branch_id = :branch_id
+        """), {"user_id": employee_id, "branch_id": branch_id, "amount": delta})
 
 
 def evaluation_analytics(engine: Engine, days: int = 30) -> dict[str, Any]:

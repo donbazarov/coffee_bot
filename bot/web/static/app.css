@@ -1590,17 +1590,22 @@ body { transition: background-color .3s ease, color .3s ease; }
 .evaluation-dialog textarea { width: 100%; min-height: 52px; padding: 10px 12px; resize: vertical; }
 
 .session-list { display: grid; gap: 8px; }
-.session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line-faint); }
+.session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line-faint); }
 .session-main strong { display: block; font-size: 13px; }
 .session-main span { color: var(--muted); font-size: 10px; }
 .session-meta { display: grid; gap: 2px; color: var(--muted); font: 9px var(--mono); text-align: right; }
 .session-point { color: var(--accent); }
 .session-score { font: 700 15px var(--mono); }
 .session-xp { color: var(--accent); font: 11px var(--mono); text-align: right; }
+.session-edited { color: var(--accent); font-style: italic; }
+.session-edit { width: 40px; height: 40px; color: var(--muted); }
+.session-edit:hover { color: var(--accent); }
+.session-more { display: block; margin: 14px auto 0; }
 @media (max-width: 760px) {
-  .session-row { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; }
-  .session-meta { grid-area: 1 / 2; }
+  .session-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; }
+  .session-meta { grid-area: 1 / 2 / 1 / 4; }
   .session-score { grid-area: 2 / 1; }
   .session-xp { grid-area: 2 / 2; }
+  .session-edit { grid-area: 2 / 3; width: 44px; height: 44px; }
 }
 

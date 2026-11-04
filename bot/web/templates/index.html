@@ -226,8 +226,9 @@
             <button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>
           </div>
           <section class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Проведённые сессии</h3></div><span class="panel-index">ДО 30</span></div>
+            <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Проведённые сессии</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
             <div class="session-list" id="quality-sessions"></div>
+            <button class="button button-quiet session-more" type="button" id="quality-sessions-more" hidden>Показать ещё</button>
           </section>
           <section class="panel analytics-panel" id="evaluation-analytics-panel">
             <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
@@ -673,6 +674,8 @@
         <button type="button" data-quality-type="drink" class="is-selected">Напиток</button>
         <button type="button" data-quality-type="cleanliness">Порядок и чистота</button>
       </div>
+
+      <p class="settings-hint" id="quality-editing-employee" hidden></p>
 
       <label>Торговая точка
         <select id="quality-point">

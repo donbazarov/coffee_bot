@@ -1337,6 +1337,9 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
 
     Напиток оценивается по гранулярным параметрам категории; чистота — одной
     сессией, опыт за которую начисляется всем бариста на смене точки.
+
+    Роли: напитки оценивает только наставник (`mentor`); старший (`senior`)
+    ведёт лишь чистоту и порядок заведения.
     """
     if evaluator["role"] not in EVALUATION_ROLES:
         raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
@@ -1344,6 +1347,8 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
     evaluation_type = payload.get("evaluation_type") or "drink"
     if evaluation_type not in {"drink", "cleanliness"}:
         raise HTTPException(status_code=422, detail="Неизвестный тип оценки")
+    if evaluation_type == "drink" and evaluator["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Напитки может оценивать только наставник")
     point = payload.get("point")
     if point is not None and point not in SHIFT_POINTS:
         raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
@@ -1416,9 +1421,74 @@ def evaluation_drinks(_: dict[str, Any] = Depends(require_user)):
 
 
 @app.get("/api/evaluations/sessions")
-def evaluation_sessions(_: dict[str, Any] = Depends(require_manager)):
-    """Последние сессии контроля качества для интерфейса наставника."""
-    return gamification.evaluation_sessions(engine)
+def evaluation_sessions(limit: int = 10, offset: int = 0,
+                        _: dict[str, Any] = Depends(require_manager)):
+    """Страница сессий контроля качества для интерфейса наставника (по 10)."""
+    return gamification.evaluation_sessions(engine, limit=limit, offset=offset)
+
+
+@app.patch("/api/evaluations/{evaluation_id}")
+async def update_evaluation_route(evaluation_id: int, request: Request,
+                                  evaluator: dict[str, Any] = Depends(require_manager_csrf)):
+    """Правка уже сохранённой оценки задним числом.
+
+    Разрешены баллы, комментарии, фото, а для напитка — ещё напиток и зерно.
+    Сотрудник и тип оценки фиксированы; XP и баланс веток пересчитываются.
+    Изменять оценки может только наставник (`mentor`).
+    """
+    if evaluator["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Изменять оценки может только наставник")
+    payload = await _read_json_object(request)
+    photo_url = payload.get("photo_url")
+    if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
+        raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
+    comment = _optional_text(payload, "comment")
+    mentor_comment = _optional_text(payload, "mentor_comment")
+
+    with engine.begin() as connection:
+        existing = connection.execute(
+            text("SELECT evaluation_type FROM evaluations WHERE id = :id"),
+            {"id": evaluation_id},
+        ).mappings().first()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Оценка не найдена")
+
+        if existing["evaluation_type"] == "cleanliness":
+            allowed = {code for code, *_ in gamification.CLEANLINESS_PARAMS}
+            scores = _validate_param_scores(payload.get("scores"), allowed)
+            try:
+                return gamification.update_evaluation(
+                    connection, evaluation_id, evaluator_id=int(evaluator["id"]),
+                    category=None, scores=scores, photo_url=photo_url,
+                    comment=comment, mentor_comment=mentor_comment,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=404, detail=str(error)) from error
+
+        drink_id = _optional_reference_id(payload, "drink_id")
+        bean_id = _optional_reference_id(payload, "bean_id")
+        category = payload.get("category")
+        if category is not None and not isinstance(category, str):
+            raise HTTPException(status_code=422, detail="Некорректная категория напитка")
+        _require_active_reference(connection, "menu_drinks", drink_id, "Напиток")
+        _require_active_reference(connection, "coffee_beans", bean_id, "Зерно")
+        if drink_id is not None:
+            row = connection.execute(
+                text("SELECT category FROM menu_drinks WHERE id = :id"), {"id": drink_id}
+            ).first()
+            if row:
+                category = row[0]
+        spec = gamification.params_for_category(category)
+        scores = _validate_param_scores(payload.get("scores"), {code for code, *_ in spec})
+        try:
+            return gamification.update_evaluation(
+                connection, evaluation_id, evaluator_id=int(evaluator["id"]),
+                category=category, scores=scores, photo_url=photo_url,
+                comment=comment, mentor_comment=mentor_comment,
+                drink_id=drink_id, bean_id=bean_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @app.get("/api/evaluations/analytics")

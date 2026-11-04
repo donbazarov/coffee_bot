@@ -445,6 +445,10 @@ let qualityType = 'drink';
 let qualityDrinks = [];
 let qualityDrinkCards = new Map();
 let qualitySelectedEmployee = 0;
+// Режим правки: id редактируемой оценки (null — создание новой).
+let qualityEditingId = null;
+// Пагинация истории сессий: по 10 записей, догрузка кнопкой «Показать ещё».
+const qualitySessionsState = { offset: 0, limit: 10, items: [], hasMore: false, loading: false };
 
 /* Набор параметров для текущего режима: чистота или категория выбранного напитка. */
 function paramSpec() {
@@ -481,16 +485,30 @@ function renderTopDrinks() {
 function resetQualityDialog() {
   evaluationPhotoUrl = null;
   qualitySelectedEmployee = 0;
+  qualityEditingId = null;
   document.querySelector('#evaluation-form')?.reset();
+  // Возврат диалога в режим «Новая оценка»: показываем переключатель типа,
+  // кнопку «Ещё оценка» и выбор бариста на смене.
+  setText('#evaluation-dialog .dialog-top h2', 'Новая оценка');
+  const submit = document.querySelector('#evaluation-submit');
+  if (submit) submit.textContent = 'Сохранить';
+  document.querySelector('#evaluation-dialog .quality-type')?.removeAttribute('hidden');
+  const addAnother = document.querySelector('#quality-add-another');
+  if (addAnother) addAnother.hidden = false;
+  document.querySelector('#evaluation-dialog .quality-staff')?.removeAttribute('hidden');
+  const editingLabel = document.querySelector('#quality-editing-employee');
+  if (editingLabel) editingLabel.hidden = true;
   const errorNode = document.querySelector('#evaluation-form-error');
   if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
   const preview = document.querySelector('#evaluation-photo-preview');
   if (preview) { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
   document.querySelector('#quality-staff-fallback')?.setAttribute('hidden', '');
+  // Наставник по умолчанию оценивает напиток; старший — только чистоту.
+  const defaultType = isMentor ? 'drink' : 'cleanliness';
   document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((button) => {
-    button.classList.toggle('is-selected', button.dataset.qualityType === 'drink');
+    button.classList.toggle('is-selected', button.dataset.qualityType === defaultType);
   });
-  setQualityType('drink');
+  setQualityType(defaultType);
 }
 
 /* Переключение «Напиток» ⇄ «Порядок и чистота»: панель полей и набор параметров. */
@@ -505,7 +523,8 @@ function setQualityType(type) {
       : 'Выберите параметры и выставьте баллы. Ниже 4.0 опыт не начисляется.';
   }
   renderQualityParams();
-  if (qualityType === 'drink') loadQualityActiveStaff();
+  // В режиме правки бариста уже зафиксирован — список смены не подгружаем.
+  if (qualityType === 'drink' && !qualityEditingId) loadQualityActiveStaff();
 }
 
 async function fillQualityEmployees() {
@@ -981,14 +1000,21 @@ function setupDevelopment() {
   const newButton = document.querySelector('#quality-new');
   if (!dialog || !newButton) return;
   setupDevelopmentTabs();
+  // Старший ведёт только чистоту и порядок: прячем вариант «Напиток».
+  if (!isMentor) {
+    document.querySelector('#evaluation-dialog [data-quality-type="drink"]')?.setAttribute('hidden', '');
+  }
 
   newButton.addEventListener('click', async () => {
     resetQualityDialog();
     dialog.showModal();
     if (!developmentState) loadDevelopment();
-    await fillQualityDrinks();
-    fillQualityEmployees();
-    loadQualityActiveStaff();
+    // Напитки оценивает только наставник — для старшего грузим лишь параметры чистоты.
+    if (isMentor) {
+      await fillQualityDrinks();
+      fillQualityEmployees();
+      loadQualityActiveStaff();
+    }
   });
 
   // Переключатель типа оценки «Напиток» ⇄ «Порядок и чистота».
@@ -1060,6 +1086,17 @@ function setupDevelopment() {
   document.querySelector('#quality-add-another')?.addEventListener('click', () => {
     submitQualityEvaluation(dialog, true);
   });
+
+  // Правка задним числом: кнопка «Изменить» в строке истории (делегирование).
+  document.querySelector('#quality-sessions')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-edit-id]');
+    if (!button) return;
+    const id = Number(button.dataset.editId);
+    const item = qualitySessionsState.items.find((row) => Number(row.id) === id);
+    if (item) openQualityEditor(item);
+  });
+  // Догрузка следующей страницы истории.
+  document.querySelector('#quality-sessions-more')?.addEventListener('click', () => loadQualitySessions(false));
 }
 
 /* Вкладки раздела «Развитие»: «Мой прогресс» / «Контроль качества». */
@@ -1086,22 +1123,44 @@ function setupDevelopmentTabs() {
   });
 }
 
-/* Список проведённых сессий контроля качества. */
-async function loadQualitySessions() {
+/* История сессий контроля качества: по 10 записей, догрузка кнопкой «Показать ещё». */
+async function loadQualitySessions(reset = true) {
   const container = document.querySelector('#quality-sessions');
-  if (!container) return;
+  if (!container || qualitySessionsState.loading) return;
+  if (reset) { qualitySessionsState.offset = 0; qualitySessionsState.items = []; }
+  qualitySessionsState.loading = true;
+  const moreButton = document.querySelector('#quality-sessions-more');
+  if (moreButton) moreButton.disabled = true;
   try {
-    const data = await api('/api/evaluations/sessions');
-    renderQualitySessions(data.items || []);
+    const url = `/api/evaluations/sessions?limit=${qualitySessionsState.limit}&offset=${qualitySessionsState.offset}`;
+    const data = await api(url);
+    const items = data.items || [];
+    qualitySessionsState.items = reset ? items : qualitySessionsState.items.concat(items);
+    qualitySessionsState.hasMore = Boolean(data.has_more);
+    qualitySessionsState.offset = qualitySessionsState.items.length;
+    renderQualitySessions();
   } catch (error) {
-    container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+    if (reset) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  } finally {
+    qualitySessionsState.loading = false;
+    if (moreButton) moreButton.disabled = false;
   }
 }
 
-function renderQualitySessions(items) {
+function renderQualitySessions() {
   const container = document.querySelector('#quality-sessions');
   if (!container) return;
-  if (!items.length) { container.innerHTML = '<p class="empty-state">Оценочных сессий пока нет</p>'; return; }
+  const items = qualitySessionsState.items;
+  const moreButton = document.querySelector('#quality-sessions-more');
+  const countLabel = document.querySelector('#quality-sessions-count');
+  // Правка доступна только наставнику.
+  const canEdit = isMentor;
+  if (!items.length) {
+    container.innerHTML = '<p class="empty-state">Оценочных сессий пока нет</p>';
+    if (moreButton) moreButton.hidden = true;
+    if (countLabel) countLabel.textContent = 'ПО 10';
+    return;
+  }
   container.innerHTML = items.map((item) => {
     const date = String(item.created_at || '').slice(0, 16).replace('T', ' ');
     const overall = item.overall == null ? '—' : Number(item.overall).toFixed(1);
@@ -1109,15 +1168,83 @@ function renderQualitySessions(items) {
       ? 'Порядок и чистота'
       : escapeHtml(item.drink || 'Напиток');
     const category = item.category ? ` · ${escapeHtml(item.category)}` : '';
+    const edited = item.updated_at ? ' · <span class="session-edited">изменено</span>' : '';
     const point = item.shift_point ? `<span class="session-point">${escapeHtml(item.shift_point)}</span>` : '';
     return `
       <article class="session-row">
-        <div class="session-main"><strong>${escapeHtml(item.employee || '')}</strong><span>${subject}${category}</span></div>
+        <div class="session-main"><strong>${escapeHtml(item.employee || '')}</strong><span>${subject}${category}${edited}</span></div>
         <div class="session-meta">${point}<span>${escapeHtml(date)}</span><span>${escapeHtml(item.evaluator || '')}</span></div>
         <span class="session-score">${overall}</span>
         <span class="session-xp">+${Number(item.xp_awarded || 0)} XP</span>
+        ${canEdit ? `<button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button>` : ''}
       </article>`;
   }).join('');
+  if (moreButton) moreButton.hidden = !qualitySessionsState.hasMore;
+  if (countLabel) countLabel.textContent = qualitySessionsState.hasMore ? `${items.length}+` : String(items.length);
+}
+
+/* Открытие диалога оценки в режиме правки: баллы, комментарии, фото (и напиток). */
+function openQualityEditor(item) {
+  const dialog = document.querySelector('#evaluation-dialog');
+  if (!dialog) return;
+  resetQualityDialog();
+  qualityEditingId = item.id;
+
+  setText('#evaluation-dialog .dialog-top h2', 'Редактировать оценку');
+  const submit = document.querySelector('#evaluation-submit');
+  if (submit) submit.textContent = 'Сохранить изменения';
+  document.querySelector('#evaluation-dialog .quality-type')?.setAttribute('hidden', '');
+  const addAnother = document.querySelector('#quality-add-another');
+  if (addAnother) addAnother.hidden = true;
+  const editingLabel = document.querySelector('#quality-editing-employee');
+  if (editingLabel) {
+    editingLabel.textContent = `Сотрудник: ${item.employee || ''}`;
+    editingLabel.hidden = false;
+  }
+
+  const pointSelect = document.querySelector('#quality-point');
+  if (pointSelect && item.shift_point) pointSelect.value = item.shift_point;
+  document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.qualityType === item.evaluation_type);
+  });
+  setQualityType(item.evaluation_type);
+
+  if (item.evaluation_type !== 'cleanliness') {
+    document.querySelector('#evaluation-dialog .quality-staff')?.setAttribute('hidden', '');
+    document.querySelector('#quality-staff-fallback')?.setAttribute('hidden', '');
+    const drinkSelect = document.querySelector('#evaluation-drink');
+    const beanSelect = document.querySelector('#evaluation-bean');
+    if (drinkSelect && item.drink_id) drinkSelect.value = String(item.drink_id);
+    if (beanSelect && item.bean_id) beanSelect.value = String(item.bean_id);
+    renderQualityParams();
+  }
+  applyQualityScores(item.params || {});
+
+  const comment = document.querySelector('#quality-drink-comment');
+  if (comment) comment.value = item.comment || '';
+  const mentor = document.querySelector('#quality-mentor-comment');
+  if (mentor) mentor.value = item.mentor_comment || '';
+  evaluationPhotoUrl = item.photo_url || null;
+  const preview = document.querySelector('#evaluation-photo-preview');
+  if (preview) {
+    if (evaluationPhotoUrl) { preview.querySelector('img').src = evaluationPhotoUrl; preview.hidden = false; }
+    else { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
+  }
+  const errorNode = document.querySelector('#evaluation-form-error');
+  if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
+  dialog.showModal();
+}
+
+/* Проставить сохранённые баллы в кнопки параметров. */
+function applyQualityScores(params) {
+  document.querySelectorAll('#evaluation-params .evaluation-branch').forEach((row) => {
+    const value = params[row.dataset.param];
+    row.querySelectorAll('.evaluation-score').forEach((button) => {
+      const selected = value != null && Number(button.dataset.score) === Number(value);
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+  });
 }
 
 /* Отправка оценки. keepOpen — «Ещё оценка»: сохраняем без закрытия окна. */
@@ -1145,31 +1272,37 @@ async function submitQualityEvaluation(dialog, keepOpen) {
 
   if (type === 'drink') {
     const drinkId = Number(document.querySelector('#evaluation-drink')?.value || 0);
-    const employeeId = qualitySelectedEmployee || Number(document.querySelector('#evaluation-employee')?.value || 0);
     if (!drinkId) { setError('Выберите напиток'); return; }
-    if (!employeeId) { setError('Выберите бариста'); return; }
     payload.drink_id = drinkId;
-    payload.employee_id = employeeId;
     payload.bean_id = Number(document.querySelector('#evaluation-bean')?.value || 0) || null;
     payload.category = qualityDrinkCards.get(drinkId)?.category || null;
+    // При правке сотрудник зафиксирован — менять его нельзя.
+    if (!qualityEditingId) {
+      const employeeId = qualitySelectedEmployee || Number(document.querySelector('#evaluation-employee')?.value || 0);
+      if (!employeeId) { setError('Выберите бариста'); return; }
+      payload.employee_id = employeeId;
+    }
   }
 
+  const editingId = qualityEditingId;
   const submit = document.querySelector('#evaluation-submit');
   const addAnother = document.querySelector('#quality-add-another');
   if (submit) submit.disabled = true;
   if (addAnother) addAnother.disabled = true;
   try {
-    const result = await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
+    const result = editingId
+      ? await api(`/api/evaluations/${editingId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      : await api('/api/evaluations', { method: 'POST', body: JSON.stringify(payload) });
     const overall = result.overall != null ? ` (${Number(result.overall).toFixed(1)})` : '';
     const xp = result.total_xp ? ` · +${result.total_xp} XP` : '';
-    showToast(`Оценка сохранена${overall}${xp}`);
-    if (keepOpen && type === 'drink') {
+    showToast(editingId ? `Оценка обновлена${overall}${xp}` : `Оценка сохранена${overall}${xp}`);
+    if (keepOpen && type === 'drink' && !editingId) {
       resetQualityDialog();
     } else {
       dialog.close();
     }
     loadDevelopment();
-    loadQualitySessions();
+    loadQualitySessions(true);
     loadEvaluationAnalytics();
   } catch (error) {
     setError(error.message);
