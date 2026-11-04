@@ -9,8 +9,11 @@
 * `kb_pages` — дерево страниц (Notion-lite): `parent_id` строит иерархию,
   `category` делит базу на разделы (`beans`, `drinks`, `wiki`, `standards`),
   `content_json` хранит тело страницы (Markdown или JSON-строку).
-* `coffee_beans` — справочник зерна, привязанный к странице (`page_id`).
-* `menu_drinks` — справочник напитков, привязанный к странице (`page_id`).
+* `coffee_beans` — справочник зерна, привязанный к странице (`page_id`);
+  `roast_type` хранит один или несколько типов обжарки через запятую (`espresso`,
+  `filter`, `omni`).
+* `menu_drinks` — справочник напитков, привязанный к странице (`page_id`); подача
+  хранится двумя полями (`serve_here`, `serve_takeaway`) с фото в `data/kb/photos`.
 
 Для страниц категорий `beans`/`drinks` запись справочника создаётся и
 досинхронизируется автоматически из полей страницы (см. `_upsert_bean` /
@@ -23,23 +26,33 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import re
+import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
+from PIL import Image, ImageOps
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
 from bot.web.deps import require_manager_csrf, require_user
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 kb_router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 # Псевдоним, чтобы имя совпадало с ТЗ.
 router = kb_router
 
-# Разделы базы знаний (совпадает с kb_pages.category).
-CATEGORY_KEYS = ("beans", "drinks", "wiki", "standards")
+# Разделы базы знаний (совпадает с kb_pages.category). Порядок задаёт оглавление
+# в интерфейсе: справка (вики/стандарты) идёт выше справочников напитков и зерна.
+CATEGORY_KEYS = ("wiki", "standards", "beans", "drinks")
 # Тип обжарки зерна (coffee_beans.roast_type).
 BEAN_ROAST_TYPES = ("espresso", "filter", "omni")
 # Категории меню напитков (menu_drinks.category).
@@ -49,6 +62,13 @@ MAX_TITLE = 200
 MAX_SLUG = 120
 MAX_TEXT = 20000
 
+# Каталог фото подач напитков (не в git) — как аватары, чат и фото оценок.
+_KB_PHOTOS_DIR: Path | None = None
+KB_PHOTO_MAX_BYTES = 8 * 1024 * 1024
+KB_PHOTO_MAX_SIDE = 1600
+KB_PHOTO_FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.webp$")
+KB_PHOTO_URL_RE = re.compile(r"^/api/kb/photos/[0-9a-f]{32}\.webp$")
+
 # Транслитерация кириллицы для автослага — тот же набор, что в announcements.py.
 TRANSLIT = {
     "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
@@ -57,6 +77,17 @@ TRANSLIT = {
     "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
     "я": "ya",
 }
+
+
+def _add_column_if_missing(connection: Any, table: str, column: str, definition: str) -> None:
+    """`ALTER TABLE ... ADD COLUMN`, если колонки ещё нет.
+
+    SQLite не поддерживает `ADD COLUMN IF NOT EXISTS`, поэтому ретрофит (подачи
+    напитка и их фото) добавляем по факту наличия — идемпотентно при каждом старте.
+    """
+    existing = {row[1] for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        connection.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def initialize_schema(engine: Engine) -> None:
@@ -95,6 +126,10 @@ def initialize_schema(engine: Engine) -> None:
                 ingredients TEXT,
                 description TEXT,
                 serve_rules TEXT,
+                serve_here TEXT,
+                serve_takeaway TEXT,
+                serve_here_photo TEXT,
+                serve_takeaway_photo TEXT,
                 is_active INTEGER NOT NULL DEFAULT 1
             )
         """))
@@ -113,6 +148,15 @@ def initialize_schema(engine: Engine) -> None:
         connection.execute(text("""
             CREATE INDEX IF NOT EXISTS idx_menu_drinks_category
             ON menu_drinks (category, title)
+        """))
+        # Ретрофит существующих баз: колонки подач и их фото добавляем идемпотентно,
+        # а прежние «Правила подачи» переносим в «Подача здесь», чтобы не потерять
+        # уже заполненные данные.
+        for column in ("serve_here", "serve_takeaway", "serve_here_photo", "serve_takeaway_photo"):
+            _add_column_if_missing(connection, "menu_drinks", column, "TEXT")
+        connection.execute(text("""
+            UPDATE menu_drinks SET serve_here = serve_rules
+            WHERE serve_here IS NULL AND serve_rules IS NOT NULL
         """))
 
 
@@ -151,6 +195,61 @@ def _clean(value: Any, limit: int) -> str:
 def _clean_text(value: Any, limit: int = MAX_TEXT) -> str | None:
     text_value = _clean(value, limit)
     return text_value or None
+
+
+def _normalize_roast_types(value: Any) -> str:
+    """Типы обжарки зерна можно прислать списком или строкой через запятую.
+
+    Наружу отдаём CSV (совместимо с прежними одиночными значениями), а сам
+    список валидируем и чистим от дублей, сохраняя порядок.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        raw = [str(item).strip() for item in value]
+    else:
+        raw = [part.strip() for part in str(value).split(",")]
+    values = [item for item in raw if item]
+    for item in values:
+        if item not in BEAN_ROAST_TYPES:
+            raise ValueError("Тип обжарки: " + ", ".join(BEAN_ROAST_TYPES))
+    return ",".join(dict.fromkeys(values))
+
+
+def _clean_photo(value: Any) -> str | None:
+    """Ссылка на фото подачи: принимаем только собственный URL, иначе — ошибка."""
+    if value in (None, ""):
+        return None
+    if isinstance(value, str) and KB_PHOTO_URL_RE.match(value.strip()):
+        return value.strip()
+    raise ValueError("Некорректная ссылка на фото подачи")
+
+
+def kb_photos_dir() -> Path:
+    """Каталог фото подач напитков. Создаётся один раз за процесс."""
+    global _KB_PHOTOS_DIR
+    if _KB_PHOTOS_DIR is None:
+        path = Path(os.getenv("NEFT_KB_PHOTOS_DIR") or (REPO_ROOT / "data" / "kb" / "photos"))
+        path.mkdir(parents=True, exist_ok=True)
+        _KB_PHOTOS_DIR = path
+    return _KB_PHOTOS_DIR
+
+
+def store_kb_photo(data: bytes) -> str | None:
+    """Сжимает фото подачи в WebP (Pillow). Возвращает URL или None, если не изображение."""
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image)
+            image = image.convert("RGB")
+            if max(image.size) > KB_PHOTO_MAX_SIDE:
+                image.thumbnail((KB_PHOTO_MAX_SIDE, KB_PHOTO_MAX_SIDE), Image.LANCZOS)
+            buffer = io.BytesIO()
+            image.save(buffer, format="WEBP", quality=82, method=4)
+    except Exception:  # noqa: BLE001 — битый файл/не изображение → None
+        return None
+    name = f"{uuid.uuid4().hex}.webp"
+    (kb_photos_dir() / name).write_bytes(buffer.getvalue())
+    return f"/api/kb/photos/{name}"
 
 
 def _clean_int(value: Any) -> int | None:
@@ -202,9 +301,8 @@ def _upsert_bean(connection: Any, page_id: int, default_name: str, payload: dict
     name = _clean(source.get("name"), MAX_TITLE) or (current["name"] if current else default_name)
     if not name:
         raise ValueError("Название зерна обязательно")
-    roast_type = _clean(source.get("roast_type"), 32) or (current["roast_type"] if current else "espresso")
-    if roast_type not in BEAN_ROAST_TYPES:
-        raise ValueError("Тип обжарки: espresso, filter или omni")
+    roast_type = _normalize_roast_types(source.get("roast_type")) \
+        or (current["roast_type"] if current else "espresso")
 
     if source.get("pantone_color") is not None or current is None:
         pantone_color = _clean_text(source.get("pantone_color"), 60)
@@ -253,24 +351,37 @@ def _upsert_drink(connection: Any, page_id: int, default_title: str, payload: di
             return _clean_text(source.get(field))
         return current[field]
 
+    # Фото подач: присланный URL валидируем, отсутствие поля — сохраняем как было,
+    # явные null/"" очищают фото.
+    photos: dict[str, str | None] = {}
+    for key in ("serve_here_photo", "serve_takeaway_photo"):
+        photos[key] = _clean_photo(source.get(key)) if key in source else (current[key] if current else None)
+
     values = {
         "page_id": page_id, "title": title, "category": category,
         "ttk": pick("ttk"), "ingredients": pick("ingredients"),
-        "description": pick("description"), "serve_rules": pick("serve_rules"),
+        "description": pick("description"),
+        "serve_here": pick("serve_here"), "serve_takeaway": pick("serve_takeaway"),
+        "serve_here_photo": photos["serve_here_photo"],
+        "serve_takeaway_photo": photos["serve_takeaway_photo"],
         "is_active": _flag(source.get("is_active"), current["is_active"] if current else 1),
     }
     if current:
         connection.execute(text("""
             UPDATE menu_drinks
             SET title = :title, category = :category, ttk = :ttk, ingredients = :ingredients,
-                description = :description, serve_rules = :serve_rules, is_active = :is_active
+                description = :description, serve_here = :serve_here, serve_takeaway = :serve_takeaway,
+                serve_here_photo = :serve_here_photo, serve_takeaway_photo = :serve_takeaway_photo,
+                is_active = :is_active
             WHERE page_id = :page_id
         """), values)
     else:
         connection.execute(text("""
             INSERT INTO menu_drinks
-                (page_id, title, category, ttk, ingredients, description, serve_rules, is_active)
-            VALUES (:page_id, :title, :category, :ttk, :ingredients, :description, :serve_rules, :is_active)
+                (page_id, title, category, ttk, ingredients, description, serve_here,
+                 serve_takeaway, serve_here_photo, serve_takeaway_photo, is_active)
+            VALUES (:page_id, :title, :category, :ttk, :ingredients, :description, :serve_here,
+                    :serve_takeaway, :serve_here_photo, :serve_takeaway_photo, :is_active)
         """), values)
 
 
@@ -511,4 +622,32 @@ def kb_delete_page(page_id: int, _: dict[str, Any] = Depends(require_manager_csr
     if not delete_page(engine, page_id):
         raise HTTPException(status_code=404, detail="Страница не найдена")
     return {"ok": True}
+
+
+@kb_router.get("/photos/{filename}")
+def kb_photo(filename: str, _: dict[str, Any] = Depends(require_user)):
+    """Отдаёт фото подачи напитка. Имя из URL пропускаем только собственного формата."""
+    if not KB_PHOTO_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    path = kb_photos_dir() / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    return FileResponse(
+        path,
+        media_type="image/webp",
+        headers={"Cache-Control": "private, max-age=31536000"},
+    )
+
+
+@kb_router.post("/photos")
+async def kb_upload_photo(request: Request,
+                          _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    """Тело запроса — сам файл изображения (без multipart), как у фото оценок."""
+    data = await request.body()
+    if not data or len(data) > KB_PHOTO_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="Файл пустой или больше 8 МБ")
+    url = await run_in_threadpool(store_kb_photo, data)
+    if not url:
+        raise HTTPException(status_code=422, detail="Не удалось прочитать изображение")
+    return {"ok": True, "url": url}
 

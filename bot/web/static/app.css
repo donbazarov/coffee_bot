@@ -1360,6 +1360,74 @@ body { transition: background-color .3s ease, color .3s ease; }
 .kb-field-value { margin: 0; color: var(--text); font-size: 15px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
 .kb-badge { align-self: flex-start; display: inline-block; padding: 4px 10px; border: 1px solid var(--line-strong); color: var(--muted); font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; }
 .kb-badge-muted { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+/* Поиск по базе знаний — тач-дружелюбное поле на всю ширину панели. */
+.kb-search { display: flex; align-items: center; gap: 9px; margin: 0 0 16px; padding: 0 13px; min-height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--field-bg); color: var(--muted); transition: border-color .2s; }
+.kb-search .icon { width: 16px; height: 16px; flex: 0 0 auto; }
+.kb-search input { width: 100%; height: 42px; border: 0; background: transparent; color: var(--text); font: inherit; }
+.kb-search input::placeholder { color: var(--dim); }
+.kb-search input:focus { outline: none; }
+.kb-search:focus-within { border-color: var(--accent-line); }
+/* Подписи полей карточки зерна (обрезанная обжарка и цвет Pantone). */
+.kb-field-caption { margin: 0 0 7px; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.kb-field-block { margin: 15px 0; }
+/* Переключатель обжарки — сегментированный контрол в один тап. */
+.kb-seg { margin: 15px 0; }
+.kb-seg-buttons { display: flex; flex-wrap: wrap; gap: 2px; width: 100%; padding: 3px; border: 1px solid var(--line); background: var(--surface-sunken); }
+.kb-seg-button { flex: 1 1 90px; min-height: 44px; padding: 0 12px; border: 0; background: transparent; color: var(--muted); font: 500 12px var(--sans); cursor: pointer; transition: background-color .18s, color .18s; }
+.kb-seg-button:hover { color: var(--text); }
+.kb-seg-button.is-selected { background: var(--accent); color: var(--accent-contrast); }
+.kb-seg-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Палитра Pantone — круглые свотчи с подсветкой выбранного. */
+.pantone-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+.pantone-swatch { display: grid; width: 44px; height: 44px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: var(--swatch, #92938d); color: #1c1b17; cursor: pointer; box-shadow: inset 0 0 0 1px rgba(var(--hl), .28), 0 1px 4px rgba(0, 0, 0, .25); transition: transform .18s ease, box-shadow .18s ease; }
+.pantone-swatch:hover { transform: translateY(-1px); }
+.pantone-swatch.is-selected { box-shadow: 0 0 0 2px var(--surface-raised), 0 0 0 4px var(--accent); }
+.pantone-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pantone-swatch-other { background: repeating-linear-gradient(45deg, var(--surface-raised) 0 6px, var(--surface-sunken) 6px 12px); color: var(--text-soft); }
+.pantone-swatch-other .icon { width: 16px; height: 16px; }
+.kb-pantone-custom { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.kb-pantone-custom[hidden] { display: none; }
+.kb-pantone-custom label { flex: 1 1 150px; margin: 0; }
+.kb-pantone-custom input[type="color"] { width: 100%; }
+/* Редактор текста страницы: тулбар форматирования над textarea. Селекторы
+   квалифицируем через .kb-dialog, иначе .user-dialog label (display/margin)
+   перебивает оформление кнопок по специфичности. */
+.kb-dialog .kb-editor { display: grid; }
+.kb-dialog .kb-editor textarea { margin-top: 0; }
+.kb-dialog .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border: 1px solid var(--line); border-bottom: 0; background: var(--surface-sunken); }
+.kb-dialog .kb-tool { display: grid; width: 36px; height: 36px; margin: 0; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-soft); font-size: 1em; cursor: pointer; transition: background-color .18s, color .18s, border-color .18s; }
+.kb-dialog .kb-tool:hover { border-color: var(--line); background: rgba(var(--hl), .04); color: var(--text); }
+.kb-dialog .kb-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kb-dialog .kb-tool .icon { width: 17px; height: 17px; }
+.kb-dialog .kb-tool-sep { width: 1px; height: 20px; margin: 0 3px; background: var(--line); }
+.kb-dialog .kb-tool-color { position: relative; }
+.kb-dialog .kb-tool-color input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; opacity: 0; cursor: pointer; }
+.kb-dialog .kb-tool-swatch { position: absolute; right: 3px; bottom: 3px; width: 11px; height: 11px; border-radius: 3px; background: var(--swatch, var(--accent)); box-shadow: inset 0 0 0 1px rgba(var(--hl), .35); pointer-events: none; }
+/* Отрендеренный текст страницы (Markdown + безопасные токены форматирования). */
+.kb-content { white-space: normal; overflow-wrap: anywhere; }
+.kb-content h2, .kb-content h3, .kb-content h4 { margin: 14px 0 6px; line-height: 1.3; }
+.kb-content h2 { font-size: 19px; }
+.kb-content h3 { font-size: 16.5px; }
+.kb-content h4 { font-size: 15px; }
+.kb-content p { margin: 0 0 8px; }
+.kb-content ul, .kb-content ol { margin: 0 0 8px; padding-left: 22px; }
+.kb-content li { margin: 2px 0; }
+.kb-content blockquote { margin: 0 0 8px; padding: 4px 0 4px 12px; border-left: 2px solid var(--accent-line); color: var(--text-soft); }
+.kb-content code { padding: 1px 5px; border-radius: 5px; background: var(--surface-sunken); font: 12.5px var(--mono); }
+.kb-content strong { font-weight: 600; }
+/* Фото подач напитка: picker и превью в диалоге (квалифицируем через .kb-dialog). */
+.kb-photo { margin: 8px 0 4px; }
+.kb-dialog .kb-photo-pick { display: grid; min-height: 44px; place-items: center; border: 1px dashed var(--line-strong); color: var(--muted); font-size: 11px; cursor: pointer; }
+.kb-dialog .kb-photo-pick:hover { border-color: var(--accent-line); color: var(--text); }
+.kb-dialog .kb-photo-pick input { display: none; }
+.kb-photo-preview { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.kb-photo-preview[hidden] { display: none; }
+.kb-photo-preview img { width: 104px; height: 104px; border: 1px solid var(--line); object-fit: cover; }
+/* Отрендеренные блоки подач на странице напитка. */
+.kb-serve-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+.kb-serve { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface-sunken); border-radius: 12px; }
+.kb-serve .kb-field-label { margin: 0; }
+.kb-serve-photo { width: 100%; max-width: 340px; border: 1px solid var(--line); border-radius: 10px; }
 /* Поля формы редактора переключаются по категории (data-kb-for). */
 .kb-dialog .kb-form-group { display: flex; flex-direction: column; border: 0; margin: 0; padding: 0; }
 .kb-dialog .kb-form-group[hidden] { display: none; }
@@ -1367,6 +1435,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 @media (min-width: 900px) {
   .kb-layout { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: start; }
   .kb-fields { grid-template-columns: 1fr 1fr; }
+  .kb-serve-grid { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 760px) {
   .kb-page-panel { padding: 18px 16px 20px; }
@@ -1374,8 +1443,11 @@ body { transition: background-color .3s ease, color .3s ease; }
   .kb-empty { font-size: 15px; }
   .kb-actions { width: 100%; }
   .kb-actions .button { flex: 1 1 auto; justify-content: center; }
+  .kb-dialog .kb-tool { width: 40px; height: 40px; }
+  .pantone-swatch { width: 40px; height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .kb-node { transition: none; }
+  .kb-seg-button, .pantone-swatch, .kb-dialog .kb-tool { transition: none; }
 }
 

@@ -3497,10 +3497,10 @@ const CACHE_KEY_KB_LIST = 'neft-cache:kb-list';
 const CACHE_KEY_KB_PAGE = 'neft-cache:kb-page';
 
 const KB_CATEGORIES = [
-  { key: 'beans', label: 'Зерно' },
-  { key: 'drinks', label: 'Напитки' },
   { key: 'wiki', label: 'Вики' },
   { key: 'standards', label: 'Стандарты' },
+  { key: 'beans', label: 'Зерно' },
+  { key: 'drinks', label: 'Напитки' },
 ];
 const KB_CATEGORY_ALL = 'all';
 const KB_ROAST_LABELS = { espresso: 'Эспрессо', filter: 'Фильтр', omni: 'Омни' };
@@ -3528,6 +3528,7 @@ const kbState = {
   items: [],
   categories: KB_CATEGORIES.map((item) => item.key),
   filter: KB_CATEGORY_ALL,
+  query: '',
   selectedId: null,
   current: null,
   ready: false,
@@ -3540,6 +3541,7 @@ function kbCategoryLabel(key) {
 }
 
 function kbPantoneHex(value) {
+  if (typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value.trim())) return value.trim();
   const found = KB_PANTONE.find((item) => item.value === value);
   return found ? found.hex : '#92938d';
 }
@@ -3549,7 +3551,7 @@ function kbPantoneHex(value) {
 function kbReferenceBadge(reference) {
   if (!reference) return '';
   if (reference.type === 'beans') {
-    const roast = KB_ROAST_LABELS[reference.roast_type] || reference.roast_type || '';
+    const roast = kbRoastLabel(reference.roast_type) || reference.roast_type || '';
     return `<span class="kb-ref"><i class="kb-swatch" style="--kb-swatch:${kbPantoneHex(reference.pantone_color)}"></i>${escapeHtml(roast)}</span>`;
   }
   if (reference.type === 'drinks') {
@@ -3586,21 +3588,31 @@ function kbCategoryTree(items) {
   return build(roots, 0);
 }
 
+/* Страница попадает в поиск по названию или по имени связанного справочника. */
+function kbMatchesQuery(item) {
+  const query = kbState.query.trim().toLowerCase();
+  if (!query) return true;
+  if (String(item.title || '').toLowerCase().includes(query)) return true;
+  const reference = item.reference;
+  return Boolean(reference && reference.name && String(reference.name).toLowerCase().includes(query));
+}
+
 function renderKbTree() {
   const node = document.querySelector('#kb-tree');
   if (!node) return;
-  const all = kbState.items;
-  const visible = kbState.filter === KB_CATEGORY_ALL ? all : all.filter((item) => item.category === kbState.filter);
+  const query = kbState.query.trim();
+  const base = kbState.filter === KB_CATEGORY_ALL ? kbState.items : kbState.items.filter((item) => item.category === kbState.filter);
+  const visible = query ? base.filter(kbMatchesQuery) : base;
   const count = document.querySelector('#kb-count');
   if (count) count.textContent = String(visible.length);
   if (!visible.length) {
-    node.innerHTML = '<p class="kb-empty kb-empty-tree">Пока нет страниц</p>';
+    node.innerHTML = `<p class="kb-empty kb-empty-tree">${query ? 'Ничего не найдено' : 'Пока нет страниц'}</p>`;
     return;
   }
   const categories = kbState.filter === KB_CATEGORY_ALL ? kbState.categories : [kbState.filter];
   const parts = [];
   for (const key of categories) {
-    const items = all.filter((item) => item.category === key);
+    const items = visible.filter((item) => item.category === key);
     if (!items.length) continue;
     parts.push(`<section class="kb-category" data-kb-category="${key}"><p class="kb-category-title">${escapeHtml(kbCategoryLabel(key))}<span class="kb-category-count">${items.length}</span></p>${kbCategoryTree(items)}</section>`);
   }
@@ -3623,19 +3635,93 @@ function kbBeanMarkup(bean) {
   const pantone = bean.pantone_color
     ? `<div class="kb-pantone"><i class="kb-swatch kb-swatch-lg" style="--kb-swatch:${kbPantoneHex(bean.pantone_color)}"></i><div><strong>${escapeHtml(bean.pantone_color)}</strong><small>Pantone · фирменный цвет зерна</small></div></div>`
     : '';
-  const roast = KB_ROAST_LABELS[bean.roast_type] || bean.roast_type;
+  const roast = kbRoastLabel(bean.roast_type) || bean.roast_type;
   const status = Number(bean.is_active) ? '' : '<span class="kb-badge kb-badge-muted">Не активно</span>';
   return `${pantone}<div class="kb-fields">${kbFieldMarkup('Обжарка', roast)}${kbFieldMarkup('Описание', bean.description)}</div>${status}`;
+}
+
+/* Блок подачи: заголовок, фото (если есть) и текст. */
+function kbServeMarkup(label, text, photo) {
+  const hasText = text != null && String(text).trim() !== '';
+  if (!hasText && !photo) return '';
+  const image = photo ? `<img class="kb-serve-photo" src="${escapeHtml(photo)}" alt="${escapeHtml(label)}" loading="lazy">` : '';
+  const body = hasText ? `<p class="kb-field-value">${escapeHtml(text)}</p>` : '';
+  return `<div class="kb-serve"><p class="kb-field-label">${escapeHtml(label)}</p>${image}${body}</div>`;
 }
 
 function kbDrinkMarkup(drink) {
   if (!drink) return '';
   const status = Number(drink.is_active) ? '' : '<span class="kb-badge kb-badge-muted">Не активно</span>';
-  return `<div class="kb-fields">${kbFieldMarkup('Категория', drink.category)}${kbFieldMarkup('Технологическая карта (ТТК)', drink.ttk)}${kbFieldMarkup('Состав', drink.ingredients)}${kbFieldMarkup('Правила подачи', drink.serve_rules)}${kbFieldMarkup('Описание', drink.description)}</div>${status}`;
+  const serve = kbServeMarkup('Подача здесь', drink.serve_here, drink.serve_here_photo)
+    + kbServeMarkup('Подача с собой', drink.serve_takeaway, drink.serve_takeaway_photo);
+  const serveBlock = serve ? `<div class="kb-serve-grid">${serve}</div>` : '';
+  return `<div class="kb-fields">${kbFieldMarkup('Категория', drink.category)}${kbFieldMarkup('Технологическая карта (ТТК)', drink.ttk)}${kbFieldMarkup('Состав', drink.ingredients)}${kbFieldMarkup('Описание', drink.description)}</div>${serveBlock}${status}`;
+}
+
+/* --- Рендер содержимого страницы -----------------------------------------
+   Хранимый текст — Markdown с набором безопасных токенов форматирования,
+   которые вставляет тулбар: **жирный**, *курсив*, «### » заголовок, списки
+   «* » и «1. », цитата «> », цвет [color:#hex]…[/color], фон
+   [bg:#hex]…[/bg] и выравнивание [center|right|left]…[/…]. Произвольный HTML
+   не допускается: сначала всё экранируется, затем подставляются только наши
+   теги (значение цвета проходит проверку на HEX). */
+
+const KB_INLINE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const KB_BLOCK_PREFIX = /^(\s*)(?:#{1,3}\s+|[*-]\s+|\d+\.\s+|>\s?)/;
+
+function kbInlineFormat(text) {
+  return text
+    .replace(/\[color:(#[0-9a-fA-F]{3,8})\]([\s\S]*?)\[\/color\]/g, (match, hex, inner) => (KB_INLINE_HEX.test(hex) ? `<span style="color:${hex}">${inner}</span>` : inner))
+    .replace(/\[bg:(#[0-9a-fA-F]{3,8})\]([\s\S]*?)\[\/bg\]/g, (match, hex, inner) => (KB_INLINE_HEX.test(hex) ? `<span style="background:${hex}">${inner}</span>` : inner))
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+}
+
+function kbContentToHtml(text) {
+  const lines = escapeHtml(text).replace(/\r\n?/g, '\n').split('\n');
+  const parts = [];
+  let list = null;
+  const closeList = () => { if (list) { parts.push(`</${list}>`); list = null; } };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) { closeList(); continue; }
+    let align = '';
+    let body = line;
+    const openAlign = body.match(/^\[(center|right|left)\]/i);
+    const closeAlign = body.match(/\[\/(center|right|left)\]$/i);
+    if (openAlign && closeAlign && openAlign[1].toLowerCase() === closeAlign[1].toLowerCase()) {
+      align = ` style="text-align:${openAlign[1].toLowerCase()}"`;
+      body = body.slice(openAlign[0].length, body.length - closeAlign[0].length).trim();
+    }
+    const heading = body.match(/^(#{1,3})\s+(.*)$/);
+    const bullet = body.match(/^[*-]\s+(.*)$/);
+    const numbered = body.match(/^\d+\.\s+(.*)$/);
+    const quote = body.match(/^&gt;\s?(.*)$/);
+    if (heading) {
+      closeList();
+      const tag = ['h2', 'h3', 'h4'][heading[1].length - 1] || 'h4';
+      parts.push(`<${tag}${align}>${kbInlineFormat(heading[2])}</${tag}>`);
+    } else if (bullet) {
+      if (list !== 'ul') { closeList(); parts.push('<ul>'); list = 'ul'; }
+      parts.push(`<li>${kbInlineFormat(bullet[1])}</li>`);
+    } else if (numbered) {
+      if (list !== 'ol') { closeList(); parts.push('<ol>'); list = 'ol'; }
+      parts.push(`<li>${kbInlineFormat(numbered[1])}</li>`);
+    } else if (quote) {
+      closeList();
+      parts.push(`<blockquote>${kbInlineFormat(quote[1])}</blockquote>`);
+    } else {
+      closeList();
+      parts.push(`<p${align}>${kbInlineFormat(body)}</p>`);
+    }
+  }
+  closeList();
+  return parts.join('');
 }
 
 /* Тело страницы (wiki/standards) может лежать как обычный текст или как JSON —
-   показываем читаемо в обоих случаях. */
+   рендерим читаемо в обоих случаях. */
 function kbBodyMarkup(page) {
   const raw = page.content_json;
   if (!raw) return '';
@@ -3646,7 +3732,9 @@ function kbBodyMarkup(page) {
     else if (parsed && typeof parsed === 'object' && typeof parsed.text === 'string') text = parsed.text;
     else text = JSON.stringify(parsed, null, 2);
   } catch (error) { /* не JSON — выводим как есть */ }
-  return kbFieldMarkup('Содержимое', text);
+  const html = kbContentToHtml(text);
+  if (!html) return '';
+  return `<div class="kb-field"><p class="kb-field-label">Содержимое</p><div class="kb-field-value kb-content">${html}</div></div>`;
 }
 
 function renderKbPage() {
@@ -3733,13 +3821,73 @@ async function openKnowledgeBase() {
   if (ok && !kbState.current && kbState.items.length) openKbPage(kbState.items[0].id);
 }
 
-/* Заполняет select Pantone один раз (единый источник — KB_PANTONE). */
-function kbFillPantone() {
-  const select = document.querySelector('#kb-field-pantone');
-  if (!select || select.dataset.filled) return;
-  select.innerHTML = KB_PANTONE.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.value)}</option>`).join('')
-    + `<option value="${escapeHtml(KB_PANTONE_OTHER)}">Другое…</option>`;
-  select.dataset.filled = '1';
+/* Рисует палитру Pantone свотчами + кнопку «Другое» (единый источник — KB_PANTONE). */
+function kbRenderPantone() {
+  const picker = document.querySelector('#kb-pantone-picker');
+  if (!picker || picker.dataset.filled) return;
+  const swatches = KB_PANTONE.map((item) =>
+    `<button class="pantone-swatch" type="button" role="radio" aria-checked="false" data-pantone="${escapeHtml(item.value)}" style="--swatch:${item.hex}" title="${escapeHtml(item.value)}" aria-label="${escapeHtml(item.value)}"></button>`,
+  );
+  swatches.push(`<button class="pantone-swatch pantone-swatch-other" type="button" role="radio" aria-checked="false" data-pantone="${escapeHtml(KB_PANTONE_OTHER)}" title="Другое — свой цвет" aria-label="Другое — свой цвет"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg></button>`);
+  picker.innerHTML = swatches.join('');
+  picker.dataset.filled = '1';
+}
+
+/* Показывает блок ручного цвета, когда выбран пункт «Другое». */
+function kbSyncPantoneCustom() {
+  const hidden = document.querySelector('#kb-field-pantone');
+  const custom = document.querySelector('#kb-pantone-custom');
+  if (custom) custom.hidden = (hidden ? hidden.value : '') !== KB_PANTONE_OTHER;
+}
+
+/* Выбирает свотч Pantone и синхронизирует скрытое значение формы. */
+function kbSelectPantone(value) {
+  const normalized = value || KB_PANTONE[0].value;
+  const hidden = document.querySelector('#kb-field-pantone');
+  if (hidden) hidden.value = normalized;
+  document.querySelectorAll('#kb-pantone-picker .pantone-swatch').forEach((node) => {
+    const active = node.dataset.pantone === normalized;
+    node.classList.toggle('is-selected', active);
+    node.setAttribute('aria-checked', active ? 'true' : 'false');
+  });
+  kbSyncPantoneCustom();
+}
+
+/* Разбирает значение обжарки в список кодов (поддерживает CSV и массивы). */
+function kbRoastValues(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  return raw.map((item) => String(item).trim()).filter((item) => KB_ROAST_LABELS[item]);
+}
+
+/* Человекочитаемая метка: один тип или несколько через « · ». */
+function kbRoastLabel(value) {
+  return kbRoastValues(value).map((code) => KB_ROAST_LABELS[code]).join(' · ');
+}
+
+/* Ставит выбранные типы обжарки в чипах — типов может быть несколько. */
+function kbSetRoast(value) {
+  const values = kbRoastValues(value);
+  const hidden = document.querySelector('#kb-roast input[name="roast_type"]');
+  if (hidden) hidden.value = values.join(',');
+  document.querySelectorAll('#kb-roast .kb-seg-button').forEach((node) => {
+    const active = values.includes(node.dataset.roast);
+    node.classList.toggle('is-selected', active);
+    node.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
+}
+
+/* Переключает один тип обжарки, не сбрасывая остальные. */
+function kbToggleRoast(value) {
+  const button = document.querySelector(`#kb-roast .kb-seg-button[data-roast="${value}"]`);
+  if (!button) return;
+  const active = !button.classList.contains('is-selected');
+  button.classList.toggle('is-selected', active);
+  button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  const hidden = document.querySelector('#kb-roast input[name="roast_type"]');
+  if (hidden) {
+    hidden.value = [...document.querySelectorAll('#kb-roast .kb-seg-button.is-selected')]
+      .map((node) => node.dataset.roast).join(',');
+  }
 }
 
 /* Показывает поля выбранной категории и «другой» Pantone. */
@@ -3750,8 +3898,9 @@ function kbSyncFields() {
   form.querySelectorAll('[data-kb-for]').forEach((field) => {
     field.hidden = !String(field.dataset.kbFor).split(/\s+/).includes(category);
   });
-  const custom = document.querySelector('#kb-pantone-custom');
-  if (custom) custom.hidden = form.elements.pantone_select.value !== KB_PANTONE_OTHER;
+  const hidden = document.querySelector('#kb-field-pantone');
+  if (category === 'beans' && hidden && !hidden.value) kbSelectPantone(KB_PANTONE[0].value);
+  else kbSyncPantoneCustom();
 }
 
 function kbFormError(message) {
@@ -3765,8 +3914,9 @@ function openKbDialog(page) {
   const dialog = document.querySelector('#kb-page-dialog');
   const form = document.querySelector('#kb-page-form');
   if (!dialog || !form) return;
-  kbFillPantone();
+  kbRenderPantone();
   form.reset();
+  kbResetDrinkPhotos();
   const errorNode = document.querySelector('#kb-form-error');
   if (errorNode) errorNode.hidden = true;
   form.dataset.pageId = page ? String(page.id) : '';
@@ -3777,23 +3927,43 @@ function openKbDialog(page) {
   if (!page) {
     form.elements.category.value = kbState.filter !== KB_CATEGORY_ALL ? kbState.filter : 'beans';
     form.elements.parent_id.value = '';
+    kbSetRoast('espresso');
+    kbSelectPantone(KB_PANTONE[0].value);
+    form.elements.pantone_custom.value = '';
+    form.elements.pantone_hex.value = KB_PANTONE[0].hex;
   } else {
     form.elements.category.value = page.category;
     form.elements.parent_id.value = page.parent_id != null ? String(page.parent_id) : '';
     form.elements.title.value = page.title || '';
     if (page.category === 'beans' && page.bean) {
-      form.elements.roast_type.value = page.bean.roast_type || 'espresso';
+      kbSetRoast(page.bean.roast_type || 'espresso');
       const pantone = page.bean.pantone_color || '';
       const known = KB_PANTONE.some((item) => item.value === pantone);
-      form.elements.pantone_select.value = known ? pantone : (pantone ? KB_PANTONE_OTHER : KB_PANTONE[0].value);
-      form.elements.pantone_custom.value = known ? '' : pantone;
+      const isHex = /^#[0-9a-f]{3,8}$/i.test(pantone);
+      if (known) {
+        kbSelectPantone(pantone);
+        form.elements.pantone_custom.value = '';
+      } else if (isHex) {
+        kbSelectPantone(KB_PANTONE_OTHER);
+        form.elements.pantone_hex.value = pantone;
+        form.elements.pantone_custom.value = '';
+      } else if (pantone) {
+        kbSelectPantone(KB_PANTONE_OTHER);
+        form.elements.pantone_custom.value = pantone;
+      } else {
+        kbSelectPantone(KB_PANTONE[0].value);
+        form.elements.pantone_custom.value = '';
+      }
       form.elements.bean_description.value = page.bean.description || '';
       form.elements.is_active.checked = Number(page.bean.is_active) !== 0;
     } else if (page.category === 'drinks' && page.drink) {
       form.elements.drink_category.value = page.drink.category || 'черный кофе';
       form.elements.ttk.value = page.drink.ttk || '';
       form.elements.ingredients.value = page.drink.ingredients || '';
-      form.elements.serve_rules.value = page.drink.serve_rules || '';
+      form.elements.serve_here.value = page.drink.serve_here || '';
+      form.elements.serve_takeaway.value = page.drink.serve_takeaway || '';
+      kbSetDrinkPhoto('serve_here', page.drink.serve_here_photo);
+      kbSetDrinkPhoto('serve_takeaway', page.drink.serve_takeaway_photo);
       form.elements.drink_description.value = page.drink.description || '';
       form.elements.is_active.checked = Number(page.drink.is_active) !== 0;
     } else {
@@ -3817,10 +3987,13 @@ async function submitKbForm(event) {
   payload.parent_id = parentId ? Number(parentId) : null;
   if (category === 'beans') {
     let pantone = form.elements.pantone_select.value;
-    if (pantone === KB_PANTONE_OTHER) pantone = form.elements.pantone_custom.value.trim();
+    if (pantone === KB_PANTONE_OTHER) {
+      const label = form.elements.pantone_custom.value.trim();
+      pantone = label || (form.elements.pantone_hex ? form.elements.pantone_hex.value.trim() : '');
+    }
     payload.bean = {
       name: title,
-      roast_type: form.elements.roast_type.value,
+      roast_type: kbRoastValues(form.elements.roast_type.value),
       pantone_color: pantone || null,
       description: form.elements.bean_description.value.trim() || null,
       is_active: form.elements.is_active.checked,
@@ -3832,7 +4005,10 @@ async function submitKbForm(event) {
       ttk: form.elements.ttk.value.trim() || null,
       ingredients: form.elements.ingredients.value.trim() || null,
       description: form.elements.drink_description.value.trim() || null,
-      serve_rules: form.elements.serve_rules.value.trim() || null,
+      serve_here: form.elements.serve_here.value.trim() || null,
+      serve_takeaway: form.elements.serve_takeaway.value.trim() || null,
+      serve_here_photo: form.elements.serve_here_photo.value || null,
+      serve_takeaway_photo: form.elements.serve_takeaway_photo.value || null,
       is_active: form.elements.is_active.checked,
     };
   } else {
@@ -3878,6 +4054,168 @@ async function deleteKbPage(id) {
   }
 }
 
+/* --- Форматирование текста страницы (Markdown-тулбар) --------------------- */
+
+let kbEditorBound = false;
+let kbPhotosBound = false;
+
+/* Обновляет индикаторы цвета на кнопках тулбара под текущие значения пикеров. */
+function syncKbToolChips() {
+  const pairs = [['#kb-color-text', '#kb-color-text-chip'], ['#kb-color-bg', '#kb-color-bg-chip']];
+  for (const [inputId, chipId] of pairs) {
+    const input = document.querySelector(inputId);
+    const chip = document.querySelector(chipId);
+    if (input && chip) chip.style.setProperty('--swatch', input.value);
+  }
+}
+
+function kbSetSelection(textarea, start, end) {
+  textarea.focus();
+  textarea.setSelectionRange(start, end);
+}
+
+/* Оборачивает выделение обёртками before/after; при пустом выделении подставляет
+   плейсхолдер, чтобы было видно, что именно форматируется. */
+function kbWrapSelection(textarea, before, after, placeholder) {
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+  const selected = textarea.value.slice(start, end) || placeholder || '';
+  textarea.setRangeText(before + selected + after, start, end, 'end');
+  const selStart = start + before.length;
+  kbSetSelection(textarea, selStart, selStart + selected.length);
+}
+
+/* Префиксует каждую строку выделения блочным маркером (список, заголовок,
+   цитата), попутно снимая прежний маркер — типы не наслаиваются. */
+function kbPrefixLines(textarea, prefix) {
+  const start = textarea.value.lastIndexOf('\n', textarea.selectionStart - 1) + 1;
+  let end = textarea.value.indexOf('\n', textarea.selectionEnd);
+  if (end === -1) end = textarea.value.length;
+  const block = textarea.value.slice(start, end);
+  const insert = block.split('\n')
+    .map((line) => `${prefix}${line.replace(KB_BLOCK_PREFIX, '$1')}`)
+    .join('\n');
+  textarea.setRangeText(insert, start, end, 'end');
+  kbSetSelection(textarea, start, start + insert.length);
+}
+
+/* Снимает Markdown-разметку и токены форматирования с выделения (или строки). */
+function kbClearFormatting(textarea) {
+  let start = textarea.selectionStart;
+  let end = textarea.selectionEnd;
+  if (start === end) {
+    start = textarea.value.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = textarea.value.indexOf('\n', end);
+    if (lineEnd === -1) lineEnd = textarea.value.length;
+    end = lineEnd;
+  }
+  const cleaned = textarea.value.slice(start, end)
+    .replace(/\[color:#[0-9a-fA-F]{3,8}\]/gi, '').replace(/\[\/color\]/gi, '')
+    .replace(/\[bg:#[0-9a-fA-F]{3,8}\]/gi, '').replace(/\[\/bg\]/gi, '')
+    .replace(/\[\/?(?:center|right|left)\]/gi, '')
+    .replace(/\*\*/g, '').replace(/`/g, '')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/^(\s*)(?:#{1,3}\s+|[*-]\s+|\d+\.\s+|>\s?)/gm, '$1');
+  textarea.setRangeText(cleaned, start, end, 'end');
+  kbSetSelection(textarea, start, start + cleaned.length);
+}
+
+/* Применяет инструмент тулбара к textarea. */
+function kbApplyFormat(textarea, cmd, color) {
+  if (!textarea) return;
+  if (cmd === 'bold') kbWrapSelection(textarea, '**', '**', 'текст');
+  else if (cmd === 'italic') kbWrapSelection(textarea, '*', '*', 'текст');
+  else if (cmd === 'heading') kbPrefixLines(textarea, '### ');
+  else if (cmd === 'ul') kbPrefixLines(textarea, '* ');
+  else if (cmd === 'ol') kbPrefixLines(textarea, '1. ');
+  else if (cmd === 'quote') kbPrefixLines(textarea, '> ');
+  else if (cmd === 'color') kbWrapSelection(textarea, `[color:${color}]`, '[/color]', 'текст');
+  else if (cmd === 'bg') kbWrapSelection(textarea, `[bg:${color}]`, '[/bg]', 'текст');
+  else if (cmd === 'align-left' || cmd === 'align-center' || cmd === 'align-right') {
+    const side = cmd.slice('align-'.length);
+    kbWrapSelection(textarea, `[${side}]`, `[/${side}]`, 'текст');
+  } else if (cmd === 'clear') kbClearFormatting(textarea);
+}
+
+/* Подключает тулбар редактора к textarea страницы. */
+function setupKbEditor() {
+  const toolbar = document.querySelector('#kb-toolbar');
+  const textarea = document.querySelector('#kb-page-form textarea[name="content_json"]');
+  if (!toolbar || !textarea || kbEditorBound) return;
+  kbEditorBound = true;
+  toolbar.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-kb-cmd]');
+    if (!button) return;
+    event.preventDefault();
+    kbApplyFormat(textarea, button.dataset.kbCmd);
+  });
+  const textColor = document.querySelector('#kb-color-text');
+  const bgColor = document.querySelector('#kb-color-bg');
+  textColor?.addEventListener('change', () => { kbApplyFormat(textarea, 'color', textColor.value); syncKbToolChips(); });
+  bgColor?.addEventListener('change', () => { kbApplyFormat(textarea, 'bg', bgColor.value); syncKbToolChips(); });
+  syncKbToolChips();
+}
+
+/* --- Фото подач напитка (raw body + CSRF, как у фото оценок) --------------- */
+
+async function kbUploadDrinkPhoto(field, file) {
+  if (!file || !field) return;
+  const errorNode = document.querySelector('#kb-form-error');
+  if (errorNode) errorNode.hidden = true;
+  try {
+    const response = await fetch('/api/kb/photos', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+      credentials: 'same-origin',
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить фото');
+    kbSetDrinkPhoto(field, data.url);
+  } catch (error) {
+    if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
+    else showToast(error.message);
+  }
+}
+
+/* Проставляет скрытое поле и превью фото подачи. */
+function kbSetDrinkPhoto(field, url) {
+  const form = document.querySelector('#kb-page-form');
+  const hidden = form ? form.elements[`${field}_photo`] : null;
+  if (hidden) hidden.value = url || '';
+  const preview = document.querySelector(`#kb-photo-${field}`);
+  const image = preview ? preview.querySelector('img') : null;
+  if (image) {
+    if (url) image.src = url; else image.removeAttribute('src');
+  }
+  if (preview) preview.hidden = !url;
+}
+
+/* Сбрасывает превью и скрытые поля фото подач при открытии диалога. */
+function kbResetDrinkPhotos() {
+  kbSetDrinkPhoto('serve_here', '');
+  kbSetDrinkPhoto('serve_takeaway', '');
+}
+
+/* Подключает инпуты и кнопки «Убрать» для фото подач (один раз). */
+function setupKbDrinkPhotos() {
+  if (kbPhotosBound) return;
+  kbPhotosBound = true;
+  document.querySelectorAll('[data-kb-photo]').forEach((input) => {
+    input.addEventListener('change', (event) => {
+      kbUploadDrinkPhoto(event.currentTarget.dataset.kbPhoto, event.currentTarget.files?.[0]);
+    });
+  });
+  document.querySelectorAll('[data-kb-photo-remove]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const field = button.dataset.kbPhotoRemove;
+      kbSetDrinkPhoto(field, '');
+      const input = document.querySelector(`[data-kb-photo="${field}"]`);
+      if (input) input.value = '';
+    });
+  });
+}
+
 function setupKnowledgeBase() {
   document.querySelector('#kb-filters')?.addEventListener('click', (event) => {
     const chip = event.target.closest('[data-kb-filter]');
@@ -3897,10 +4235,27 @@ function setupKnowledgeBase() {
     const remove = event.target.closest('[data-kb-delete]');
     if (remove) deleteKbPage(Number(remove.dataset.kbDelete));
   });
+  const search = document.querySelector('#kb-search');
+  if (search) {
+    let searchTimer;
+    search.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(() => { kbState.query = search.value.trim(); renderKbTree(); }, 120);
+    });
+  }
+  document.querySelector('#kb-pantone-picker')?.addEventListener('click', (event) => {
+    const swatch = event.target.closest('[data-pantone]');
+    if (swatch) kbSelectPantone(swatch.dataset.pantone);
+  });
+  document.querySelector('#kb-roast')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-roast]');
+    if (button) kbToggleRoast(button.dataset.roast);
+  });
+  setupKbEditor();
+  setupKbDrinkPhotos();
   const form = document.querySelector('#kb-page-form');
   if (form) {
     form.elements.category.addEventListener('change', kbSyncFields);
-    form.elements.pantone_select.addEventListener('change', kbSyncFields);
     form.addEventListener('submit', submitKbForm);
   }
 }
