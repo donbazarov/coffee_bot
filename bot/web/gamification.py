@@ -486,6 +486,38 @@ def _award_branch_xp(connection: Connection, *, employee_id: int, awarded: dict[
         """), {"user_id": employee_id, "branch_id": branch["id"], "amount": xp})
 
 
+def award_xp(connection: Connection, *, user_id: int, amounts: dict[str, int],
+             source_type: str, source_id: int | None = None,
+             created_by: int | None = None) -> dict[str, int]:
+    """Начисляет опыт по веткам (код ветки -> XP) и двигает сводный баланс.
+
+    Общий помощник для событий вне оценок наставника — публикация описаний
+    напитков и викторины («где чей латте-арт / мем»). Пишет append-only
+    `xp_transactions` и синхронно обновляет `user_skills`. Возвращает
+    фактически начисленные суммы по кодам веток.
+    """
+    applied: dict[str, int] = {}
+    for branch in active_branches(connection):
+        xp = int(amounts.get(branch["code"], 0) or 0)
+        if xp <= 0:
+            continue
+        connection.execute(text("""
+            INSERT INTO xp_transactions (user_id, branch_id, amount, source_type, source_id, created_by)
+            VALUES (:user_id, :branch_id, :amount, :source_type, :source_id, :created_by)
+        """), {"user_id": user_id, "branch_id": branch["id"], "amount": xp,
+               "source_type": source_type, "source_id": source_id, "created_by": created_by})
+        connection.execute(text("""
+            INSERT OR IGNORE INTO user_skills (user_id, branch_id, xp, updated_at)
+            VALUES (:user_id, :branch_id, 0, CURRENT_TIMESTAMP)
+        """), {"user_id": user_id, "branch_id": branch["id"]})
+        connection.execute(text("""
+            UPDATE user_skills SET xp = xp + :amount, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = :user_id AND branch_id = :branch_id
+        """), {"user_id": user_id, "branch_id": branch["id"], "amount": xp})
+        applied[branch["code"]] = xp
+    return applied
+
+
 def apply_evaluation(connection: Connection, evaluator_id: int, employee_id: int,
                      scores: dict[str, float], photo_url: str | None,
                      drink_id: int | None = None, bean_id: int | None = None) -> dict[str, Any]:

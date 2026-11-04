@@ -2831,6 +2831,7 @@ function setView(name) {
         name === 'analytics' ? 'Аналитика команды' :
         name === 'announcements' ? 'Анонсы' :
         name === 'kb' ? 'База знаний' :
+        name === 'drinks' ? 'Описание напитков' :
         name === 'chat' ? 'Чат' :
         name === 'profile' ? 'Личный кабинет' :
         `Добрый день, ${title.dataset.name}`;
@@ -2857,6 +2858,7 @@ function setView(name) {
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
   if (name === 'kb') openKnowledgeBase();
+  if (name === 'drinks') openDrinks();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
   if (name === 'analytics') loadAnalytics();
@@ -4966,6 +4968,815 @@ function setupKnowledgeBase() {
   }
 }
 
+/* --- Описание напитков -------------------------------------------------- */
+
+const DRINK_POINT_LABELS = { 'ДЕ': 'Декабристов', 'УЯ': 'Университетская', 'другое': 'Другое' };
+const DRINK_ITEM_LABELS = { 'черный кофе': 'Чёрный кофе', 'кофе с молоком': 'Молочный напиток' };
+const DRINK_LABELS = { acidity: 'Кислотность', sweetness: 'Сладость', bitterness: 'Горечь' };
+const drinkState = {
+  items: [], points: [], authors: [], point: '', author: '',
+  offset: 0, limit: 20, hasMore: false, loaded: false,
+  options: null, shift: null, photos: { latte_art: [], meme: [] }, tab: 'feed',
+  memes: { items: [], authors: [], author: '', offset: 0, limit: 30, hasMore: false, loaded: false },
+};
+
+function drinkPointLabel(point) {
+  return DRINK_POINT_LABELS[point] || point || 'Другое';
+}
+
+function formatDrinkDate(value) {
+  try {
+    return new Date(value).toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  } catch (error) {
+    return '';
+  }
+}
+
+async function openDrinks() {
+  if (!drinkState.loaded) renderDrinkFilters();
+  setDrinksTab(drinkState.tab || 'feed');
+  await loadDrinks(!drinkState.loaded);
+  if (drinkState.tab === 'memes' && !drinkState.memes.loaded) loadMemes(true);
+}
+
+async function loadDrinks(reset = false) {
+  const feed = document.querySelector('#drinks-feed');
+  if (reset) {
+    drinkState.offset = 0;
+    drinkState.items = [];
+    if (feed) feed.innerHTML = '<p class="empty-state">Загрузка…</p>';
+  }
+  try {
+    const params = new URLSearchParams({ limit: String(drinkState.limit), offset: String(drinkState.offset) });
+    if (drinkState.point) params.set('point', drinkState.point);
+    if (drinkState.author) params.set('author_id', drinkState.author);
+    const data = await api(`/api/drink-descriptions?${params.toString()}`);
+    drinkState.points = data.points || [];
+    drinkState.authors = data.authors || [];
+    drinkState.hasMore = Boolean(data.has_more);
+    drinkState.items = reset ? (data.items || []) : drinkState.items.concat(data.items || []);
+    drinkState.offset = drinkState.items.length;
+    drinkState.loaded = true;
+    renderDrinkFilters();
+    renderDrinksFeed();
+  } catch (error) {
+    if (feed) feed.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderDrinkFilters() {
+  const chips = document.querySelector('#drinks-point-filter');
+  if (chips) {
+    const options = [{ value: '', label: 'Все' }].concat(
+      (drinkState.points || []).map((point) => ({ value: point, label: drinkPointLabel(point) })),
+    );
+    chips.innerHTML = options.map((option) =>
+      `<button class="chip${drinkState.point === option.value ? ' is-selected' : ''}" type="button" data-drink-point="${escapeHtml(option.value)}">${escapeHtml(option.label)}</button>`).join('');
+  }
+  const select = document.querySelector('#drinks-author-filter');
+  if (select) {
+    const current = drinkState.author;
+    select.innerHTML = '<option value="">Все</option>' + (drinkState.authors || []).map(
+      (author) => `<option value="${author.id}">${escapeHtml(author.name)}</option>`).join('');
+    select.value = current;
+  }
+}
+
+function renderDrinksFeed() {
+  const feed = document.querySelector('#drinks-feed');
+  const more = document.querySelector('#drinks-more');
+  if (!feed) return;
+  if (!drinkState.items.length) {
+    feed.innerHTML = '<p class="empty-state">Пока нет описаний смен. Станьте первым!</p>';
+  } else {
+    feed.innerHTML = drinkState.items.map(drinkCardMarkup).join('');
+  }
+  if (more) more.hidden = !drinkState.hasMore;
+}
+
+function drinkItemView(item) {
+  const recipe = item.recipe || {};
+  const numbers = [
+    recipe.dose != null ? `вход ${recipe.dose} г` : '',
+    recipe.yield != null ? `выход ${recipe.yield} г` : '',
+    recipe.water != null ? `вода ${recipe.water} мл` : '',
+    recipe.time != null ? `${recipe.time} с` : '',
+    recipe.temp != null ? `${recipe.temp} °C` : '',
+  ].filter(Boolean).join(' · ');
+  const texts = item.balance_texts || {};
+  const details = [];
+  if (item.bean) details.push(`Зерно: ${item.bean.name}`);
+  if (item.category === 'черный кофе') {
+    const balance = item.balance || {};
+    ['acidity', 'sweetness', 'bitterness'].forEach((key) => {
+      if (balance[key]) details.push(`${DRINK_LABELS[key]}: ${balance[key]}${texts[key] ? ` (${texts[key]})` : ''}`);
+    });
+    if (item.body && item.body.intensity) details.push(`Тело: ${item.body.intensity}${item.body.texture ? ` (${item.body.texture})` : ''}`);
+  } else {
+    if (item.balance_score) details.push(`Баланс: ${item.balance_score}`);
+    if (item.milk_drop) details.push(`Молочная капля: ${item.milk_drop}`);
+  }
+  if (item.bouquet) details.push(`Букет: ${item.bouquet}`);
+  if (item.category === 'черный кофе' && item.aftertaste && item.aftertaste.duration) {
+    details.push(`Послевкусие: ${item.aftertaste.duration}${item.aftertaste.quality ? ` (${item.aftertaste.quality})` : ''}`);
+  }
+  const title = item.drink ? item.drink.title : '';
+  return `<div class="drink-item">
+    <div class="drink-item-head"><span class="drink-item-cat">${escapeHtml(DRINK_ITEM_LABELS[item.category] || item.category)}</span><span class="drink-item-bean">${escapeHtml(title)}</span></div>
+    ${numbers ? `<p class="drink-item-recipe">${escapeHtml(numbers)}</p>` : ''}
+    ${details.length ? `<p class="drink-item-details">${escapeHtml(details.join(' · '))}</p>` : ''}
+  </div>`;
+}
+
+function drinkCardMarkup(desc) {
+  const items = (desc.items || []).map(drinkItemView).join('');
+  const quizzes = (desc.quizzes || []).map((quiz) => drinkQuizMarkup(quiz)).join('');
+  const partner = desc.partner ? ` · с ${escapeHtml(desc.partner.name)}` : '';
+  const gallery = [];
+  const photos = desc.photos || {};
+  (photos.latte_art || []).forEach((url) =>
+    gallery.push(`<figure class="drink-photo"><img src="${escapeHtml(url)}" alt="Латте-арт" loading="lazy"></figure>`));
+  (photos.meme || []).forEach((url) =>
+    gallery.push(`<figure class="drink-photo"><img src="${escapeHtml(url)}" alt="Мем" loading="lazy"></figure>`));
+  return `<article class="drink-card" data-drink-id="${desc.id}">
+    <header class="drink-card-head">
+      <div><strong>${escapeHtml(desc.author.name)}</strong><span class="drink-meta">${escapeHtml(drinkPointLabel(desc.point))}${partner}</span></div>
+      <time class="drink-date">${escapeHtml(formatDrinkDate(desc.created_at))}</time>
+    </header>
+    <div class="drink-card-items">${items}</div>
+    ${desc.note ? `<p class="drink-card-note">${escapeHtml(desc.note)}</p>` : ''}
+    ${gallery.length ? `<div class="drink-photos">${gallery.join('')}</div>` : ''}
+    ${quizzes}
+  </article>`;
+}
+
+function drinkQuizMarkup(quiz) {
+  const options = (quiz.options || []).map((option) => {
+    const classes = ['drink-quiz-option'];
+    if (option.is_correct) classes.push('is-correct');
+    if (quiz.my_option_id === option.id) classes.push('is-mine');
+    return `<button class="${classes.join(' ')}" type="button" data-drink-vote="${quiz.id}" data-option="${option.id}"${quiz.voted ? ' disabled' : ''}>${escapeHtml(option.text)}<span class="drink-quiz-votes">${option.votes}</span></button>`;
+  }).join('');
+  return `<div class="drink-quiz" data-quiz-id="${quiz.id}">
+    <p class="drink-quiz-question">${escapeHtml(quiz.question || 'Где чей латте-арт?')}${quiz.voted ? '<span class="drink-quiz-done">вы ответили</span>' : ''}</p>
+    <div class="drink-quiz-options">${options}</div>
+  </div>`;
+}
+
+async function voteDrinkQuiz(descriptionId, quizId, optionId) {
+  try {
+    const data = await api(`/api/drink-descriptions/${descriptionId}/quizzes/${quizId}/vote`, {
+      method: 'POST',
+      body: JSON.stringify({ option_id: optionId }),
+    });
+    const desc = drinkState.items.find((item) => item.id === descriptionId);
+    if (desc) {
+      const merged = new Map((data.quizzes || []).map((quiz) => [quiz.id, quiz]));
+      desc.quizzes = (desc.quizzes || []).map((quiz) => merged.get(quiz.id) || quiz);
+      renderDrinksFeed();
+    }
+    if (data.correct) showToast(data.xp ? `Верно! +${data.xp} опыта в «Команду»` : 'Верно!');
+    else showToast('Не угадали — но голос учтён');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function drinkWidgetSummary(desc) {
+  const parts = (desc.items || []).map((item) =>
+    (item.bean && item.bean.name) || (item.category === 'кофе с молоком' ? 'молочный' : 'чёрный'));
+  return parts.join(' · ') || 'Описание смены';
+}
+
+async function loadDrinksWidget() {
+  const list = document.querySelector('#drinks-widget-list');
+  if (!list) return;
+  try {
+    const data = await api('/api/drink-descriptions?limit=3');
+    const items = data.items || [];
+    if (!items.length) {
+      list.innerHTML = '<p class="empty-state">Пока нет описаний смен.</p>';
+      return;
+    }
+    list.innerHTML = items.map((desc) => `
+      <button class="drinks-widget-card" type="button" data-view="drinks">
+        <span class="drinks-widget-point">${escapeHtml(drinkPointLabel(desc.point))}</span>
+        <strong>${escapeHtml(desc.author.name)}</strong>
+        <span class="drinks-widget-note">${escapeHtml(drinkWidgetSummary(desc))}</span>
+        ${(desc.quizzes || []).length ? '<span class="drinks-widget-vote">Голосовать →</span>' : ''}
+      </button>`).join('');
+    list.querySelectorAll('[data-view]').forEach((button) =>
+      button.addEventListener('click', () => setView(button.dataset.view)));
+  } catch (error) {
+    list.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+const DRINK_FALLBACK_SCALES = {
+  balance: ['низкая', 'ниже среднего', 'средняя', 'выше среднего', 'высокая'],
+  body: ['легкое', 'среднее', 'плотное'],
+  aftertaste: ['короткое', 'среднее', 'долгое'],
+  milk_drop: ['отсутствует', 'небольшая', 'большая'],
+  balance_score: ['в молоко', 'нейтральный', 'в кофе'],
+};
+
+function drinkScaleBlock(label, attr, group, values) {
+  const list = values && values.length ? values : DRINK_FALLBACK_SCALES[group] || ['—'];
+  const index = Math.floor((list.length - 1) / 2);
+  return `<label class="drink-scale"><span>${escapeHtml(label)}</span>
+    <input type="range" min="0" max="${Math.max(0, list.length - 1)}" step="1" value="${index}" data-drink-scale="${escapeHtml(attr)}" data-drink-group="${escapeHtml(group)}">
+    <output>${escapeHtml(list[index] || '')}</output>
+  </label>`;
+}
+
+function drinkDrinkOptions(category) {
+  const drinks = (drinkState.options && drinkState.options.drinks) || [];
+  return '<option value="">— напиток не указан —</option>' + drinks
+    .filter((drink) => drink.category === category)
+    .map((drink) => `<option value="${drink.id}">${escapeHtml(drink.title)}</option>`).join('');
+}
+
+function drinkScaleWithText(label, attr, group, textAttr, values, placeholder) {
+  const list = values && values.length ? values : DRINK_FALLBACK_SCALES[group] || ['—'];
+  const index = Math.floor((list.length - 1) / 2);
+  return `<div class="drink-scale-block">
+    <label class="drink-scale"><span>${escapeHtml(label)}</span>
+      <input type="range" min="0" max="${Math.max(0, list.length - 1)}" step="1" value="${index}" data-drink-scale="${escapeHtml(attr)}" data-drink-group="${escapeHtml(group)}">
+      <output>${escapeHtml(list[index] || '')}</output>
+    </label>
+    <input class="drink-scale-text" type="text" maxlength="400" data-drink-field="${escapeHtml(textAttr)}" placeholder="${escapeHtml(placeholder || 'Характер — как он ощущается')}">
+  </div>`;
+}
+
+function drinkItemFormMarkup(category) {
+  const milk = category === 'кофе с молоком';
+  const scales = drinkState.scales || DRINK_FALLBACK_SCALES;
+  const beans = (drinkState.options && drinkState.options.beans) || [];
+  const beanOptions = '<option value="">— зерно не указано —</option>' + beans.map(
+    (bean) => `<option value="${bean.id}">${escapeHtml(bean.name)}</option>`).join('');
+  const parts = [];
+  parts.push(`<div class="drink-refs">
+    <label class="drink-field-group"><span class="drink-field-label">Напиток <span class="optional">из базы знаний</span></span><select data-drink-field="drink_id">${drinkDrinkOptions(category)}</select></label>
+    <label class="drink-field-group"><span class="drink-field-label">Зерно</span><select data-drink-field="bean_id">${beanOptions}</select></label>
+  </div>`);
+  parts.push(`<div class="drink-recipe">
+    <label>Вход, г<input type="number" min="0" step="0.1" inputmode="decimal" data-drink-field="recipe_dose"></label>
+    <label>Выход, г<input type="number" min="0" step="0.1" inputmode="decimal" data-drink-field="recipe_yield"></label>
+    ${milk ? '' : '<label>Вода, мл<input type="number" min="0" step="1" inputmode="decimal" data-drink-field="recipe_water"></label>'}
+    <label>Время, с<input type="number" min="0" step="0.1" inputmode="decimal" data-drink-field="recipe_time"></label>
+    <label>Темп., °C<input type="number" min="0" step="0.1" inputmode="decimal" data-drink-field="recipe_temp"></label>
+  </div>`);
+  if (milk) {
+    parts.push('<label class="checkbox-row drink-espresso"><input type="checkbox" data-drink-field="is_espresso_recipe"><span>Рецепт как на эспрессо</span></label>');
+    parts.push(drinkScaleBlock('Баланс в молоке', 'balance_score', 'balance_score', scales.balance_score));
+    parts.push(drinkScaleBlock('Молочная капля', 'milk_drop', 'milk_drop', scales.milk_drop));
+    parts.push('<label class="drink-text">Букет<input type="text" maxlength="400" data-drink-field="bouquet" placeholder="Карамель, орех…"></label>');
+  } else {
+    parts.push('<div class="drink-scales">'
+      + drinkScaleWithText('Кислотность', 'balance_acidity', 'balance', 'balance_acidity_text', scales.balance, 'Характер кислотности')
+      + drinkScaleWithText('Сладость', 'balance_sweetness', 'balance', 'balance_sweetness_text', scales.balance, 'Характер сладости')
+      + drinkScaleWithText('Горечь', 'balance_bitterness', 'balance', 'balance_bitterness_text', scales.balance, 'Характер горечи') + '</div>');
+    parts.push(drinkScaleBlock('Тело', 'body_intensity', 'body', scales.body));
+    parts.push('<label class="drink-text">Нюанс тела<input type="text" maxlength="400" data-drink-field="body_texture" placeholder="Бархатистое…"></label>');
+    parts.push('<label class="drink-text">Букет<input type="text" maxlength="400" data-drink-field="bouquet" placeholder="Шоколад, цитрус…"></label>');
+    parts.push(drinkScaleBlock('Послевкусие', 'aftertaste_duration', 'aftertaste', scales.aftertaste));
+    parts.push('<label class="drink-text">Качество послевкусия<input type="text" maxlength="400" data-drink-field="aftertaste_quality"></label>');
+  }
+  return `<section class="drink-item-form" data-category="${escapeHtml(category)}">
+    <div class="drink-item-form-head"><span class="drink-item-cat">${escapeHtml(DRINK_ITEM_LABELS[category] || category)}</span><button class="button button-quiet drink-item-remove" type="button">Убрать</button></div>
+    ${parts.join('')}
+  </section>`;
+}
+
+function drinkPhotoKey(kind) {
+  return kind === 'latte' ? 'latte_art' : 'meme';
+}
+
+function renderDrinkPreviews(kind) {
+  const container = document.querySelector(`#drink-${kind}-previews`);
+  if (!container) return;
+  const urls = drinkState.photos[drinkPhotoKey(kind)] || [];
+  container.innerHTML = urls.map((url, index) => `
+    <div class="drink-photo-preview">
+      <img src="${escapeHtml(url)}" alt="Фото поста">
+      <button class="button button-quiet" type="button" data-drink-photo-remove="${kind}" data-index="${index}">Убрать</button>
+    </div>`).join('');
+}
+
+function resetDrinkPhoto(kind) {
+  drinkState.photos[drinkPhotoKey(kind)] = [];
+  const input = document.querySelector(`#drink-${kind}-input`);
+  if (input) input.value = '';
+  renderDrinkPreviews(kind);
+}
+
+function addDrinkItemRow(category) {
+  const container = document.querySelector('#drink-items');
+  if (container) container.insertAdjacentHTML('beforeend', drinkItemFormMarkup(category));
+}
+
+function drinkSyncEspresso() {
+  const rows = Array.from(document.querySelectorAll('#drink-items .drink-item-form'));
+  const black = rows.find((row) => row.dataset.category === 'черный кофе');
+  const source = {};
+  if (black) {
+    ['recipe_dose', 'recipe_yield', 'recipe_time', 'recipe_temp'].forEach((field) => {
+      const input = black.querySelector(`[data-drink-field="${field}"]`);
+      source[field] = input ? input.value : '';
+    });
+  }
+  rows.forEach((row) => {
+    if (row.dataset.category !== 'кофе с молоком') return;
+    const toggle = row.querySelector('[data-drink-field="is_espresso_recipe"]');
+    const on = Boolean(toggle && toggle.checked);
+    ['recipe_dose', 'recipe_yield', 'recipe_time', 'recipe_temp'].forEach((field) => {
+      const input = row.querySelector(`[data-drink-field="${field}"]`);
+      if (!input) return;
+      if (on) input.value = source[field] ?? '';
+      input.disabled = on;
+    });
+  });
+}
+
+function fillDrinkShift(shift, options) {
+  const pointSelect = document.querySelector('#drink-point');
+  if (pointSelect) {
+    pointSelect.innerHTML = (options.points || []).map((point) =>
+      `<option value="${escapeHtml(point)}">${escapeHtml(drinkPointLabel(point))}</option>`).join('');
+    pointSelect.value = shift.point || 'другое';
+  }
+  const partnerSelect = document.querySelector('#drink-partner');
+  if (partnerSelect) {
+    partnerSelect.innerHTML = '<option value="">— без напарника —</option>' + (shift.candidates || []).map((person) =>
+      `<option value="${person.id}">${escapeHtml(person.name)}${person.on_shift ? ' (на смене)' : ''}</option>`).join('');
+    const first = (shift.partners || [])[0];
+    partnerSelect.value = first ? String(first.id) : '';
+  }
+  const status = document.querySelector('#drink-shift');
+  if (status) {
+    status.textContent = shift.on_shift
+      ? `Смена: ${drinkPointLabel(shift.point)} · напарников на смене: ${(shift.partners || []).length}`
+      : 'Смена не найдена — выберите напарника вручную';
+  }
+  const toggle = document.querySelector('#drink-manual-toggle');
+  if (toggle) {
+    toggle.hidden = false;
+    toggle.textContent = shift.on_shift ? 'Изменить вручную' : 'Выбрать вручную';
+  }
+  // Фоллбэк: если смену не определили, сразу показываем выбор точки и напарника.
+  const row = document.querySelector('#drink-partner-row');
+  if (row && !shift.on_shift) row.hidden = false;
+}
+
+async function openDrinkDialog() {
+  const dialog = document.querySelector('#drink-dialog');
+  if (!dialog) return;
+  const form = document.querySelector('#drink-form');
+  if (form) form.reset();
+  const container = document.querySelector('#drink-items');
+  if (container) container.innerHTML = '';
+  const errorNode = document.querySelector('#drink-form-error');
+  if (errorNode) errorNode.hidden = true;
+  drinkState.photos = { latte_art: [], meme: [] };
+  resetDrinkPhoto('latte');
+  resetDrinkPhoto('meme');
+  resetDrinkQuizEditors();
+  const manualRow = document.querySelector('#drink-partner-row');
+  if (manualRow) manualRow.hidden = true;
+  const toggle = document.querySelector('#drink-manual-toggle');
+  if (toggle) { toggle.hidden = false; toggle.textContent = 'Выбрать вручную'; }
+  const status = document.querySelector('#drink-shift');
+  if (status) status.textContent = 'Определяем смену…';
+  dialog.showModal();
+  try {
+    const [options, shift] = await Promise.all([
+      api('/api/drink-descriptions/options'),
+      api('/api/drink-descriptions/shift'),
+    ]);
+    drinkState.options = options;
+    drinkState.shift = shift;
+    drinkState.scales = Object.assign({}, DRINK_FALLBACK_SCALES, options.scales || {});
+    fillDrinkShift(shift, options);
+  } catch (error) {
+    if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
+    // Фоллбэк: даже без ответа сервера даём заполнить точку и напарника вручную.
+    if (manualRow) manualRow.hidden = false;
+    if (status) status.textContent = 'Не удалось определить смену — выберите вручную';
+  }
+  addDrinkItemRow('черный кофе');
+}
+
+function showDrinkError(message) {
+  const node = document.querySelector('#drink-form-error');
+  if (node) {
+    node.textContent = message;
+    node.hidden = false;
+  }
+}
+
+function drinkReadScale(input) {
+  const list = (drinkState.scales || DRINK_FALLBACK_SCALES)[input.dataset.drinkGroup] || [];
+  return list[Number(input.value)] || null;
+}
+
+function collectDrinkPayload() {
+  const rows = Array.from(document.querySelectorAll('#drink-items .drink-item-form'));
+  if (!rows.length) {
+    showDrinkError('Добавьте хотя бы один напиток');
+    return null;
+  }
+  const items = rows.map((row) => {
+    const read = (name) => {
+      const node = row.querySelector(`[data-drink-field="${name}"]`);
+      return node ? node.value.trim() : '';
+    };
+    const readNumber = (name) => {
+      const raw = read(name);
+      if (raw === '') return null;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    };
+    const item = { category: row.dataset.category };
+    if (read('drink_id')) item.drink_id = Number(read('drink_id'));
+    if (read('bean_id')) item.bean_id = Number(read('bean_id'));
+    ['recipe_dose', 'recipe_yield', 'recipe_water', 'recipe_time', 'recipe_temp'].forEach((key) => {
+      const value = readNumber(key);
+      if (value != null) item[key] = value;
+    });
+    row.querySelectorAll('[data-drink-scale]').forEach((input) => {
+      const value = drinkReadScale(input);
+      if (value) item[input.dataset.drinkScale] = value;
+    });
+    if (item.category === 'кофе с молоком') {
+      const toggle = row.querySelector('[data-drink-field="is_espresso_recipe"]');
+      item.is_espresso_recipe = Boolean(toggle && toggle.checked);
+    }
+    ['body_texture', 'aftertaste_quality', 'bouquet',
+      'balance_acidity_text', 'balance_sweetness_text', 'balance_bitterness_text'].forEach((key) => {
+      const value = read(key);
+      if (value) item[key] = value;
+    });
+    return item;
+  });
+  const point = document.querySelector('#drink-point')?.value || 'другое';
+  const partner = document.querySelector('#drink-partner')?.value || '';
+  const note = document.querySelector('#drink-note')?.value.trim() || '';
+  const payload = { point, items };
+  if (partner) payload.partner_id = Number(partner);
+  if (note) payload.note = note;
+  if ((drinkState.photos.latte_art || []).length) payload.latte_art_photos = drinkState.photos.latte_art;
+  if ((drinkState.photos.meme || []).length) payload.meme_photos = drinkState.photos.meme;
+  const quizzes = collectDrinkQuizzes();
+  if (quizzes.length) payload.quizzes = quizzes;
+  return payload;
+}
+
+async function uploadDrinkPhoto(kind, files) {
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  const key = drinkPhotoKey(kind);
+  const input = document.querySelector(`#drink-${kind}-input`);
+  for (const file of list) {
+    if ((drinkState.photos[key] || []).length >= 6) {
+      showDrinkError('Не больше 6 фото на каждую подборку');
+      break;
+    }
+    try {
+      const response = await fetch('/api/drink-descriptions/photos', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        credentials: 'same-origin',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить фото');
+      drinkState.photos[key] = (drinkState.photos[key] || []).concat(data.url);
+      renderDrinkPreviews(kind);
+    } catch (error) {
+      showDrinkError(error.message);
+    }
+  }
+  if (input) input.value = '';
+}
+
+async function submitDrinkForm(event) {
+  event.preventDefault();
+  const payload = collectDrinkPayload();
+  if (!payload) return;
+  const submit = document.querySelector('#drink-submit');
+  if (submit) submit.disabled = true;
+  try {
+    const data = await api('/api/drink-descriptions', { method: 'POST', body: JSON.stringify(payload) });
+    document.querySelector('#drink-dialog')?.close();
+    const xp = data.xp ? Object.values(data.xp).reduce((sum, value) => sum + value, 0) : 0;
+    showToast(xp ? `Описание опубликовано · +${xp} опыта` : 'Описание опубликовано');
+    await loadDrinks(true);
+    loadDrinksWidget();
+  } catch (error) {
+    showDrinkError(error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+function applyDrinkTemplate(text) {
+  const rows = Array.from(document.querySelectorAll('#drink-items .drink-item-form'));
+  const black = rows.find((row) => row.dataset.category === 'черный кофе');
+  const milk = rows.find((row) => row.dataset.category === 'кофе с молоком');
+  if (!black) return;
+  const pairs = {};
+  text.split(/\r?\n/).forEach((line) => {
+    const match = line.match(/^\s*([^:：]+)\s*[:：]\s*(.+?)\s*$/);
+    if (match) pairs[match[1].trim().toLowerCase()] = match[2].trim();
+  });
+  const pick = (...keys) => {
+    for (const key of keys) { if (pairs[key] != null) return pairs[key]; }
+    return null;
+  };
+  const setInput = (row, name, value) => {
+    if (value == null) return;
+    const node = row.querySelector(`[data-drink-field="${name}"]`);
+    if (node) node.value = value;
+  };
+  const setScale = (row, attr, group, value) => {
+    if (value == null) return;
+    const input = row.querySelector(`[data-drink-scale="${attr}"]`);
+    if (!input) return;
+    const list = (drinkState.scales || DRINK_FALLBACK_SCALES)[group] || [];
+    const index = list.findIndex((item) => item.toLowerCase() === String(value).toLowerCase());
+    if (index < 0) return;
+    input.value = index;
+    const out = input.parentElement.querySelector('output');
+    if (out) out.textContent = list[index];
+  };
+  const beanName = pick('зерно', 'bean');
+  if (beanName) {
+    const select = black.querySelector('[data-drink-field="bean_id"]');
+    const option = select ? Array.from(select.options).find(
+      (opt) => opt.textContent.trim().toLowerCase() === beanName.toLowerCase()) : null;
+    if (option) select.value = option.value;
+  }
+  setInput(black, 'recipe_dose', pick('вход', 'доза', 'кофе на входе', 'dose'));
+  setInput(black, 'recipe_yield', pick('выход', 'кофе на выходе', 'yield'));
+  setInput(black, 'recipe_water', pick('вода', 'water'));
+  setInput(black, 'recipe_time', pick('время', 'time'));
+  setInput(black, 'recipe_temp', pick('температура', 'темп', 'temp'));
+  setScale(black, 'balance_acidity', 'balance', pick('кислотность', 'acidity'));
+  setScale(black, 'balance_sweetness', 'balance', pick('сладость', 'sweetness'));
+  setScale(black, 'balance_bitterness', 'balance', pick('горечь', 'bitterness'));
+  setScale(black, 'body_intensity', 'body', pick('тело', 'body'));
+  setInput(black, 'body_texture', pick('текстура', 'текстура'));
+  setScale(black, 'aftertaste_duration', 'aftertaste', pick('послевкусие', 'aftertaste'));
+  setInput(black, 'aftertaste_quality', pick('качество послевкусия'));
+  setInput(black, 'bouquet', pick('букет', 'bouquet'));
+  if (milk) {
+    setScale(milk, 'balance_score', 'balance_score', pick('баланс', 'balance'));
+    setScale(milk, 'milk_drop', 'milk_drop', pick('молочная капля', 'капля'));
+    setInput(milk, 'bouquet', pick('букет молока'));
+  }
+  showToast('Поля заполнены из текста — проверьте значения');
+}
+
+async function pasteDrinkTemplate() {
+  let text = '';
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
+  } catch (error) {
+    text = '';
+  }
+  if (!text.trim()) text = window.prompt('Вставьте текст описания (ключ: значение)') || '';
+  if (!text.trim()) return;
+  applyDrinkTemplate(text);
+}
+
+function drinkQuizSeedOptions() {
+  const me = document.body.dataset.userName || '';
+  const partner = ((drinkState.shift && drinkState.shift.partners) || [])[0];
+  return [
+    { text: me, is_correct: true },
+    { text: partner ? partner.name : '', is_correct: false },
+  ];
+}
+
+function resetDrinkQuizEditors() {
+  document.querySelectorAll('.drink-quiz-kind').forEach((block) => {
+    const checkbox = block.querySelector('[data-quiz-custom]');
+    if (checkbox) checkbox.checked = false;
+    const editor = block.querySelector('[data-quiz-editor]');
+    if (editor) { editor.innerHTML = ''; editor.hidden = true; }
+    const add = block.querySelector('[data-quiz-add]');
+    if (add) add.hidden = true;
+  });
+}
+
+function readDrinkQuizOptions(kind) {
+  const block = document.querySelector(`.drink-quiz-kind[data-quiz-kind="${kind}"]`);
+  if (!block) return [];
+  return Array.from(block.querySelectorAll('[data-quiz-option]')).map((row) => ({
+    text: (row.querySelector('[data-quiz-option-text]')?.value || '').trim(),
+    is_correct: Boolean(row.querySelector('[data-quiz-correct]')?.checked),
+  }));
+}
+
+function renderDrinkQuizOptions(kind, options) {
+  const block = document.querySelector(`.drink-quiz-kind[data-quiz-kind="${kind}"]`);
+  if (!block) return;
+  const editor = block.querySelector('[data-quiz-editor]');
+  if (!editor) return;
+  editor.innerHTML = options.map((option) => `
+    <div class="drink-quiz-option-row" data-quiz-option>
+      <input type="radio" name="drink-quiz-correct-${escapeHtml(kind)}" data-quiz-correct ${option.is_correct ? 'checked' : ''} aria-label="Правильный вариант">
+      <input type="text" maxlength="400" data-quiz-option-text value="${escapeHtml(option.text || '')}" placeholder="Вариант ответа">
+      <button class="button button-quiet" type="button" data-quiz-remove aria-label="Удалить вариант"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
+    </div>`).join('');
+  editor.hidden = false;
+  const add = block.querySelector('[data-quiz-add]');
+  if (add) add.hidden = false;
+}
+
+function toggleDrinkQuizKind(kind, checked) {
+  const block = document.querySelector(`.drink-quiz-kind[data-quiz-kind="${kind}"]`);
+  if (!block) return;
+  const editor = block.querySelector('[data-quiz-editor]');
+  const add = block.querySelector('[data-quiz-add]');
+  if (!checked) {
+    if (editor) editor.hidden = true;
+    if (add) add.hidden = true;
+    return;
+  }
+  const existing = readDrinkQuizOptions(kind);
+  renderDrinkQuizOptions(kind, existing.length ? existing : drinkQuizSeedOptions());
+}
+
+function collectDrinkQuizzes() {
+  const quizzes = [];
+  document.querySelectorAll('.drink-quiz-kind').forEach((block) => {
+    const checkbox = block.querySelector('[data-quiz-custom]');
+    if (!checkbox || !checkbox.checked) return;
+    const options = readDrinkQuizOptions(block.dataset.quizKind).filter((option) => option.text);
+    if (options.length >= 2) quizzes.push({ kind: block.dataset.quizKind, options });
+  });
+  return quizzes;
+}
+
+async function loadMemes(reset = false) {
+  const grid = document.querySelector('#drinks-memes');
+  if (reset) {
+    drinkState.memes.offset = 0;
+    drinkState.memes.items = [];
+    if (grid) grid.innerHTML = '<p class="empty-state">Загрузка…</p>';
+  }
+  try {
+    const params = new URLSearchParams({ limit: String(drinkState.memes.limit), offset: String(drinkState.memes.offset) });
+    if (drinkState.memes.author) params.set('author_id', drinkState.memes.author);
+    const data = await api(`/api/drink-descriptions/memes?${params.toString()}`);
+    drinkState.memes.authors = data.authors || [];
+    drinkState.memes.hasMore = Boolean(data.has_more);
+    drinkState.memes.items = reset ? (data.items || []) : drinkState.memes.items.concat(data.items || []);
+    drinkState.memes.offset = drinkState.memes.items.length;
+    drinkState.memes.loaded = true;
+    renderMemes();
+  } catch (error) {
+    if (grid) grid.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+function renderMemes() {
+  const grid = document.querySelector('#drinks-memes');
+  const more = document.querySelector('#drinks-memes-more');
+  const count = document.querySelector('#drinks-memes-count');
+  const select = document.querySelector('#drinks-memes-author');
+  if (select) {
+    const current = drinkState.memes.author;
+    select.innerHTML = '<option value="">Все</option>' + (drinkState.memes.authors || []).map(
+      (author) => `<option value="${author.id}">${escapeHtml(author.name)}</option>`).join('');
+    select.value = current;
+  }
+  if (count) count.textContent = drinkState.memes.items.length ? `МЕМОВ: ${drinkState.memes.items.length}` : '';
+  if (grid) {
+    if (!drinkState.memes.items.length) {
+      grid.innerHTML = '<p class="empty-state">Пока нет мемов смен.</p>';
+    } else {
+      grid.innerHTML = drinkState.memes.items.map((meme) => `
+        <figure class="meme-card">
+          <img src="${escapeHtml(meme.url)}" alt="Мем смены" loading="lazy">
+          <figcaption><strong>${escapeHtml(meme.author.name)}</strong><span>${escapeHtml(drinkPointLabel(meme.point))} · ${escapeHtml(formatDrinkDate(meme.created_at))}</span></figcaption>
+        </figure>`).join('');
+    }
+  }
+  if (more) more.hidden = !drinkState.memes.hasMore;
+}
+
+function setDrinksTab(tab) {
+  drinkState.tab = tab === 'memes' ? 'memes' : 'feed';
+  document.querySelectorAll('[data-drinks-tab]').forEach((button) =>
+    button.classList.toggle('is-selected', button.dataset.drinksTab === drinkState.tab));
+  const feedPanel = document.querySelector('#drinks-feed-panel');
+  const memesPanel = document.querySelector('#drinks-memes-panel');
+  if (feedPanel) feedPanel.hidden = drinkState.tab !== 'feed';
+  if (memesPanel) memesPanel.hidden = drinkState.tab !== 'memes';
+  if (drinkState.tab === 'memes' && !drinkState.memes.loaded) loadMemes(true);
+}
+
+function setupDrinks() {
+  document.querySelector('#drinks-create')?.addEventListener('click', openDrinkDialog);
+  document.querySelectorAll('[data-drinks-tab]').forEach((button) =>
+    button.addEventListener('click', () => setDrinksTab(button.dataset.drinksTab)));
+  document.querySelector('#drinks-memes-more')?.addEventListener('click', () => loadMemes(false));
+  document.querySelector('#drinks-memes-author')?.addEventListener('change', (event) => {
+    drinkState.memes.author = event.target.value;
+    loadMemes(true);
+  });
+  document.querySelector('#drinks-more')?.addEventListener('click', () => loadDrinks(false));
+  document.querySelector('#drinks-point-filter')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-drink-point]');
+    if (!chip) return;
+    drinkState.point = chip.dataset.drinkPoint;
+    renderDrinkFilters();
+    loadDrinks(true);
+  });
+  document.querySelector('#drinks-author-filter')?.addEventListener('change', (event) => {
+    drinkState.author = event.target.value;
+    loadDrinks(true);
+  });
+  document.querySelector('#drinks-feed')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-drink-vote]');
+    const card = button ? button.closest('[data-drink-id]') : null;
+    if (!button || !card || button.disabled) return;
+    voteDrinkQuiz(Number(card.dataset.drinkId), Number(button.dataset.drinkVote), Number(button.dataset.option));
+  });
+  const dialog = document.querySelector('#drink-dialog');
+  if (!dialog) return;
+  document.querySelector('#drink-add-milk')?.addEventListener('click', () => addDrinkItemRow('кофе с молоком'));
+  const items = document.querySelector('#drink-items');
+  items?.addEventListener('click', (event) => {
+    if (!event.target.closest('.drink-item-remove')) return;
+    if (document.querySelectorAll('#drink-items .drink-item-form').length <= 1) {
+      showToast('Нужен хотя бы один напиток');
+      return;
+    }
+    event.target.closest('.drink-item-form')?.remove();
+    drinkSyncEspresso();
+  });
+  items?.addEventListener('change', (event) => {
+    if (event.target.matches('[data-drink-field="is_espresso_recipe"]')) drinkSyncEspresso();
+  });
+  items?.addEventListener('input', (event) => {
+    const input = event.target;
+    if (input.matches('[data-drink-scale]')) {
+      const list = (drinkState.scales || DRINK_FALLBACK_SCALES)[input.dataset.drinkGroup] || [];
+      const out = input.parentElement.querySelector('output');
+      if (out) out.textContent = list[Number(input.value)] || '';
+    } else if (input.matches('[data-drink-field="recipe_dose"], [data-drink-field="recipe_yield"], [data-drink-field="recipe_time"], [data-drink-field="recipe_temp"]')) {
+      drinkSyncEspresso();
+    }
+  });
+  document.querySelector('#drink-latte-input')?.addEventListener('change', (event) => uploadDrinkPhoto('latte', event.currentTarget.files));
+  document.querySelector('#drink-meme-input')?.addEventListener('change', (event) => uploadDrinkPhoto('meme', event.currentTarget.files));
+  dialog.addEventListener('click', (event) => {
+    const remove = event.target.closest('[data-drink-photo-remove]');
+    if (!remove) return;
+    const kind = remove.dataset.drinkPhotoRemove;
+    const index = Number(remove.dataset.index);
+    const key = drinkPhotoKey(kind);
+    drinkState.photos[key] = (drinkState.photos[key] || []).filter((_, position) => position !== index);
+    renderDrinkPreviews(kind);
+  });
+  document.querySelector('#drink-manual-toggle')?.addEventListener('click', () => {
+    const row = document.querySelector('#drink-partner-row');
+    if (row) row.hidden = !row.hidden;
+  });
+  const quizSetup = document.querySelector('#drink-quiz-setup');
+  quizSetup?.addEventListener('change', (event) => {
+    if (!event.target.matches('[data-quiz-custom]')) return;
+    const block = event.target.closest('.drink-quiz-kind');
+    toggleDrinkQuizKind(block.dataset.quizKind, event.target.checked);
+  });
+  quizSetup?.addEventListener('click', (event) => {
+    const block = event.target.closest('.drink-quiz-kind');
+    if (!block) return;
+    const kind = block.dataset.quizKind;
+    if (event.target.closest('[data-quiz-add]')) {
+      const options = readDrinkQuizOptions(kind);
+      options.push({ text: '', is_correct: false });
+      renderDrinkQuizOptions(kind, options);
+      return;
+    }
+    const remove = event.target.closest('[data-quiz-remove]');
+    if (remove) {
+      const rows = Array.from(block.querySelectorAll('[data-quiz-option]'));
+      const index = rows.indexOf(remove.closest('[data-quiz-option]'));
+      const options = readDrinkQuizOptions(kind);
+      options.splice(index, 1);
+      renderDrinkQuizOptions(kind, options);
+    }
+  });
+  document.querySelector('#drink-paste')?.addEventListener('click', pasteDrinkTemplate);
+  document.querySelector('#drink-form')?.addEventListener('submit', submitDrinkForm);
+}
+
 function setupDashboard() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
   setupAppearance();
@@ -4976,6 +5787,8 @@ function setupDashboard() {
   setupAnnouncements();
   loadAnnouncements();
   setupKnowledgeBase();
+  setupDrinks();
+  loadDrinksWidget();
   setupDevelopment();
   setupAchievements();
   loadDevelopment();
