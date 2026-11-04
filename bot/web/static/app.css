@@ -1395,6 +1395,122 @@ body { transition: background-color .3s ease, color .3s ease; }
 .kb-dialog .kb-editor { display: grid; }
 .kb-dialog .kb-editor textarea { margin-top: 0; }
 .kb-dialog .kb-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border: 1px solid var(--line); border-bottom: 0; background: var(--surface-sunken); }
+
+/* =========================================================================
+   Аналитика команды и качества: тепловая карта навыков, зоны риска по
+   напиткам и чистоте, выработка часов по точкам. Всё на переменных темы,
+   поэтому работает в светлой и тёмной теме без отдельных правил.
+   ========================================================================= */
+.analytics-heading { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.analytics-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.analytics-period { display: flex; flex-wrap: wrap; gap: 6px; }
+.analytics-period-select { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.analytics-panel { margin-bottom: 16px; padding: 19px 21px 20px; }
+.analytics-panel .panel-heading { margin-bottom: 16px; }
+.analytics-body { display: grid; gap: 14px; }
+
+.analytics-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.analytics-metric { display: grid; gap: 2px; padding: 11px 12px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
+.analytics-metric span { color: var(--muted); font: 9px var(--mono); letter-spacing: .07em; }
+.analytics-metric strong { font: 600 22px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.analytics-metric small { color: var(--dim); font-size: 10px; }
+.analytics-attention.is-deficit { border-color: var(--danger-line); background: var(--danger-soft); }
+.analytics-attention.is-deficit strong { color: var(--danger-text); }
+.analytics-attention.is-overload { border-color: var(--accent-line); background: var(--accent-faint); }
+.analytics-attention.is-overload strong { color: var(--accent); }
+.analytics-attention.is-normal { border-color: color-mix(in srgb, var(--mint) 45%, transparent); background: color-mix(in srgb, var(--mint) 12%, transparent); }
+.analytics-attention.is-normal strong { color: var(--mint); }
+
+/* Тепловая карта: таблица сотрудник × ветка. */
+.heatmap-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.heatmap { width: 100%; border-collapse: collapse; font-size: 12px; }
+.heatmap th { padding: 8px 10px; border-bottom: 1px solid var(--line-strong); color: var(--muted); font: 9px var(--mono); letter-spacing: .06em; text-align: center; white-space: nowrap; }
+.heatmap th.heat-name { text-align: left; }
+.heatmap td { padding: 8px 10px; border-bottom: 1px solid var(--line-faint); text-align: center; font-variant-numeric: tabular-nums; }
+.heatmap .heat-name { text-align: left; min-width: 150px; }
+.heatmap .heat-name strong { display: block; color: var(--text); font-size: 12px; font-weight: 500; }
+.heatmap .heat-name small { color: var(--dim); font-size: 9px; }
+.heatmap .heat-count, .heatmap .heat-last { color: var(--text-soft); font: 11px var(--mono); white-space: nowrap; }
+.heatmap .heat-empty { padding: 18px; color: var(--muted); text-align: center; }
+.heat-cell { font-weight: 600; }
+.heat-cell.is-low { background: var(--danger-soft); color: var(--danger-text); }
+.heat-cell.is-mid { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.heat-cell.is-high { background: color-mix(in srgb, var(--mint) 14%, transparent); color: var(--mint); }
+.heat-cell.is-empty { color: var(--dim); }
+.analytics-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.analytics-legend .heat-cell { padding: 3px 9px; border: 1px solid var(--line); font: 9px var(--mono); letter-spacing: .04em; }
+
+/* Зоны риска: рейтинг напитков, параметры, чистота. */
+.analytics-grid { display: grid; gap: 16px; }
+.analytics-col { display: grid; gap: 10px; align-content: start; }
+.analytics-subtitle { margin: 4px 0 0; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.analytics-rank { display: grid; gap: 12px; }
+.analytics-rank-row { display: grid; gap: 5px; }
+.analytics-rank-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.analytics-rank-head strong { color: var(--text); font-size: 13px; font-weight: 500; }
+.analytics-risk { padding: 2px 8px; border: 1px solid var(--line-strong); color: var(--muted); font: 8px var(--mono); letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
+.analytics-risk.is-high { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+.analytics-risk.is-medium { border-color: color-mix(in srgb, var(--warn) 40%, transparent); color: var(--warn); }
+.analytics-risk.is-low { border-color: color-mix(in srgb, var(--mint) 45%, transparent); color: var(--mint); }
+.analytics-rank-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--dim); font: 10px var(--mono); }
+
+.analytics-bar { position: relative; height: 8px; border: 1px solid var(--line); background: var(--surface-sunken); overflow: hidden; }
+.analytics-bar i { display: block; height: 100%; width: 0; background: var(--mint); transition: width .3s ease; }
+.analytics-bar i.is-low { background: var(--danger-text); }
+.analytics-bar i.is-mid { background: var(--warn); }
+.analytics-bar i.is-high { background: var(--mint); }
+.analytics-bar i.is-medium { background: var(--warn); }
+.analytics-bar i.is-unknown { background: var(--dim); }
+
+.analytics-params { display: grid; gap: 8px; }
+.analytics-param { display: grid; grid-template-columns: minmax(0, 1fr) 90px 40px; align-items: center; gap: 10px; }
+.analytics-param-label { overflow: hidden; color: var(--text-soft); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.analytics-param b { text-align: right; font: 600 12px var(--mono); font-variant-numeric: tabular-nums; }
+
+.analytics-clean { display: grid; gap: 8px; }
+.analytics-clean-row { display: grid; grid-template-columns: 40px minmax(0, 1fr) 40px 52px; align-items: center; gap: 10px; }
+.analytics-clean-row b { text-align: right; font: 600 12px var(--mono); font-variant-numeric: tabular-nums; }
+.analytics-clean-row small { color: var(--dim); font: 9px var(--mono); text-align: right; }
+.analytics-point-tag { display: inline-flex; align-items: center; justify-content: center; padding: 3px 8px; border: 1px solid var(--line-strong); font: 9px var(--mono); letter-spacing: .05em; }
+.analytics-point-tag.is-uy { border-color: var(--point-uy); color: var(--point-uy-ink); background: color-mix(in srgb, var(--point-uy) 16%, transparent); }
+.analytics-point-tag.is-de { border-color: var(--point-de); color: var(--point-de-ink); background: color-mix(in srgb, var(--point-de) 16%, transparent); }
+
+/* Выработка часов по точкам. */
+.analytics-points { display: grid; gap: 14px; }
+.analytics-point { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
+.analytics-point.is-uy { border-left: 3px solid var(--point-uy); }
+.analytics-point.is-de { border-left: 3px solid var(--point-de); }
+.analytics-point-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.analytics-point-shifts { color: var(--muted); font: 10px var(--mono); }
+.analytics-point-hours { display: flex; align-items: baseline; gap: 6px; }
+.analytics-point-hours strong { font: 600 26px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.analytics-point-hours span { color: var(--muted); font: 12px var(--mono); }
+.analytics-point-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--dim); font: 10px var(--mono); }
+.analytics-point-quality { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 4px; padding-top: 10px; border-top: 1px solid var(--line-faint); }
+.analytics-point-quality > div { display: grid; gap: 2px; }
+.analytics-point-quality span { color: var(--muted); font: 8px var(--mono); letter-spacing: .05em; text-transform: uppercase; }
+.analytics-point-quality b { font: 600 15px var(--sans); font-variant-numeric: tabular-nums; }
+.analytics-point-quality b.is-low { color: var(--danger-text); }
+.analytics-point-quality b.is-mid { color: var(--warn); }
+.analytics-point-quality b.is-high { color: var(--mint); }
+.analytics-note { margin: 0; color: var(--dim); font-size: 11px; line-height: 1.5; }
+
+@media (min-width: 761px) {
+  .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-points { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .analytics-panel { padding: 16px 14px 16px; }
+  .analytics-panel .panel-heading { margin-bottom: 14px; }
+  .analytics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-param { grid-template-columns: minmax(0, 1fr) 70px 36px; }
+  .analytics-point-quality { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .analytics-toolbar { width: 100%; }
+  .analytics-period-select { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .analytics-bar i { transition: none; }
+}
 .kb-dialog .kb-tool { display: grid; width: 36px; height: 36px; margin: 0; padding: 0; place-items: center; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--text-soft); font-size: 1em; cursor: pointer; transition: background-color .18s, color .18s, border-color .18s; }
 .kb-dialog .kb-tool:hover { border-color: var(--line); background: rgba(var(--hl), .04); color: var(--text); }
 .kb-dialog .kb-tool:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

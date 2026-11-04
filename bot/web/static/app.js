@@ -630,6 +630,328 @@ function renderEvaluationAnalytics(data) {
     ${recentHtml ? `<div class="review-list">${recentHtml}</div>` : ''}`;
 }
 
+/* --- Аналитика команды и качества (дашборд наставника) ------------------
+   Три сводки бэкенда (/api/analytics/*): тепловая карта навыков, зоны риска
+   по напиткам и чистоте, выработка часов по точкам. Без сторонних графических
+   библиотек — только таблицы, чипы и CSS-прогресс-бары. */
+
+const CACHE_KEY_ANALYTICS_TEAM = 'neft-cache:analytics-team';
+const CACHE_KEY_ANALYTICS_DRINKS = 'neft-cache:analytics-drinks';
+const CACHE_KEY_ANALYTICS_SHIFTS = 'neft-cache:analytics-shifts';
+
+const analyticsState = {
+  days: 30,
+  year: new Date().getFullYear(),
+  month: new Date().getMonth() + 1,
+  team: null,
+  drinks: null,
+  shifts: null,
+};
+
+const ANALYTICS_RISK_LABEL = { high: 'Высокий риск', medium: 'Средний риск', low: 'Норма', unknown: 'Нет данных' };
+const ANALYTICS_ATTENTION_LABEL = { deficit: 'Недосмотр', normal: 'Норма', overload: 'Перебор', unknown: 'Нет данных' };
+
+/* Цветовой класс по среднему баллу: <4.0 — красный, <4.5 — жёлтый, 4.5+ — зелёный. */
+function analyticsScoreClass(value) {
+  if (value == null) return 'is-empty';
+  if (value < 4) return 'is-low';
+  if (value < 4.5) return 'is-mid';
+  return 'is-high';
+}
+
+function analyticsScore(value) {
+  return value == null ? '—' : Number(value).toFixed(2);
+}
+
+/* Класс прогресс-бара по уровню риска: высокий риск — красный, низкий — зелёный.
+   Не путать с analyticsScoreClass: там «is-high» = хороший балл (зелёный). */
+function analyticsRiskBarClass(risk) {
+  if (risk === 'high') return 'is-low';
+  if (risk === 'medium') return 'is-mid';
+  if (risk === 'low') return 'is-high';
+  return 'is-unknown';
+}
+
+function analyticsDaysLabel(days) {
+  return `${Number(days) || 30} ДНЕЙ`;
+}
+
+async function loadAnalytics() {
+  if (!managerRole) return;
+  await Promise.allSettled([loadTeamOverview(), loadDrinksQuality(), loadShiftsReport()]);
+}
+
+async function loadTeamOverview() {
+  const container = document.querySelector('#analytics-team');
+  if (!container) return;
+  const cacheKey = `${CACHE_KEY_ANALYTICS_TEAM}:${analyticsState.days}`;
+  const cached = readCache(cacheKey);
+  if (cached) {
+    analyticsState.team = cached;
+    renderTeamOverview();
+  }
+  try {
+    const data = await api(`/api/analytics/team-overview?days=${analyticsState.days}`);
+    analyticsState.team = data;
+    writeCache(cacheKey, data);
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
+    renderTeamOverview();
+  } catch (error) {
+    if (!analyticsState.team) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+    if (!error.isOffline) showToast(error.message);
+  }
+}
+
+async function loadDrinksQuality() {
+  const container = document.querySelector('#analytics-drinks');
+  if (!container) return;
+  const cacheKey = `${CACHE_KEY_ANALYTICS_DRINKS}:${analyticsState.days}`;
+  const cached = readCache(cacheKey);
+  if (cached) {
+    analyticsState.drinks = cached;
+    renderDrinksQuality();
+  }
+  try {
+    const data = await api(`/api/analytics/drinks-quality?days=${analyticsState.days}`);
+    analyticsState.drinks = data;
+    writeCache(cacheKey, data);
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
+    renderDrinksQuality();
+  } catch (error) {
+    if (!analyticsState.drinks) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+    if (!error.isOffline) showToast(error.message);
+  }
+}
+
+async function loadShiftsReport() {
+  const container = document.querySelector('#analytics-shifts');
+  if (!container) return;
+  const cacheKey = `${CACHE_KEY_ANALYTICS_SHIFTS}:${analyticsState.year}-${analyticsState.month}`;
+  const cached = readCache(cacheKey);
+  if (cached) {
+    analyticsState.shifts = cached;
+    renderShiftsReport();
+  }
+  try {
+    const data = await api(`/api/analytics/shifts-report?year=${analyticsState.year}&month=${analyticsState.month}`);
+    analyticsState.shifts = data;
+    writeCache(cacheKey, data);
+    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
+    renderShiftsReport();
+  } catch (error) {
+    if (!analyticsState.shifts) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+    if (!error.isOffline) showToast(error.message);
+  }
+}
+
+function renderTeamOverview() {
+  const container = document.querySelector('#analytics-team');
+  if (!container) return;
+  const windowNode = document.querySelector('#analytics-team-window');
+  if (windowNode) windowNode.textContent = analyticsDaysLabel(analyticsState.days);
+  const data = analyticsState.team;
+  if (!data) {
+    container.innerHTML = '<p class="empty-state">Нет данных за период</p>';
+    return;
+  }
+  const team = data.team || {};
+  const attention = team.attention || {};
+  const branches = data.branches || [];
+  const employees = data.employees || [];
+  const coverage = Math.round((Number(team.coverage) || 0) * 100);
+
+  const summary = `
+    <div class="analytics-summary">
+      <div class="analytics-metric"><span>СОТРУДНИКОВ</span><strong>${Number(team.total) || 0}</strong><small>активных</small></div>
+      <div class="analytics-metric"><span>ОЦЕНЕНО</span><strong>${Number(team.evaluated) || 0}</strong><small>из ${Number(team.total) || 0}</small></div>
+      <div class="analytics-metric"><span>ОЦЕНОК</span><strong>${Number(team.evaluations) || 0}</strong><small>за период</small></div>
+      <div class="analytics-metric"><span>ОХВАТ</span><strong>${coverage}%</strong><small>сотрудников</small></div>
+      <div class="analytics-metric analytics-attention is-${escapeHtml(attention.level || 'unknown')}">
+        <span>ВНИМАНИЕ</span><strong>${Number(attention.index || 0).toFixed(2)}</strong>
+        <small>${escapeHtml(ANALYTICS_ATTENTION_LABEL[attention.level] || '—')} · цель ${Number(attention.target) || 0}</small>
+      </div>
+    </div>`;
+
+  const head = `<tr><th class="heat-name">Сотрудник</th>${branches.map((branch) => `<th>${escapeHtml(branch.name)}</th>`).join('')}<th>Средний</th><th>Оценок</th><th>Последняя</th></tr>`;
+  const rows = employees.length
+    ? employees.map((employee) => {
+        const cells = branches.map((branch) => {
+          const value = employee.averages ? employee.averages[branch.code] : null;
+          return `<td class="heat-cell ${analyticsScoreClass(value)}">${analyticsScore(value)}</td>`;
+        }).join('');
+        const last = employee.last_evaluated_at ? String(employee.last_evaluated_at).slice(0, 10) : '—';
+        return `<tr>
+          <td class="heat-name"><strong>${escapeHtml(employee.name)}</strong><small>${escapeHtml(employee.role_name || employee.role || '')}</small></td>
+          ${cells}
+          <td class="heat-cell ${analyticsScoreClass(employee.overall)}">${analyticsScore(employee.overall)}</td>
+          <td class="heat-count">${Number(employee.evaluations) || 0}</td>
+          <td class="heat-last">${escapeHtml(last)}</td>
+        </tr>`;
+      }).join('')
+    : `<tr><td class="heat-empty" colspan="${branches.length + 4}">Оценок за период пока нет</td></tr>`;
+
+  container.innerHTML = `${summary}
+    <div class="heatmap-wrap">
+      <table class="heatmap">
+        <thead>${head}</thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p class="analytics-legend"><span class="heat-cell is-low">ниже 4.0</span><span class="heat-cell is-mid">4.0–4.5</span><span class="heat-cell is-high">4.5+</span><span class="heat-cell is-empty">нет оценок</span></p>`;
+}
+
+function renderDrinksQuality() {
+  const container = document.querySelector('#analytics-drinks');
+  if (!container) return;
+  const windowNode = document.querySelector('#analytics-drinks-window');
+  if (windowNode) windowNode.textContent = analyticsDaysLabel(analyticsState.days);
+  const data = analyticsState.drinks;
+  if (!data) {
+    container.innerHTML = '<p class="empty-state">Нет данных за период</p>';
+    return;
+  }
+  const drinks = data.drinks || [];
+  const params = data.problem_params || [];
+  const cleanliness = data.cleanliness_by_point || [];
+
+  const drinksHtml = drinks.length
+    ? `<div class="analytics-rank">${drinks.map((drink) => {
+        const percent = drink.average == null ? 0 : Math.max(2, Math.min(100, (Number(drink.average) / 5) * 100));
+        return `<div class="analytics-rank-row">
+          <div class="analytics-rank-head"><strong>${escapeHtml(drink.title)}</strong><span class="analytics-risk is-${escapeHtml(drink.risk)}">${escapeHtml(ANALYTICS_RISK_LABEL[drink.risk] || '')}</span></div>
+          <div class="analytics-bar"><i class="${analyticsRiskBarClass(drink.risk)}" style="width:${percent}%"></i></div>
+          <div class="analytics-rank-meta"><span>${escapeHtml(drink.category || '—')}</span><span>${analyticsScore(drink.average)} · ${Number(drink.evaluations) || 0} оц.</span></div>
+        </div>`;
+      }).join('')}</div>`
+    : '<p class="empty-state">Напитки за период не оценивались</p>';
+
+  const paramsHtml = params.length
+    ? `<div class="analytics-params">${params.map((param) => {
+        const percent = Math.max(2, Math.min(100, (Number(param.average) / 5) * 100));
+        return `<div class="analytics-param">
+          <span class="analytics-param-label">${escapeHtml(param.label)}</span>
+          <div class="analytics-bar"><i class="${analyticsScoreClass(param.average)}" style="width:${percent}%"></i></div>
+          <b>${analyticsScore(param.average)}</b>
+        </div>`;
+      }).join('')}</div>`
+    : '<p class="empty-state">Параметры не оценивались</p>';
+
+  const cleanHtml = cleanliness.length
+    ? `<div class="analytics-clean">${cleanliness.map((row) => {
+        const percent = Math.max(2, Math.min(100, (Number(row.average) / 5) * 100));
+        const pointClass = row.point === 'УЯ' ? 'is-uy' : 'is-de';
+        return `<div class="analytics-clean-row">
+          <span class="analytics-point-tag ${pointClass}">${escapeHtml(row.point)}</span>
+          <div class="analytics-bar"><i class="${analyticsScoreClass(row.average)}" style="width:${percent}%"></i></div>
+          <b>${analyticsScore(row.average)}</b>
+          <small>${Number(row.evaluations) || 0} оц.</small>
+        </div>`;
+      }).join('')}</div>`
+    : '<p class="empty-state">Оценок чистоты пока нет</p>';
+
+  container.innerHTML = `
+    <div class="analytics-grid">
+      <div class="analytics-col">
+        <h4 class="analytics-subtitle">Напитки-аутсайдеры</h4>
+        ${drinksHtml}
+      </div>
+      <div class="analytics-col">
+        <h4 class="analytics-subtitle">Проседающие параметры (топ-10)</h4>
+        ${paramsHtml}
+        <h4 class="analytics-subtitle">Чистота и порядок по точкам</h4>
+        ${cleanHtml}
+      </div>
+    </div>`;
+}
+
+function renderShiftsReport() {
+  const container = document.querySelector('#analytics-shifts');
+  if (!container) return;
+  const periodNode = document.querySelector('#analytics-shifts-period');
+  if (periodNode) periodNode.textContent = `${monthNames[analyticsState.month - 1] || ''} ${analyticsState.year}`.toUpperCase();
+  const data = analyticsState.shifts;
+  if (!data) {
+    container.innerHTML = '<p class="empty-state">Нет данных за месяц</p>';
+    return;
+  }
+  const points = data.points || [];
+  const team = data.team || {};
+  const cards = points.map((point) => {
+    const fact = Number(point.fact_hours) || 0;
+    const plan = Number(point.plan_hours) || 0;
+    const percent = plan > 0 ? Math.max(2, Math.min(100, (fact / plan) * 100)) : 0;
+    const delta = Number(point.delta_hours) || 0;
+    const quality = point.quality || {};
+    const pointClass = point.point === 'УЯ' ? 'is-uy' : 'is-de';
+    return `<article class="analytics-point ${pointClass}">
+      <div class="analytics-point-head"><span class="analytics-point-tag ${pointClass}">${escapeHtml(point.point)}</span><span class="analytics-point-shifts">${Number(point.shift_count) || 0} смен</span></div>
+      <div class="analytics-point-hours"><strong>${fact.toFixed(1)}</strong><span>/ ${plan.toFixed(1)} ч</span></div>
+      <div class="analytics-bar"><i class="${delta < 0 ? 'is-low' : 'is-high'}" style="width:${percent}%"></i></div>
+      <div class="analytics-point-meta"><span>Δ ${delta > 0 ? '+' : ''}${delta.toFixed(1)} ч</span><span>ср. смена ${point.avg_shift_hours == null ? '—' : Number(point.avg_shift_hours).toFixed(1)} ч</span></div>
+      <div class="analytics-point-quality">
+        <div><span>Качество</span><b class="${analyticsScoreClass(quality.average)}">${analyticsScore(quality.average)}</b></div>
+        <div><span>Напитки</span><b class="${analyticsScoreClass(quality.drinks_average)}">${analyticsScore(quality.drinks_average)}</b></div>
+        <div><span>Чистота</span><b class="${analyticsScoreClass(quality.cleanliness_average)}">${analyticsScore(quality.cleanliness_average)}</b></div>
+        <div><span>Оценок</span><b>${Number(quality.evaluations) || 0}</b></div>
+      </div>
+    </article>`;
+  }).join('');
+
+  const teamLine = `<div class="analytics-summary">
+    <div class="analytics-metric"><span>ФАКТ</span><strong>${team.fact == null ? '—' : Number(team.fact).toFixed(1)}</strong><small>часов</small></div>
+    <div class="analytics-metric"><span>Σ ОПТ</span><strong>${team.opt == null ? '—' : Number(team.opt).toFixed(1)}</strong><small>планка</small></div>
+    <div class="analytics-metric"><span>Σ МИН</span><strong>${team.min == null ? '—' : Number(team.min).toFixed(1)}</strong><small>потребность</small></div>
+    <div class="analytics-metric"><span>Σ МАКС</span><strong>${team.max == null ? '—' : Number(team.max).toFixed(1)}</strong><small>лимит</small></div>
+  </div>`;
+
+  container.innerHTML = `${teamLine}
+    <div class="analytics-points">${cards || '<p class="empty-state">Смен за месяц нет</p>'}</div>
+    ${data.note ? `<p class="analytics-note">${escapeHtml(data.note)}</p>` : ''}`;
+}
+
+function renderAnalyticsSelectors() {
+  const monthSelect = document.querySelector('#analytics-month');
+  const yearSelect = document.querySelector('#analytics-year');
+  if (!monthSelect || !yearSelect) return;
+  monthSelect.innerHTML = monthNames
+    .map((name, index) => `<option value="${index + 1}"${analyticsState.month === index + 1 ? ' selected' : ''}>${name}</option>`)
+    .join('');
+  const now = new Date();
+  const years = [];
+  for (let year = now.getFullYear() - 1; year <= now.getFullYear() + 2; year += 1) {
+    years.push(`<option value="${year}"${analyticsState.year === year ? ' selected' : ''}>${year}</option>`);
+  }
+  yearSelect.innerHTML = years.join('');
+}
+
+function setupAnalytics() {
+  const view = document.querySelector('#analytics-view');
+  if (!view) return;
+  renderAnalyticsSelectors();
+  view.querySelectorAll('[data-analytics-days]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const days = Number(button.dataset.analyticsDays) || 30;
+      if (days === analyticsState.days) return;
+      analyticsState.days = days;
+      view.querySelectorAll('[data-analytics-days]').forEach((item) => item.classList.toggle('is-selected', item === button));
+      loadTeamOverview();
+      loadDrinksQuality();
+    });
+  });
+  const monthSelect = document.querySelector('#analytics-month');
+  const yearSelect = document.querySelector('#analytics-year');
+  const applyPeriod = () => {
+    const month = Number(monthSelect?.value);
+    const year = Number(yearSelect?.value);
+    if (!month || !year) return;
+    analyticsState.month = month;
+    analyticsState.year = year;
+    loadShiftsReport();
+  };
+  monthSelect?.addEventListener('change', applyPeriod);
+  yearSelect?.addEventListener('change', applyPeriod);
+}
+
 async function uploadEvaluationPhoto(file) {
   if (!file) return;
   const preview = document.querySelector('#evaluation-photo-preview');
@@ -2352,6 +2674,7 @@ function animateNumber(node, value, decimals = 0) {
 function setView(name) {
   if (name === 'calendar' && !modulePreferences.calendar_enabled) name = 'profile';
   if (name === 'control' && !managerRole) name = 'profile';
+  if (name === 'analytics' && !managerRole) name = 'profile';
   const apply = () => {
     const isChat = name === 'chat';
     // В режиме чата документ прибит к видимой области (см. app.css) —
@@ -2372,6 +2695,7 @@ function setView(name) {
         name === 'calendar' ? 'График смен' :
         name === 'development' ? 'Развитие' :
         name === 'control' ? 'Панель управления' :
+        name === 'analytics' ? 'Аналитика команды' :
         name === 'announcements' ? 'Анонсы' :
         name === 'kb' ? 'База знаний' :
         name === 'chat' ? 'Чат' :
@@ -2402,6 +2726,7 @@ function setView(name) {
   if (name === 'kb') openKnowledgeBase();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
+  if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
 
@@ -4511,6 +4836,7 @@ function setupDashboard() {
   setupDrawer();
   setupProfile();
   setupWorkloadForm();
+  setupAnalytics();
   setupAnnouncements();
   loadAnnouncements();
   setupKnowledgeBase();

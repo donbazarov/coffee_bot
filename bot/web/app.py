@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, announcements, avatars, chat, gamification, knowledge_base, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, analytics, announcements, avatars, chat, gamification, knowledge_base, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -1425,6 +1425,32 @@ def evaluation_sessions(_: dict[str, Any] = Depends(require_manager)):
 def evaluation_analytics(_: dict[str, Any] = Depends(require_manager)):
     """Аналитика оценок для наставников: агрегаты команды без средних по бариста."""
     return gamification.evaluation_analytics(engine)
+
+
+# --- Аналитика команды и качества (дашборд «Аналитика команды») --------------- #
+
+@app.get("/api/analytics/team-overview")
+def analytics_team_overview(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
+    """Тепловая карта навыков команды: средние по веткам, активность и охват."""
+    return analytics.team_overview(engine, days)
+
+
+@app.get("/api/analytics/drinks-quality")
+def analytics_drinks_quality(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
+    """Зоны риска по напиткам, проблемные параметры и чистота по точкам."""
+    return analytics.drinks_quality(engine, days)
+
+
+@app.get("/api/analytics/shifts-report")
+async def analytics_shifts_report(
+    year: int,
+    month: int,
+    _: dict[str, Any] = Depends(require_manager),
+):
+    """Выработка часов по точкам УЯ/ДЕ и связка с качеством за месяц."""
+    if year < 2000 or year > 2100 or month < 1 or month > 12:
+        raise HTTPException(status_code=422, detail="Некорректный месяц")
+    return await run_in_threadpool(analytics.shifts_report, engine, year, month)
 
 
 @app.get("/api/achievements/manage")
