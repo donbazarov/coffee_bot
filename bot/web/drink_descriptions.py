@@ -19,7 +19,8 @@
 * **Изображения** — Pillow «на лету» в WebP, файлы кладутся в
   `data/drink_descriptions/photos` (env `NEFT_DRINK_PHOTOS_DIR`), в базу пишется
   только путь. Раздаются авторизованным пользователям роутом.
-* **Опыт** — публикация даёт XP в ветки «Команда» и «Сенсорика»; если среди
+* **Опыт** — публикация даёт XP в ветки «Команда» и «Сенсорика» автору и напарнику
+  смены (напарнику — если он реально в графике на этой точке); если среди
   напитков есть «кофе с молоком» и приложено фото латте-арта — ещё «Молоко».
   Верный ответ в викторине даёт XP в «Команду» (один раз на участника).
 """
@@ -33,7 +34,7 @@ import os
 import random
 import re
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -354,6 +355,32 @@ def _active_staff_list(connection: Connection) -> list[dict[str, Any]]:
     return [{"id": int(row["id"]), "name": row["name"], "role": row["role"]} for row in rows]
 
 
+def _on_shift_with(connection: Connection, partner_id: int, point: str, shift_date: str) -> bool:
+    """Был ли напарник в графике на эту точку в дату смены (или накануне — ночные).
+
+    Время суток не сверяем: публикуют и после закрытия смены, а смена 22:00–06:00
+    вообще не содержит полудня. Проверка нужна, чтобы опыт не доставался выбранному
+    вручную напарнику «вне смены».
+    """
+    try:
+        day = date.fromisoformat(str(shift_date)[:10])
+    except (TypeError, ValueError):
+        return False
+    row = connection.execute(text("""
+        SELECT 1 FROM schedule s
+        JOIN shift_types st ON st.id = s.shift_type_id
+        JOIN users u ON CAST(u.iiko_id AS TEXT) = s.iiko_id AND u.is_active = 1
+        WHERE st.point = :point
+          AND s.shift_date IN (:day, :prev)
+          AND u.id = :partner
+          AND COALESCE(s.is_active, 1) = 1
+        LIMIT 1
+    """), {"point": point, "day": day.isoformat(),
+           "prev": (day - timedelta(days=1)).isoformat(),
+           "partner": int(partner_id)}).first()
+    return row is not None
+
+
 def current_shift(user_id: int) -> dict[str, Any]:
     """Точка и напарники текущего сотрудника по графику (с фоллбэком «вне смены»)."""
     now = datetime.now(app_timezone())
@@ -534,19 +561,33 @@ def _insert_photos(connection: Connection, description_id: int, kind: str,
             "author_id": entry["author_id"], "position": index})
 
 
-def _award_publish_xp(connection: Connection, author_id: int, items: list[dict[str, Any]],
-                      latte_photos: list[dict[str, Any]], description_id: int) -> dict[str, int]:
-    """Опыт за публикацию: «Команда» + «Сенсорика» (+ «Молоко» за латте-арт с молоком)."""
+def _award_publish_xp(connection: Connection, author_id: int, partner_id: int | None,
+                      items: list[dict[str, Any]], latte_photos: list[dict[str, Any]],
+                      description_id: int, point: str, shift_date: str) -> dict[str, dict[str, int]]:
+    """Опыт за публикацию: «Команда» + «Сенсорика» (+ «Молоко» за латте-арт с молоком).
+
+    Начисляем и напарнику — смену делали вдвоём, — но только если он реально
+    в графике на этой точке (`_on_shift_with`): выбранный вручную «вне смены»
+    сотрудник опыта не получает.
+    """
     amounts = dict(XP_PUBLISH)
     if latte_photos and any(item["category"] == MILK_COFFEE for item in items):
         for code, value in XP_PUBLISH_MILK.items():
             amounts[code] = amounts.get(code, 0) + value
-    applied = gamification.award_xp(
-        connection, user_id=author_id, amounts=amounts,
-        source_type="description", source_id=description_id, created_by=author_id,
-    )
-    gamification.check_user_achievements(connection, author_id, "description")
-    return applied
+
+    def grant(recipient_id: int) -> dict[str, int]:
+        applied = gamification.award_xp(
+            connection, user_id=recipient_id, amounts=amounts,
+            source_type="description", source_id=description_id, created_by=author_id,
+        )
+        gamification.check_user_achievements(connection, recipient_id, "description")
+        return applied
+
+    partner_xp: dict[str, int] = {}
+    if partner_id is not None and int(partner_id) != int(author_id):
+        if _on_shift_with(connection, int(partner_id), point, shift_date):
+            partner_xp = grant(int(partner_id))
+    return {"author": grant(author_id), "partner": partner_xp}
 
 
 # --- Сериализация ------------------------------------------------------------ #
@@ -1035,8 +1076,12 @@ async def create_description(request: Request,
         _insert_photos(connection, description_id, "latte_art", photos["latte_art"])
         _insert_photos(connection, description_id, "meme", photos["meme"])
         quiz_ids = _create_quizzes(connection, description_id, name_by_id, photos)
-        xp = _award_publish_xp(connection, int(user["id"]), items, photos["latte_art"], description_id)
-    return {"ok": True, "id": description_id, "quizzes": quiz_ids, "xp": xp}
+        xp = _award_publish_xp(
+            connection, int(user["id"]), partner_id, items, photos["latte_art"],
+            description_id, point, shift_date,
+        )
+    return {"ok": True, "id": description_id, "quizzes": quiz_ids,
+            "xp": xp["author"], "partner_xp": xp["partner"]}
 
 
 @router.get("/{description_id}")

@@ -6077,7 +6077,12 @@ async function submitDrinkForm(event) {
     clearDraft('drink');
     document.querySelector('#drink-dialog')?.close();
     const xp = data.xp ? Object.values(data.xp).reduce((sum, value) => sum + value, 0) : 0;
-    showToast(xp ? `Описание опубликовано · +${xp} опыта` : 'Описание опубликовано');
+    const partnerXp = data.partner_xp
+      ? Object.values(data.partner_xp).reduce((sum, value) => sum + value, 0) : 0;
+    const toastParts = ['Описание опубликовано'];
+    if (xp) toastParts.push(`+${xp} опыта`);
+    if (partnerXp) toastParts.push(`напарнику +${partnerXp}`);
+    showToast(toastParts.join(' · '));
     await loadDrinks(true);
     loadDrinksWidget();
   } catch (error) {
