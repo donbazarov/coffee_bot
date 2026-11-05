@@ -5682,7 +5682,7 @@ function drinkCardMarkup(desc) {
   const items = (desc.items || []).map(drinkItemView).join('');
   const quizByKind = {};
   (desc.quizzes || []).forEach((quiz) => { quizByKind[quiz.kind] = quiz; });
-  const partner = desc.partner ? ` · с ${escapeHtml(desc.partner.name)}` : '';
+  const partner = desc.partner ? ` · напарник: ${escapeHtml(desc.partner.name)}` : '';
   return `<article class="drink-card" data-drink-id="${desc.id}">
     <header class="drink-card-head">
       <div><strong>${escapeHtml(desc.author.name)}</strong><span class="drink-meta">${escapeHtml(drinkPointLabel(desc.point))}${partner}</span></div>
@@ -5844,7 +5844,7 @@ function drinkItemFormMarkup(category) {
       + drinkScaleWithText('Сладость', 'balance_sweetness', 'balance', 'balance_sweetness_text', scales.balance, 'Характер сладости')
       + drinkScaleWithText('Горечь', 'balance_bitterness', 'balance', 'balance_bitterness_text', scales.balance, 'Характер горечи') + '</div>');
     parts.push(drinkScaleBlock('Тело', 'body_intensity', 'body', scales.body));
-    parts.push('<label class="drink-text">Нюанс тела<input type="text" maxlength="400" data-drink-field="body_texture" placeholder="Бархатистое…"></label>');
+    parts.push('<label class="drink-text">Текстура<input type="text" maxlength="400" data-drink-field="body_texture" placeholder="Бархатистое…"></label>');
     parts.push('<label class="drink-text">Букет<input type="text" maxlength="400" data-drink-field="bouquet" placeholder="Шоколад, цитрус…"></label>');
     parts.push(drinkScaleBlock('Послевкусие', 'aftertaste_duration', 'aftertaste', scales.aftertaste));
     parts.push('<label class="drink-text">Качество послевкусия<input type="text" maxlength="400" data-drink-field="aftertaste_quality"></label>');
