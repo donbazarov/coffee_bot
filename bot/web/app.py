@@ -58,6 +58,11 @@ ROLE_NAMES = {
     "senior": "Старший",
     "mentor": "Наставник",
 }
+# Предпросмотр «глазами бариста»: роль, которой сервер рендерит страницу для
+# старшего/наставника. Хранится в cookie, чтобы гейты Jinja (`user.role`) и
+# data-атрибуты <body> совпадали без клиентской имитации.
+PREVIEW_COOKIE = "preview_role"
+PREVIEW_ROLE = "barista"
 
 # Тексты ошибок входа. Формулировки для «нет такого сотрудника» и «неверный код»
 # намеренно разные только в одном: без кода нельзя понять, существует ли запись,
@@ -367,13 +372,22 @@ def home(request: Request):
         except RuntimeError:
             pass
 
+    # Предпросмотр «глазами бариста»: старший/наставник рендерит страницу с ролью
+    # бариста, поэтому весь manager-UI (Jinja + data-*) отключается единым механизмом.
+    real_role = user["role"] if user else ""
+    preview_active = bool(
+        user and user["role"] in {"senior", "mentor"}
+        and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+    )
+    render_user = {**user, "role": PREVIEW_ROLE} if preview_active else user
+
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
     response = templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
-            "user": user,
+            "user": render_user,
             "tg_pending": tg_pending,
             "utm_source": utm_source or "",
             "login_error": LOGIN_ERRORS.get(request.query_params.get("login_error"), ""),
@@ -398,6 +412,8 @@ def home(request: Request):
                 "expired": telegram_login.reason_message("expired"),
             }.get(request.query_params.get("auth_error"), ""),
             "role_names": ROLE_NAMES,
+            "real_role": real_role,
+            "preview_active": preview_active,
         },
     )
     # Скользящее продление: устройство, которым пользуются, не выходит никогда.
@@ -821,6 +837,24 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
 def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
     response.delete_cookie(COOKIE_NAME, path="/", httponly=True, samesite="strict")
     return {"ok": True}
+
+
+@app.post("/api/preview")
+async def set_preview(request: Request, user: dict[str, Any] = Depends(require_csrf)) -> JSONResponse:
+    """Включает/выключает предпросмотр «глазами бариста» (только старший/наставник)."""
+    if user["role"] not in {"senior", "mentor"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    payload = await _read_json_object(request)
+    role = payload.get("role") or ""
+    if role not in {"", PREVIEW_ROLE}:
+        raise HTTPException(status_code=422, detail="Неизвестная роль предпросмотра")
+    response = JSONResponse({"ok": True, "preview": role or None})
+    if role:
+        response.set_cookie(PREVIEW_COOKIE, role, max_age=SESSION_MAX_AGE,
+                            httponly=True, samesite="strict", path="/")
+    else:
+        response.delete_cookie(PREVIEW_COOKIE, path="/")
+    return response
 
 
 # --------------------------------------------------------------------------- #

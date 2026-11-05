@@ -567,9 +567,6 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .matrix-edit-tools { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
 .matrix-edit-tools[hidden] { display: none; }
 .matrix-edit-tools #matrix-save:disabled { opacity: .4; cursor: not-allowed; transform: none; }
-.barista-preview [data-view="team"], .barista-preview #team-view,
-.barista-preview [data-view="control"], .barista-preview #control-view { display: none !important; }
-.barista-preview #add-user-button { display: none !important; }
 .settings-panel { margin: 0 0 14px; padding: 19px 21px 8px; }
 .settings-panel .panel-heading { margin-bottom: 10px; }
 .settings-panel .panel-heading h3 { font-size: 18px; }
@@ -584,7 +581,6 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .module-setting input:checked + i::after { transform: translateX(17px); background: var(--mint); }
 .module-setting input:focus-visible + i { outline: 2px solid var(--mint); outline-offset: 3px; }
 .settings-active .main-area { scroll-margin-top: 12px; }
-.barista-preview #team-view, .barista-preview [data-view="team"] { display: none !important; }
 .calendar-editing .matrix-cell { cursor: pointer; }
 .calendar-editing .matrix-cell.is-empty .matrix-empty-mark { opacity: .45; }
 .history-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; min-height: 48px; border-top: 1px solid var(--line); }

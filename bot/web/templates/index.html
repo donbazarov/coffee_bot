@@ -490,9 +490,9 @@
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">МОИ МОДУЛИ</p><h3>Разделы сайта</h3></div></div>
           <label class="module-setting"><span><strong>Календарь смен</strong><small>График команды, часы и замены</small></span><input type="checkbox" id="calendar-module-toggle"><i></i></label>
         </section>
-        {% if user.role in ['senior', 'mentor'] %}
+        {% if real_role in ['senior', 'mentor'] %}
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
-          <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"><i></i></label>
+          <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"{% if preview_active %} checked{% endif %}><i></i></label>
         </section>
         {% endif %}
       </section>
@@ -694,7 +694,7 @@
     </nav>
     <div class="drawer-account">
       <div class="account-mark">{% if user.avatar_rev %}<img src="/avatars/{{ user.id }}.jpg?v={{ user.avatar_rev }}" alt="">{% else %}{{ (user.display_name or user.name)[:1] | upper }}{% endif %}</div>
-      <div class="account-copy"><strong>{{ user.display_name or user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}</span></div>
+      <div class="account-copy"><strong>{{ user.display_name or user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}{% if preview_active %} · предпросмотр{% endif %}</span></div>
       <button class="button button-quiet drawer-logout" type="button" id="drawer-logout">Выйти</button>
     </div>
   </aside>

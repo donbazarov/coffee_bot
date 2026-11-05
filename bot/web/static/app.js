@@ -14,7 +14,6 @@ let modulePreferences = { calendar_enabled: true };
 const managerRole = document.body.dataset.manager === 'true';
 const userRole = document.body.dataset.role || '';
 const isMentor = userRole === 'mentor';
-let baristaPreview = false;
 let matrixDayWidth = null;
 let editType = 'swap';
 let templateReorderMode = false;
@@ -1838,9 +1837,9 @@ function updateEditControls() {
   const swapsEntry = document.querySelector('#edit-swaps-toggle');
   const scheduleEntry = document.querySelector('#edit-schedule-toggle');
   // Стажёр только смотрит график: сервер тоже отклонит правки (PermissionError).
-  const canEdit = userRole !== 'newbie' && !baristaPreview;
+  const canEdit = userRole !== 'newbie';
   if (swapsEntry) swapsEntry.hidden = editMode || !canEdit;
-  if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor || baristaPreview;
+  if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor;
   const tools = document.querySelector('.matrix-edit-tools');
   if (tools) tools.hidden = !editMode;
   const hasChanges = matrixChanges.size > 0;
@@ -2138,20 +2137,6 @@ function applyModuleVisibility() {
   if (!modulePreferences.calendar_enabled && document.querySelector('#calendar-view')?.classList.contains('is-visible')) setView('profile');
 }
 
-function applyBaristaPreview(enabled) {
-  baristaPreview = enabled;
-  document.body.classList.toggle('barista-preview', enabled);
-  document.querySelectorAll('[data-view="team"], [data-view="control"]').forEach((button) => { button.hidden = enabled; });
-  const toggle = document.querySelector('#barista-preview-toggle');
-  if (toggle) toggle.checked = enabled;
-  const roleLabel = document.querySelector('.account-copy span');
-  if (roleLabel) roleLabel.textContent = enabled ? 'Бариста · предпросмотр' : document.body.dataset.roleLabel;
-  if (enabled && (document.querySelector('#team-view')?.classList.contains('is-visible') || document.querySelector('#control-view')?.classList.contains('is-visible'))) setView('overview');
-  // Черновик не сбрасываем: бариста тоже может делать «Замену». Но у него нет
-  // инструментов наставника (шаблоны и тип правки) — обновляем панель.
-  updateEditControls();
-}
-
 async function loadPreferences() {
   try {
     modulePreferences = await api('/api/preferences');
@@ -2159,7 +2144,6 @@ async function loadPreferences() {
     applyModuleVisibility();
     applyServerAppearance(modulePreferences);
   } catch (error) { showToast(error.message); }
-  applyBaristaPreview(managerRole && localStorage.getItem('barista-preview') === 'true');
 }
 
 /* --- Масштаб матрицы ---------------------------------------------------
@@ -6774,9 +6758,15 @@ function setupDashboard() {
       }
     });
   }
-  document.querySelector('#barista-preview-toggle')?.addEventListener('change', (event) => {
-    applyBaristaPreview(event.currentTarget.checked);
-    localStorage.setItem('barista-preview', String(event.currentTarget.checked));
+  document.querySelector('#barista-preview-toggle')?.addEventListener('change', async (event) => {
+    const box = event.currentTarget;
+    try {
+      await api('/api/preview', { method: 'POST', body: JSON.stringify({ role: box.checked ? 'barista' : '' }) });
+      window.location.reload();
+    } catch (error) {
+      box.checked = !box.checked;
+      showToast(error.message);
+    }
   });
 
   document.querySelectorAll('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
