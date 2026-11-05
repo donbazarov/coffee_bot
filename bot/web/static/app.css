@@ -1803,12 +1803,16 @@ body { transition: background-color .3s ease, color .3s ease; }
   margin: 0;
   padding: 0;
   border: 0;
-  display: flex;
-  flex-direction: column;
   background: rgba(8, 9, 12, .95);
   color: #f4f4f2;
   overflow: hidden;
 }
+/* Полноэкранный flex включаем ТОЛЬКО для открытого диалога. Если задать display
+   у самого .media-viewer, авторское правило перебивает UA-ное
+   `dialog:not([open]) { display: none }` — и закрытый вьюер висит поверх всего
+   приложения, не закрываясь. `!important` здесь — страховка от таких же правок. */
+.media-viewer:not([open]) { display: none !important; }
+.media-viewer[open] { display: flex; flex-direction: column; }
 .media-viewer::backdrop { background: rgba(4, 5, 7, .8); }
 .media-viewer-bar {
   display: flex;

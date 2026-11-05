@@ -5356,6 +5356,8 @@ function setupMediaViewer() {
   const dialog = document.querySelector('#media-viewer');
   const stage = document.querySelector('#media-viewer-stage');
   if (!dialog || !stage) return;
+  // Страховка: вьюер должен быть закрыт до первого показа, иначе он перекроет UI.
+  if (dialog.open) dialog.close();
   const image = document.querySelector('#media-viewer-image');
   document.querySelector('#media-viewer-close')?.addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
