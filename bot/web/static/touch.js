@@ -3,8 +3,9 @@
  *   • Свайп от левого края открывает сэндвич-меню (как в iOS). Кромка — это
  *     «зона меню», она приоритетнее жеста чата, поэтому возврат к списку
  *     чатов делается свайпом ПРАВЕЕ кромки (см. EDGE).
- *   • В чате (открытая переписка) свайп вправо возвращает к списку чатов:
- *     тред «съезжает» вправо, показывая контакты/темы.
+ *   • В чате (открытая переписка) свайп вправо в любом месте сдвигает тред
+ *     вправо, показывая контакты/темы; короткая или диагональная тяга остаётся
+ *     скроллу ленты (CHAT_SLOP).
  *   • Сэндвич-меню закрывается свайпом влево (по нему же).
  *   • Pull-to-Refresh — собственный индикатор (в iOS-PWA нативного нет);
  *     работает только когда страница в самом верху и чат не открыт.
@@ -20,6 +21,7 @@
 
   const EDGE = 30;             // «горячая зона» у левого края (открытие меню)
   const CHAT_OPEN_FRACTION = 0.3;
+  const CHAT_SLOP = 12;        // сдвиг, после которого начинаем тянуть тред
   const DRAWER_OPEN_FRACTION = 0.4;  // доля ширины меню, достаточная для открытия
   const CLOSE_DISTANCE = 60;   // свайп влево, достаточный для закрытия меню
   const PTR_TRIGGER = 84;
@@ -37,6 +39,8 @@
   const isDrawerOpen = () => Boolean(!sidebarPinned() && drawer && drawer.classList.contains('is-open'));
   const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
   const inMatrix = (target) => Boolean(target && target.closest && target.closest('.matrix-scroll'));
+  // Поля ввода: горизонтальная тяга по тексту — это выделение, а не жест.
+  const inField = (target) => Boolean(target && target.closest && target.closest('input, textarea, [contenteditable="true"]'));
   const isMobile = () => window.matchMedia(MOBILE_QUERY).matches;
   const chatVisible = () => Boolean(chatView && !chatView.hidden && chatView.classList.contains('is-visible'));
   const chatThreadOpen = () => chatVisible() && isMobile()
@@ -141,7 +145,10 @@
     // Левая кромка — зона меню (как в iOS). В открытом треде чата возврат к
     // контактам остаётся доступен свайпом правее кромки.
     if (drawer && startX < EDGE && !sidebarPinned()) { mode = 'drawer-open'; return; }
-    if (startX < EDGE && chatThreadOpen()) { mode = 'chat'; return; }
+    // Возврат к списку чатов — свайпом вправо в любом месте треда (как в iOS).
+    // Кромка исключена выше: там живёт меню, а поля ввода — ниже: тяга по
+    // горизонтали в них означает выделение текста.
+    if (chatThreadOpen() && !inField(event.target)) { mode = 'chat'; return; }
     if (!chatVisible() && window.scrollY <= 0 && !inMatrix(event.target)) { mode = 'ptr-maybe'; return; }
     mode = null;
   }, { passive: true });
@@ -164,7 +171,9 @@
       return;
     }
     if (mode === 'chat') {
-      if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) return;
+      // Тянем тред только после явного горизонтального сдвига: иначе лёгкая
+      // диагональ при скролле ленты утаскивала бы её вправо.
+      if (dx < CHAT_SLOP || Math.abs(dy) * 1.2 > dx) return;
       event.preventDefault();
       previewChat(dx);
       return;

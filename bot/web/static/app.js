@@ -2836,7 +2836,13 @@ function setView(name) {
     }
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  if (typeof document.startViewTransition === 'function' && !prefersReducedMotion()) {
+  // View Transitions и стекло конфликтуют: пока идёт переход (~0.26s), элементы с
+  // backdrop-filter не могут семплировать реальный фон и рисуются без блюра — он
+  // «догружается» уже после завершения. В режиме стекла меняем раздел сразу.
+  const canTransition = typeof document.startViewTransition === 'function'
+    && !prefersReducedMotion()
+    && !glassEnabled();
+  if (canTransition) {
     document.startViewTransition(apply);
   } else {
     apply();

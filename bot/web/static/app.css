@@ -77,6 +77,14 @@
   /* Шрифты */
   --mono: 'DM Mono', Consolas, monospace;
   --sans: 'Montserrat', 'Trebuchet MS', system-ui, sans-serif;
+
+  /* Кнопки: единый типографический шаг (используется правилом .button ниже).
+     Ступеней ровно две — базовая и компактная 11px для плотных тулбаров,
+     которые переопределяют --btn-size локально. */
+  --btn-size: 12px;
+  --btn-weight: 500;
+  --btn-h: 40px;
+  --btn-pad: 15px;
 }
 
 [data-theme="light"] {
@@ -291,11 +299,18 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .analytics-drinks { display: flex; flex-wrap: wrap; gap: 6px; }
 .analytics-chip { padding: 5px 10px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 11px; }
 .app-footer { display: flex; justify-content: space-between; gap: 14px; padding: 30px 0 20px; color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
-.button { display: inline-flex; min-height: 40px; align-items: center; justify-content: center; gap: 8px; padding: 0 15px; border: 1px solid var(--line-strong); background: transparent; cursor: pointer; transition: transform .18s, background .18s, border .18s; }
+/* Типографика кнопок задаётся здесь и больше нигде. Раньше её наследовали из
+   контекста, отсюда разнобой 9/10/11/12/14px и вес 400 против 700 — «Отмена»
+   рядом с «Опубликовать» выглядели как разные шрифты. nowrap — иначе кнопка в
+   заголовке панели («Все анонсы») переносилась на две строки. */
+.button { display: inline-flex; min-height: var(--btn-h); align-items: center; justify-content: center; gap: 8px; padding: 0 var(--btn-pad); border: 1px solid var(--line-strong); background: transparent; cursor: pointer; font: var(--btn-weight) var(--btn-size)/1 var(--sans); letter-spacing: .015em; white-space: nowrap; transition: transform .18s, background .18s, border .18s; }
 .button:hover { transform: translateY(-1px); }
-.button-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); font-weight: 700; }
+.button-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); font-weight: 600; }
 .button-primary:hover { background: var(--accent-hover); }
-.button-quiet { color: var(--muted); }
+.button-quiet { color: var(--text-soft); }
+/* Кнопки-ссылки в заголовках панелей: одна высота и один кегль во всём
+   приложении (было 9px у «Открыть календарь» против 14px у «Все анонсы»). */
+.panel-heading .button, .schedule-heading .button { --btn-h: 34px; --btn-pad: 12px; }
 .team-summary { display: flex; align-items: center; gap: 9px; padding: 14px 15px; border: 1px solid var(--line); background: var(--surface); color: var(--text-soft); font-size: 12px; }
 .team-summary-note { margin-left: auto; color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
 .user-list { margin-top: 13px; border-top: 1px solid var(--line); }
@@ -400,7 +415,6 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .schedule-summary { margin-bottom: 34px; padding: 19px 20px 0; border: 1px solid var(--line); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .schedule-heading { align-items: center; margin-bottom: 15px; }
 .schedule-heading h2 { font-size: 25px; }
-.schedule-heading .button { min-height: 34px; padding-inline: 10px; font-size: 11px; }
 .hours-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .hour-stat { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 2px 6px; min-height: 78px; padding: 13px 17px; border-right: 1px solid var(--line); }
 .hour-stat:last-child { border-right: 0; }
@@ -420,7 +434,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .calendar-heading h2 { min-height: 38px; }
 .calendar-actions { display: flex; align-items: center; gap: 7px; }
 .calendar-actions .icon-button { font-size: 22px; }
-.calendar-actions .button { min-height: 36px; }
+.calendar-actions .button { --btn-h: 36px; }
 .calendar-legend { display: flex; align-items: center; gap: 17px; margin: -7px 0 12px; color: var(--muted); font: 10px var(--mono); }
 .calendar-legend > span { display: inline-flex; align-items: center; gap: 7px; }
 .legend-note { margin-left: auto; color: var(--dim); }
@@ -460,7 +474,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .swap-copy span { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .swap-direction { color: var(--accent); font: 9px var(--mono); }
 .swap-actions { display: flex; justify-content: end; gap: 6px; }
-.swap-actions .button { min-height: 31px; padding-inline: 9px; font-size: 10px; }
+.swap-actions .button { --btn-size: 11px; --btn-h: 31px; --btn-pad: 9px; }
 .swap-actions .button-primary { border-color: var(--mint); background: var(--mint); color: var(--mint-contrast); }
 .time-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .point-picker { display: flex; gap: 8px; margin: 17px 0 4px; padding: 0; border: 0; }
@@ -477,7 +491,6 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .schedule-summary { margin: -8px 0 27px; padding: 14px 12px 0; }
   .schedule-heading { flex-direction: row; align-items: end; gap: 8px; margin-bottom: 12px; }
   .schedule-heading h2 { font-size: 22px; }
-  .schedule-heading .button { font-size: 9px; }
   .hours-grid { margin-inline: -12px; }
   .hour-stat { min-height: 69px; gap: 2px 3px; padding: 10px 9px; }
   .hour-stat > span { min-height: 22px; font-size: 7px; line-height: 1.35; }
@@ -490,7 +503,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .calendar-heading h2 { max-width: 44vw; min-height: 0; font-size: 23px; }
   .calendar-actions { gap: 4px; }
   .calendar-actions .icon-button { width: 32px; height: 32px; }
-  .calendar-actions .button { min-height: 32px; padding-inline: 8px; font-size: 10px; }
+  .calendar-actions .button { --btn-size: 11px; --btn-h: 32px; --btn-pad: 10px; }
   .calendar-legend { gap: 12px; margin-top: -3px; font-size: 9px; }
   .calendar-weekday { min-height: 28px; padding: 7px 0; font-size: 8px; text-align: center; }
   .calendar-day, .calendar-day-blank { min-height: 83px; padding: 5px 3px; }
@@ -508,16 +521,16 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .swap-copy span { font-size: 9px; }
   .swap-direction { grid-column: 1; grid-row: 2; }
   .swap-actions { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; }
-  .swap-actions .button { min-height: 29px; }
+  .swap-actions .button { --btn-h: 30px; }
 }
 
 .matrix-toolbar { display: flex; min-height: 48px; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 7px 0; }
 .matrix-toolbar > span:first-child { min-width: 0; color: var(--muted); font: 10px var(--mono); }
 .matrix-tools { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
-.matrix-tools .button { min-height: 32px; padding: 0 10px; font-size: 10px; }
+.matrix-tools .button { --btn-size: 11px; --btn-h: 32px; --btn-pad: 10px; }
 .matrix-tools .button:disabled { opacity: .35; cursor: not-allowed; transform: none; }
 .matrix-mode { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); background: var(--surface); }
-.matrix-mode button { min-height: 25px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font-size: 10px; cursor: pointer; }
+.matrix-mode button { min-height: 25px; padding: 0 9px; border: 0; background: transparent; color: var(--muted); font: 500 11px var(--sans); cursor: pointer; }
 .matrix-mode button.is-selected { background: var(--surface-raised); color: var(--text); }
 .matrix-status { min-width: 0; flex: 1 1 auto; color: var(--dim); font-size: 10px; text-align: right; }
 .matrix-scroll { max-height: min(68vh, 760px); overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; border: 1px solid var(--line-strong); background: var(--surface); scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
@@ -596,11 +609,11 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* Масштаб, тип правки и шаблоны */
 .matrix-zoom { display: inline-flex; align-items: center; gap: 4px; }
 .matrix-zoom .icon-button { width: 30px; height: 30px; font-size: 16px; }
-.matrix-zoom .button { min-height: 30px; padding: 0 9px; font-size: 10px; }
+.matrix-zoom .button { --btn-size: 11px; --btn-h: 30px; --btn-pad: 9px; }
 .matrix-templates { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 0 10px; }
 .matrix-templates[hidden] { display: none; }
 .matrix-templates-label { color: var(--dim); font: 9px var(--mono); letter-spacing: .06em; }
-.matrix-template { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 10px; cursor: pointer; }
+.matrix-template { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: 500 11px var(--sans); cursor: pointer; }
 .matrix-template:hover { color: var(--text); }
 .matrix-template.is-active { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .matrix-template.point-uy { border-color: color-mix(in srgb, var(--point-uy) 42%, transparent); background: color-mix(in srgb, var(--point-uy) 16%, transparent); color: var(--point-uy-ink); }
@@ -626,7 +639,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .template-row-name { display: inline-flex; min-width: 0; align-items: center; gap: 7px; overflow: hidden; color: var(--text-soft); font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .template-row-meta { color: var(--muted); font: 10px var(--mono); white-space: nowrap; }
 .template-row-actions { display: flex; gap: 6px; }
-.template-row-actions .button { min-height: 28px; padding: 0 8px; font-size: 10px; }
+.template-row-actions .button { --btn-size: 11px; --btn-h: 30px; --btn-pad: 9px; }
 .template-row-actions .template-move { min-width: 32px; padding: 0 6px; font-size: 11px; }
 .template-form { display: grid; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .template-form .time-fields { max-width: 320px; }
@@ -645,7 +658,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
   .matrix-toolbar { flex-wrap: wrap; gap: 7px; padding: 8px 0; }
   .matrix-toolbar > span:first-child { display: none; }
   .matrix-tools { width: 100%; flex-wrap: wrap; gap: 5px; }
-  .matrix-tools .button { min-height: 30px; padding-inline: 8px; font-size: 9px; }
+  .matrix-tools .button { --btn-size: 11px; --btn-h: 30px; --btn-pad: 9px; }
   .matrix-mode { margin-right: auto; }
   .matrix-status { width: 100%; min-width: 0; text-align: left; }
   .matrix-scroll { max-height: 64vh; }
@@ -668,7 +681,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .settings-hint a { border-bottom: 1px solid var(--accent-line); color: var(--accent); font-family: var(--mono); font-size: 11px; text-decoration: none; }
 .settings-hint a:hover { border-bottom-color: var(--accent); }
 .stories-filters { display: flex; flex-wrap: wrap; gap: 6px; padding-bottom: 13px; border-bottom: 1px solid var(--line); }
-.stories-filters .button { min-height: 30px; padding-inline: 12px; font-size: 10px; }
+.stories-filters .button { --btn-size: 11px; --btn-h: 30px; --btn-pad: 12px; }
 .stories-filters .button.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
 .stories-admin-status { min-height: 15px; margin: 11px 0 0; color: var(--muted); font: 10px var(--mono); letter-spacing: .04em; }
 .stories-admin-list { display: grid; }
@@ -691,7 +704,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .story-admin-card.is-drop-target { box-shadow: inset 0 2px var(--accent); }
 .story-admin-text { margin: 0; color: var(--text-soft); font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
 .story-admin-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.story-admin-actions .button { min-height: 31px; padding-inline: 13px; font-size: 10px; }
+.story-admin-actions .button { --btn-size: 11px; --btn-h: 31px; --btn-pad: 13px; }
 .story-admin-empty { padding: 22px 0; color: var(--dim); font-size: 11px; text-align: center; }
 .story-admin-edit { display: grid; gap: 10px; padding: 13px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
 .story-admin-edit label { display: grid; gap: 5px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
@@ -710,7 +723,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* --- Вход через приложение Telegram: кнопка и экран ожидания --------------- */
 .login-actions { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-top: 38px; }
 .login-wait-hint { margin-top: 22px; color: var(--accent); }
-.button-login { min-height: 46px; padding-inline: 22px; }
+.button-login { --btn-h: 46px; --btn-pad: 22px; }
 .login-hint { max-width: 430px; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.75; }
 .login-hint strong { color: var(--text); font-weight: 600; }
 
@@ -1350,7 +1363,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .kb-chip { display: inline-flex; align-items: center; padding: 4px 11px; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--text); font: 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; }
 .kb-meta { color: var(--muted); font-size: 11px; }
 .kb-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.kb-actions .button { min-height: 38px; }
+.kb-actions .button { --btn-h: 38px; }
 .kb-danger { color: var(--danger-text); }
 .kb-page-body { display: flex; flex-direction: column; gap: 18px; }
 .kb-pantone { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border: 1px solid var(--line); background: var(--surface-sunken); border-radius: 12px; }
@@ -1672,7 +1685,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .drink-photo-author { font-size: 11px; color: var(--muted); text-align: center; }
 .drink-photo-preview .drink-photo-index { top: 6px; left: 6px; }
 .drink-photo-preview img { width: 100%; height: 96px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
-.drink-photo-preview .button { min-height: 34px; padding: 4px 10px; font-size: 12px; }
+.drink-photo-preview .button { --btn-h: 34px; --btn-pad: 10px; }
 .drink-upload-kind { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-sunken); }
 .drink-upload-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
 .drink-upload-baristas { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -1865,8 +1878,11 @@ body { transition: background-color .3s ease, color .3s ease; }
   [data-glass="on"] .drawer .nav-item { color: var(--text-soft); }
   [data-glass="on"] .drawer .nav-icon { color: var(--muted); }
 
-  /* --- Кнопки: непрозрачные, без «фаски» ------------------------------ */
-  [data-glass="on"] :is(.button:not(.button-primary), .icon-button) {
+  /* --- Кнопки: непрозрачные, без «фаски»; акцентная — та же форма ------- */
+  /* :not(.button-primary) здесь больше нет: акцентные кнопки оставались
+     прямоугольными и выбивались из ряда округлых соседей (пример: тулбар
+     календаря «Замены/Расписание» и «Сохранить изменения»). */
+  [data-glass="on"] :is(.button, .icon-button) {
     border-color: var(--lg-border);
     background-color: var(--lg-btn);
     background-image: none;
@@ -1922,6 +1938,65 @@ body { transition: background-color .3s ease, color .3s ease; }
   }
   [data-glass="on"] .nav-item.is-active .nav-icon { color: var(--accent); }
   [data-glass="on"] .chip.is-selected { background-color: var(--accent-soft); }
+
+  /* --- Постоянный «хром»: держим в отдельном слое композитора ---------- */
+  /* Иначе после смены раздела браузер пересобирает слой, и backdrop-filter
+     «догружается» на следующем кадре — док на миг показывался без блюра.
+     Список узкий намеренно: каждая запись — это память GPU. */
+  [data-glass="on"] :is(.dock, .drawer, .chat-list, .chat-log, .chat-main) { will-change: backdrop-filter; }
+
+  /* --- Чат: фон читается сплошным слоем, а не клочками ----------------- */
+  /* Раньше список, лента и панель ввода были глухими (--surface/--bg), поэтому
+     canvas-фон просвечивал только в щелях и над шапкой — «клочками», а у дока
+     его не было вовсе. Пузыри сообщений оставляем непрозрачными: текст важнее
+     эффекта. */
+  @media (min-width: 761px) {
+    /* Десктоп: список диалогов и лента — самостоятельные панели на фоне. */
+    [data-glass="on"] :is(.chat-list, .chat-log) {
+      border-color: var(--lg-border);
+      background-color: var(--lg-fill);
+      background-image: none;
+      border-radius: var(--lg-r-panel);
+      box-shadow:
+        inset 0 1px 0 var(--lg-edge),
+        var(--lg-drop);
+      -webkit-backdrop-filter: blur(12px) saturate(1.5);
+      backdrop-filter: blur(12px) saturate(1.5);
+    }
+  }
+  @media (max-width: 760px) {
+    /* Мобильный: список и тред занимают весь экран, поэтому материал плотнее
+       (как у меню) — фон видно, но сообщения читаются. Лента внутри треда
+       прозрачная: иначе стекло складывалось бы само с собой. */
+    [data-glass="on"] :is(.chat-list, .chat-main) {
+      border-color: var(--lg-border);
+      background-color: var(--lg-drawer);
+      background-image: none;
+      -webkit-backdrop-filter: blur(16px) saturate(1.3);
+      backdrop-filter: blur(16px) saturate(1.3);
+    }
+    [data-glass="on"] .chat-log {
+      border-color: transparent;
+      background-color: transparent;
+      background-image: none;
+      box-shadow: none;
+    }
+    /* Шапка чата была залита плоским --bg и обрывала фон полосой сверху. */
+    html.is-chat-open[data-glass="on"] .topbar {
+      border-bottom-color: var(--lg-border);
+      background-color: var(--lg-drawer);
+      -webkit-backdrop-filter: blur(14px) saturate(1.4);
+      backdrop-filter: blur(14px) saturate(1.4);
+    }
+  }
+  /* Панель ввода — стекло в обоих режимах. */
+  [data-glass="on"] .chat-composer {
+    border-color: var(--lg-border);
+    background-color: var(--lg-chip);
+    background-image: none;
+    -webkit-backdrop-filter: blur(12px) saturate(1.4);
+    backdrop-filter: blur(12px) saturate(1.4);
+  }
 }
 
 /* Подъём карточки при наведении не должен терять акцентную кромку. */
@@ -1946,7 +2021,7 @@ body { transition: background-color .3s ease, color .3s ease; }
   [data-glass="on"] :is(.panel, .drawer, .dock, .toast, .team-summary,
       .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
       .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row,
-      .button:not(.button-primary), .icon-button, .nav-item, .chip,
+      .button, .icon-button, .nav-item, .chip,
       .theme-switch, .workload-metric, .analytics-metric, .kb-pantone,
       .kb-serve, .drink-item, .matrix-mode) { corner-shape: squircle; }
 }
