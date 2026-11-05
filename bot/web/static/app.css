@@ -1857,6 +1857,24 @@ body { transition: background-color .3s ease, color .3s ease; }
   .media-viewer-image { transition: none; }
 }
 
+/* --- Трофейная комната «Мемы смен» --------------------------------------- */
+/* ВАЖНО: у .drinks-author задан display: inline-flex, поэтому атрибут hidden
+   сам по себе не работает — правило ниже обязательное. */
+.drinks-author[hidden] { display: none; }
+.meme-card.is-locked { border-style: dashed; background: transparent; }
+.meme-lock {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1 / 1;
+  border-bottom: 1px dashed var(--line);
+  background: var(--field-bg);
+  font-size: 30px;
+  line-height: 1;
+}
+.meme-card.is-locked figcaption strong { color: var(--muted); }
+.meme-locked-cta { margin-top: 9px; min-height: 40px; font-size: 12px; }
+.drink-quiz.is-highlighted { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 12px; }
+
 /* --- Плашка «черновик восстановлен» в формах ------------------------------ */
 .draft-notice {
   display: flex;

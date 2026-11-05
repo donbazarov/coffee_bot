@@ -5481,7 +5481,7 @@ const drinkState = {
   items: [], points: [], authors: [], point: '', author: '', state: 'all',
   offset: 0, limit: 20, hasMore: false, loaded: false,
   options: null, shift: null, baristas: [], photos: { latte_art: [], meme: [] }, tab: 'feed',
-  memes: { items: [], authors: [], author: '', offset: 0, limit: 30, hasMore: false, loaded: false },
+  memes: { items: [], authors: [], author: '', offset: 0, limit: 30, hasMore: false, loaded: false, locked: [], lockedCount: 0 },
 };
 
 function drinkPointLabel(point) {
@@ -5505,8 +5505,9 @@ async function openDrinks() {
   if (drinkState.tab === 'memes' && !drinkState.memes.loaded) loadMemes(true);
 }
 
-/* Переход из базы знаний (история рецептов зерна) в конкретную карточку ленты. */
-async function openDrinkCard(descriptionId) {
+/* Переход из базы знаний (история рецептов) или из галереи мемов в карточку ленты.
+   `focusQuiz` — доскроллить до викторины внутри карточки. */
+async function openDrinkCard(descriptionId, focusQuiz = false) {
   const target = Number(descriptionId);
   if (!target) return;
   drinkState.point = '';
@@ -5525,6 +5526,15 @@ async function openDrinkCard(descriptionId) {
     card = find();
   }
   if (!card) { showToast('Не удалось найти описание в ленте'); return; }
+  if (focusQuiz) {
+    const quiz = card.querySelector('[data-quiz-id]');
+    if (quiz) {
+      quiz.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+      quiz.classList.add('is-highlighted');
+      setTimeout(() => quiz.classList.remove('is-highlighted'), 2200);
+      return;
+    }
+  }
   card.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
   card.classList.add('is-highlighted');
   setTimeout(() => card.classList.remove('is-highlighted'), 2200);
@@ -5718,8 +5728,14 @@ async function voteDrinkQuiz(descriptionId, quizId, optionId) {
       desc.quizzes = (desc.quizzes || []).map((quiz) => merged.get(quiz.id) || quiz);
       renderDrinksFeed();
     }
-    if (data.correct) showToast(data.xp ? `Верно! +${data.xp} опыта в «Команду»` : 'Верно!');
-    else showToast('Не угадали — но голос учтён');
+    // Голос открывает мемы этого поста в «трофейной комнате» галереи.
+    const hadLocked = drinkState.memes.loaded && Number(drinkState.memes.lockedCount) > 0;
+    drinkState.memes.loaded = false;
+    if (drinkState.tab === 'memes') loadMemes(true);
+    const note = data.correct
+      ? (data.xp ? `Верно! +${data.xp} опыта в «Команду»` : 'Верно!')
+      : 'Не угадали — но голос учтён';
+    showToast(hadLocked ? `${note} · Галерея мемов пополнилась` : note);
   } catch (error) {
     showToast(error.message);
   }
@@ -6213,6 +6229,9 @@ async function loadMemes(reset = false) {
     const data = await api(`/api/drink-descriptions/memes?${params.toString()}`);
     drinkState.memes.authors = data.authors || [];
     drinkState.memes.hasMore = Boolean(data.has_more);
+    // Трофейная комната: открытые мемы + счётчик и заглушки закрытых.
+    drinkState.memes.locked = data.locked || [];
+    drinkState.memes.lockedCount = Number(data.locked_count) || 0;
     drinkState.memes.items = reset ? (data.items || []) : drinkState.memes.items.concat(data.items || []);
     drinkState.memes.offset = drinkState.memes.items.length;
     drinkState.memes.loaded = true;
@@ -6222,27 +6241,61 @@ async function loadMemes(reset = false) {
   }
 }
 
+function memeCardMarkup(meme) {
+  return `
+    <figure class="meme-card" data-media-url="${escapeHtml(meme.url)}" data-media-caption="${escapeHtml(`${meme.author.name} · ${drinkPointLabel(meme.point)}`)}">
+      <img src="${escapeHtml(meme.url)}" alt="Мем смены" loading="lazy">
+      <figcaption><strong>${escapeHtml(meme.author.name)}</strong><span>${escapeHtml(drinkPointLabel(meme.point))} · ${escapeHtml(formatDrinkDate(meme.created_at))}</span></figcaption>
+    </figure>`;
+}
+
+/* Закрытый мем: ни картинки, ни автора — только приглашение к викторине. */
+function lockedMemeMarkup(entry) {
+  const many = entry.count > 1 ? ` · ${entry.count} шт.` : '';
+  return `
+    <figure class="meme-card is-locked">
+      <div class="meme-lock" aria-hidden="true">🔒</div>
+      <figcaption>
+        <strong>Мемы скрыты</strong>
+        <span>${escapeHtml(drinkPointLabel(entry.point))} · ${escapeHtml(formatDrinkDate(entry.created_at))}${many}</span>
+        <button class="button button-quiet meme-locked-cta" type="button" data-meme-unlock="${entry.description_id}">Проголосовать и открыть</button>
+      </figcaption>
+    </figure>`;
+}
+
 function renderMemes() {
   const grid = document.querySelector('#drinks-memes');
   const more = document.querySelector('#drinks-memes-more');
   const count = document.querySelector('#drinks-memes-count');
   const select = document.querySelector('#drinks-memes-author');
+  const authors = drinkState.memes.authors || [];
   if (select) {
     const current = drinkState.memes.author;
-    select.innerHTML = '<option value="">Все</option>' + (drinkState.memes.authors || []).map(
+    select.innerHTML = '<option value="">Все</option>' + authors.map(
       (author) => `<option value="${author.id}">${escapeHtml(author.name)}</option>`).join('');
     select.value = current;
+    // Фильтровать нечего, пока ничего не открыто — селект прячем целиком.
+    const field = select.closest('.drinks-author');
+    if (field) field.hidden = !authors.length;
   }
-  if (count) count.textContent = drinkState.memes.items.length ? `МЕМОВ: ${drinkState.memes.items.length}` : '';
+  const opened = drinkState.memes.items.length;
+  const lockedCount = drinkState.memes.lockedCount || 0;
+  if (count) {
+    const parts = [];
+    if (opened) parts.push(`ОТКРЫТО: ${opened}`);
+    if (lockedCount) parts.push(`🔒 СКРЫТО: ${lockedCount}`);
+    count.textContent = parts.join(' · ');
+  }
   if (grid) {
-    if (!drinkState.memes.items.length) {
+    const tiles = drinkState.memes.items.map(memeCardMarkup).join('');
+    // Заглушки показываем только без фильтра по автору — иначе смысл теряется.
+    const placeholders = drinkState.memes.author ? '' : (drinkState.memes.locked || []).map(lockedMemeMarkup).join('');
+    if (!tiles && !placeholders) {
       grid.innerHTML = '<p class="empty-state">Пока нет мемов смен.</p>';
+    } else if (!tiles) {
+      grid.innerHTML = `${placeholders}<p class="empty-state">Галерея откроется, как только проголосуете в викторинах смен — ответ неважен, важен голос.</p>`;
     } else {
-      grid.innerHTML = drinkState.memes.items.map((meme) => `
-        <figure class="meme-card" data-media-url="${escapeHtml(meme.url)}" data-media-caption="${escapeHtml(`${meme.author.name} · ${drinkPointLabel(meme.point)}`)}">
-          <img src="${escapeHtml(meme.url)}" alt="Мем смены" loading="lazy">
-          <figcaption><strong>${escapeHtml(meme.author.name)}</strong><span>${escapeHtml(drinkPointLabel(meme.point))} · ${escapeHtml(formatDrinkDate(meme.created_at))}</span></figcaption>
-        </figure>`).join('');
+      grid.innerHTML = tiles + placeholders;
     }
   }
   if (more) more.hidden = !drinkState.memes.hasMore;
@@ -6264,6 +6317,11 @@ function setupDrinks() {
   document.querySelectorAll('[data-drinks-tab]').forEach((button) =>
     button.addEventListener('click', () => setDrinksTab(button.dataset.drinksTab)));
   document.querySelector('#drinks-memes-more')?.addEventListener('click', () => loadMemes(false));
+  document.querySelector('#drinks-memes')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-meme-unlock]');
+    if (!button) return;
+    openDrinkCard(Number(button.dataset.memeUnlock), true);
+  });
   document.querySelector('#drinks-memes-author')?.addEventListener('change', (event) => {
     drinkState.memes.author = event.target.value;
     loadMemes(true);

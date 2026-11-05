@@ -720,8 +720,18 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
 
 def _serialize_description(row: Any, items: list[dict[str, Any]], quizzes: list[dict[str, Any]],
                            photos: dict[str, list[dict[str, Any]]], viewer_id: int) -> dict[str, Any]:
-    latte = photos.get("latte_art") or []
-    meme = photos.get("meme") or []
+    # Автор снимка раскрывается только тому, кто уже ответил в викторине этого типа
+    # (или автору поста). Иначе по `author_id` в JSON верный вариант вычисляется
+    # напрямую — сопоставлением с текстом вариантов.
+    revealed = {quiz["kind"]: quiz["correct_option_id"] is not None for quiz in quizzes}
+
+    def visible(kind: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if revealed.get(kind, True):
+            return entries
+        return [{**entry, "author_id": None} for entry in entries]
+
+    latte = visible("latte_art", photos.get("latte_art") or [])
+    meme = visible("meme", photos.get("meme") or [])
     return {
         "id": int(row["id"]),
         "point": row["point"],
@@ -837,40 +847,68 @@ def description_options(_: dict[str, Any] = Depends(require_user)) -> dict[str, 
 
 @router.get("/memes")
 def list_memes(author_id: int | None = None, limit: int = 30, offset: int = 0,
-               _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Галерея «Мемы смен»: фото мемов с фильтром по автору."""
+               user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Галерея «Мемы смен» — трофейная комната: мем открывается после голосования.
+
+    Мем доступен, если у поста вообще нет мем-викторины (голосовать не за что),
+    зритель в ней проголосовал (ответ неважен) или он автор поста. Закрытые мемы
+    не отдаются вовсе — вместо них заглушки без картинки и без автора, чтобы
+    можно было позвать зрителя к викторине.
+    """
     limit = max(1, min(int(limit or 30), 60))
     offset = max(0, int(offset or 0))
-    params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
     # Автор мема — владелец фото (легаси-строки без автора деградируют на автора поста).
     author_expr = "COALESCE(p.author_id, d.author_id)"
-    condition = ""
+    unlocked = (
+        "(d.author_id = :viewer"
+        " OR NOT EXISTS (SELECT 1 FROM drink_description_quizzes q"
+        "                WHERE q.description_id = d.id AND q.kind = 'meme')"
+        " OR EXISTS (SELECT 1 FROM drink_description_quizzes q"
+        "            JOIN drink_quiz_votes v ON v.quiz_id = q.id AND v.user_id = :viewer"
+        "            WHERE q.description_id = d.id AND q.kind = 'meme'))"
+    )
+    base_params: dict[str, Any] = {"viewer": int(user["id"])}
+    filter_sql = ""
     if author_id:
-        condition = f"AND {author_expr} = :author"
-        params["author"] = int(author_id)
+        filter_sql = f"AND {author_expr} = :author"
+        base_params["author"] = int(author_id)
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
             SELECT p.id, p.url, p.description_id, p.position, d.point, d.shift_date, d.created_at,
-                   {author_expr} AS author_id, COALESCE(au.display_name, au.name) AS author_name,
-                   COALESCE(pu.display_name, pu.name) AS partner_name
+                   {author_expr} AS author_id, COALESCE(au.display_name, au.name) AS author_name
             FROM drink_description_photos p
             JOIN drink_descriptions d ON d.id = p.description_id
             JOIN users au ON au.id = {author_expr}
-            LEFT JOIN users pu ON pu.id = d.partner_id
-            WHERE p.kind = 'meme' {condition}
+            WHERE p.kind = 'meme' AND {unlocked} {filter_sql}
             ORDER BY d.created_at DESC, d.id DESC, p.position, p.id
             LIMIT :limit OFFSET :offset
-        """), params).mappings().all()
+        """), {**base_params, "limit": limit + 1, "offset": offset}).mappings().all()
         has_more = len(rows) > limit
         rows = rows[:limit]
+        # Авторы фильтра — тоже только с открытых мемов, иначе фильтр подсказывает ответ.
         authors = connection.execute(text(f"""
             SELECT DISTINCT u.id, COALESCE(u.display_name, u.name) AS name
             FROM drink_description_photos p
             JOIN drink_descriptions d ON d.id = p.description_id
             JOIN users u ON u.id = {author_expr}
-            WHERE p.kind = 'meme'
+            WHERE p.kind = 'meme' AND {unlocked}
             ORDER BY name
-        """)).mappings().all()
+        """), base_params).mappings().all()
+        locked_count = int(connection.execute(text(f"""
+            SELECT COUNT(*) FROM drink_description_photos p
+            JOIN drink_descriptions d ON d.id = p.description_id
+            WHERE p.kind = 'meme' AND NOT {unlocked}
+        """), base_params).scalar() or 0)
+        # Заглушки под CTA: только описание, точка и дата — ни картинки, ни автора.
+        locked = [] if author_id else connection.execute(text(f"""
+            SELECT d.id AS description_id, d.point, d.created_at, COUNT(*) AS memes
+            FROM drink_description_photos p
+            JOIN drink_descriptions d ON d.id = p.description_id
+            WHERE p.kind = 'meme' AND NOT {unlocked}
+            GROUP BY d.id, d.point, d.created_at
+            ORDER BY d.created_at DESC, d.id DESC
+            LIMIT 6
+        """), base_params).mappings().all()
     return {
         "items": [{
             "id": int(row["id"]),
@@ -880,8 +918,14 @@ def list_memes(author_id: int | None = None, limit: int = 30, offset: int = 0,
             "shift_date": row["shift_date"],
             "created_at": row["created_at"],
             "author": {"id": int(row["author_id"]), "name": row["author_name"]},
-            "partner": {"name": row["partner_name"]} if row["partner_name"] else None,
         } for row in rows],
+        "locked": [{
+            "description_id": int(row["description_id"]),
+            "point": row["point"],
+            "created_at": row["created_at"],
+            "count": int(row["memes"]),
+        } for row in locked],
+        "locked_count": locked_count,
         "authors": [{"id": int(row["id"]), "name": row["name"]} for row in authors],
         "has_more": has_more,
         "limit": limit,
@@ -1026,7 +1070,7 @@ async def vote_quiz(description_id: int, quiz_id: int, request: Request,
 
     with engine.begin() as connection:
         quiz = connection.execute(text(
-            "SELECT id, description_id, correct_option_id FROM drink_description_quizzes WHERE id = :id"
+            "SELECT id, description_id, kind, correct_option_id FROM drink_description_quizzes WHERE id = :id"
         ), {"id": int(quiz_id)}).mappings().first()
         if not quiz or int(quiz["description_id"]) != int(description_id):
             raise HTTPException(status_code=404, detail="Викторина не найдена")
@@ -1047,9 +1091,21 @@ async def vote_quiz(description_id: int, quiz_id: int, request: Request,
             "INSERT INTO drink_quiz_votes (quiz_id, option_id, user_id) VALUES (:quiz, :option, :user)"
         ), {"quiz": int(quiz_id), "option": option_id, "user": int(user["id"])})
 
-        is_author = description is not None and int(description["author_id"]) == int(user["id"])
+        # XP не начисляем тому, кто ответ знает заранее: автору поста и владельцу
+        # снимков этого типа (он их и загружал). Голосовать при этом можно — именно
+        # голос открывает мем в галерее.
+        photo_authors = {
+            int(row["author_id"]) for row in connection.execute(text(
+                "SELECT author_id FROM drink_description_photos "
+                "WHERE description_id = :description AND kind = :kind AND author_id IS NOT NULL"
+            ), {"description": int(description_id), "kind": quiz["kind"]}).mappings().all()
+        }
+        knows_answer = (
+            (description is not None and int(description["author_id"]) == int(user["id"]))
+            or int(user["id"]) in photo_authors
+        )
         awarded = 0
-        if option["is_correct"] and not is_author:
+        if option["is_correct"] and not knows_answer:
             applied = gamification.award_xp(
                 connection, user_id=int(user["id"]), amounts=dict(XP_QUIZ_CORRECT),
                 source_type="quiz", source_id=int(quiz_id), created_by=None,
