@@ -1879,18 +1879,25 @@ body { transition: background-color .3s ease, color .3s ease; }
   [data-glass="on"] .drawer .nav-icon { color: var(--muted); }
 
   /* --- Кнопки: непрозрачные, без «фаски»; акцентная — та же форма ------- */
-  /* :not(.button-primary) здесь больше нет: акцентные кнопки оставались
-     прямоугольными и выбивались из ряда округлых соседей (пример: тулбар
-     календаря «Замены/Расписание» и «Сохранить изменения»). */
+  /* Форму (радиус + сквиркл) задаём всем кнопкам: раньше акцентные оставались
+     прямоугольными и выбивались из ряда округлых соседей (тулбар календаря
+     «Замены/Расписание», «Сохранить изменения»). А вот заливку --lg-btn — только
+     нейтральным: у .button-primary и его варианта в «Заменах» (mint) свой фон и
+     кромка, и селектор с :is() по специфичности перебивал бы их (текст брался
+     акцентный, а фон — стеклянный). */
   [data-glass="on"] :is(.button, .icon-button) {
-    border-color: var(--lg-border);
-    background-color: var(--lg-btn);
-    background-image: none;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .28);
     border-radius: var(--lg-r-btn);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
+  [data-glass="on"] :is(.button:not(.button-primary), .icon-button) {
+    border-color: var(--lg-border);
+    background-color: var(--lg-btn);
+    background-image: none;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .28);
+  }
+  /* Акцентная кнопка сохраняет свой фон и кромку, но тень — как у соседей. */
+  [data-glass="on"] .button-primary { box-shadow: 0 1px 2px rgba(0, 0, 0, .28); }
 
   /* --- Чипы: полупрозрачное стекло, пилюли сохраняем ------------------ */
   [data-glass="on"] .chip {
