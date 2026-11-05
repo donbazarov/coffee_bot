@@ -13,7 +13,9 @@
 * **Смена** — точка и напарник определяются автоматически по графику
   (`calendar_service.active_staff`), с фоллбэком на ручной выбор «вне смены».
 * **Викторины** — `drink_description_quizzes` + `drink_quiz_options` +
-  `drink_quiz_votes`: варианты генерируются из пары смены либо задаются вручную.
+  `drink_quiz_votes`: одна викторина на тип (латте-арт / мем), варианты —
+  перестановки авторóв по загруженным фото («1. Настя · 2. Польза»), голоса
+  видны всей команде после ответа.
 * **Изображения** — Pillow «на лету» в WebP, файлы кладутся в
   `data/drink_descriptions/photos` (env `NEFT_DRINK_PHOTOS_DIR`), в базу пишется
   только путь. Раздаются авторизованным пользователям роутом.
@@ -25,8 +27,10 @@
 from __future__ import annotations
 
 import io
+import itertools
 import logging
 import os
+import random
 import re
 import uuid
 from datetime import date, datetime
@@ -76,7 +80,6 @@ XP_QUIZ_CORRECT = {"team": 5}
 
 MAX_NOTE = 2000
 MAX_TEXT = 400
-MAX_QUIZ_QUESTION = 200
 MIN_QUIZ_OPTIONS = 2
 MAX_QUIZ_OPTIONS = 6
 MAX_PHOTOS_PER_KIND = 6
@@ -211,6 +214,9 @@ def initialize_schema(db: Engine) -> None:
                 position INTEGER NOT NULL DEFAULT 0
             )
         """))
+        # Ретрофит: автор фото (кто из пары смены сделал снимок).
+        _add_column_if_missing(connection, "drink_description_photos", "author_id",
+                               "INTEGER REFERENCES users(id)")
         # Ретрофит: напиток из базы знаний и текстовый характер баланса.
         _add_column_if_missing(connection, "drink_description_items", "drink_id",
                                "INTEGER REFERENCES menu_drinks(id)")
@@ -289,19 +295,35 @@ def _photo_url(value: Any) -> str | None:
     raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
 
 
-def _photo_list(value: Any, label: str) -> list[str]:
-    """Нормализует список URL фото (одиночное значение тоже принимаем)."""
+def _photo_entries(value: Any, label: str, default_author: int) -> list[dict[str, Any]]:
+    """Нормализует фото: элемент — URL или объект `{url, author_id}`.
+
+    Автор по умолчанию — автор поста. Привязка к бариста нужна для викторины
+    «где чей латте-арт / мем»: правильный ответ — порядок авторóв по фото.
+    """
     if value in (None, "", []):
         return []
     items = value if isinstance(value, list) else [value]
-    urls: list[str] = []
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for item in items:
-        url = _photo_url(item)
-        if url and url not in urls:
-            urls.append(url)
-    if len(urls) > MAX_PHOTOS_PER_KIND:
+        if isinstance(item, dict):
+            url = _photo_url(item.get("url"))
+            author_raw = item.get("author_id")
+        else:
+            url = _photo_url(item)
+            author_raw = None
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        try:
+            author = int(author_raw) if author_raw not in (None, "", 0) else int(default_author)
+        except (TypeError, ValueError):
+            author = int(default_author)
+        entries.append({"url": url, "author_id": author})
+    if len(entries) > MAX_PHOTOS_PER_KIND:
         raise HTTPException(status_code=422, detail=f"Слишком много фото: {label}")
-    return urls
+    return entries
 
 
 def _today() -> str:
@@ -435,118 +457,82 @@ def _insert_items(connection: Connection, description_id: int, items: list[dict[
         ), values)
 
 
-def _custom_quizzes(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Разбирает необязательные кастомные викторины из payload."""
-    raw = payload.get("quizzes")
-    if raw is None:
-        return {}
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=422, detail="Некорректный список викторин")
-    result: dict[str, dict[str, Any]] = {}
-    for entry in raw:
-        if not isinstance(entry, dict):
-            raise HTTPException(status_code=422, detail="Некорректная викторина")
-        kind = entry.get("kind")
-        if kind not in QUIZ_KINDS:
-            raise HTTPException(status_code=422, detail="Некорректный тип викторины")
-        raw_question = entry.get("question")
-        if raw_question is not None and not isinstance(raw_question, str):
-            raise HTTPException(status_code=422, detail="Некорректный вопрос викторины")
-        question = (raw_question or "").strip()[:MAX_QUIZ_QUESTION] or QUIZ_QUESTIONS[kind]
-        raw_options = entry.get("options")
-        if not isinstance(raw_options, list) or not (MIN_QUIZ_OPTIONS <= len(raw_options) <= MAX_QUIZ_OPTIONS):
-            raise HTTPException(status_code=422, detail=f"Нужно {MIN_QUIZ_OPTIONS}–{MAX_QUIZ_OPTIONS} вариантов ответа")
-        options: list[dict[str, Any]] = []
-        correct_count = 0
-        for option in raw_options:
-            if not isinstance(option, dict):
-                raise HTTPException(status_code=422, detail="Некорректный вариант ответа")
-            option_text = str(option.get("text") or "").strip()[:MAX_TEXT]
-            if not option_text:
-                raise HTTPException(status_code=422, detail="Пустой вариант ответа")
-            is_correct = bool(option.get("is_correct"))
-            correct_count += 1 if is_correct else 0
-            options.append({"text": option_text, "is_correct": is_correct})
-        if correct_count != 1:
-            raise HTTPException(status_code=422, detail="Отметьте ровно один правильный вариант")
-        result[kind] = {"question": question, "options": options}
-    return result
+def _distinct_permutations(names: list[str]) -> list[tuple[str, ...]]:
+    """Различные перестановки последовательности (мультимножество учитывается)."""
+    return list(dict.fromkeys(itertools.permutations(names)))
 
 
-def _pair_options(author_id: int, author_name: str, partner: dict[str, Any],
-                  actual_id: int) -> list[dict[str, Any]]:
-    """Варианты викторины из пары смены: два разных имени, верный — реальный автор."""
-    names = [(int(author_id), author_name), (int(partner["id"]), partner["name"])]
-    seen: set[str] = set()
-    options: list[dict[str, Any]] = []
-    for person_id, name in names:
-        clean = str(name or "").strip()
-        if not clean or clean in seen:
-            continue
-        seen.add(clean)
-        options.append({"text": clean[:MAX_TEXT], "is_correct": person_id == int(actual_id)})
-    if len(options) < MIN_QUIZ_OPTIONS or not any(option["is_correct"] for option in options):
+def _quiz_options(name_by_id: dict[int, str], author_ids: list[int]) -> list[dict[str, Any]]:
+    """Варианты викторины: перестановки авторóв по слотам фото.
+
+    Текст — «1. Настя · 2. Польза», где номер — порядок изображения. Верный
+    вариант — фактический порядок. Если перестановок слишком много, оставляем
+    верную плюс случайную выборку остальных (верный присутствует всегда).
+    """
+    names = [name_by_id.get(int(author_id), "Бариста") for author_id in author_ids]
+    permutations = _distinct_permutations(names)
+    if len(permutations) < MIN_QUIZ_OPTIONS:
         return []
+    correct = tuple(names)
+    if len(permutations) > MAX_QUIZ_OPTIONS:
+        others = [option for option in permutations if option != correct]
+        random.shuffle(others)
+        permutations = [correct] + others[:MAX_QUIZ_OPTIONS - 1]
+    options = []
+    for option in permutations:
+        text = " · ".join(f"{index + 1}. {name}" for index, name in enumerate(option))
+        options.append({"text": text[:MAX_TEXT], "is_correct": option == correct})
     return options
 
 
-def _create_quizzes(connection: Connection, description_id: int, author_id: int, author_name: str,
-                    partner: dict[str, Any] | None, photos: dict[str, list[str]],
-                    payload: dict[str, Any]) -> list[int]:
-    """Викторина по каждому фото: авто-варианты из пары смены или кастомные."""
-    custom = _custom_quizzes(payload)
+def _create_quizzes(connection: Connection, description_id: int, name_by_id: dict[int, str],
+                    photos: dict[str, list[dict[str, Any]]]) -> list[int]:
+    """Одна викторина на тип: варианты — перестановки авторóв по слотам фото."""
     created: list[int] = []
     for kind in QUIZ_KINDS:
-        urls = photos.get(kind) or []
-        if not urls:
+        entries = photos.get(kind) or []
+        if len(entries) < MIN_QUIZ_OPTIONS:
             continue
-        spec = custom.get(kind)
-        if spec is not None:
-            question, options = spec["question"], spec["options"]
-        else:
-            if partner is None:
-                continue
-            try:
-                actual_id = int(payload.get(f"{kind}_author_id") or author_id)
-            except (TypeError, ValueError):
-                actual_id = int(author_id)
-            options = _pair_options(author_id, author_name, partner, actual_id)
-            if not options:
-                continue
-            question = QUIZ_QUESTIONS[kind]
-        for photo_url in urls:
-            result = connection.execute(text("""
-                INSERT INTO drink_description_quizzes (description_id, kind, question, photo_url)
-                VALUES (:description_id, :kind, :question, :photo_url)
-            """), {"description_id": description_id, "kind": kind, "question": question, "photo_url": photo_url})
-            quiz_id = int(result.lastrowid)
-            correct_option_id: int | None = None
-            for index, option in enumerate(options):
-                opt_result = connection.execute(text("""
-                    INSERT INTO drink_quiz_options (quiz_id, text, position, is_correct)
-                    VALUES (:quiz_id, :text, :position, :is_correct)
-                """), {"quiz_id": quiz_id, "text": option["text"], "position": index,
-                       "is_correct": 1 if option["is_correct"] else 0})
-                if option["is_correct"]:
-                    correct_option_id = int(opt_result.lastrowid)
-            connection.execute(
-                text("UPDATE drink_description_quizzes SET correct_option_id = :id WHERE id = :quiz"),
-                {"id": correct_option_id, "quiz": quiz_id},
-            )
-            created.append(quiz_id)
+        author_ids = [int(entry["author_id"]) for entry in entries]
+        options = _quiz_options(name_by_id, author_ids)
+        if not options:
+            continue
+        random.shuffle(options)
+        result = connection.execute(text("""
+            INSERT INTO drink_description_quizzes (description_id, kind, question, photo_url)
+            VALUES (:description_id, :kind, :question, :photo_url)
+        """), {"description_id": description_id, "kind": kind,
+               "question": QUIZ_QUESTIONS[kind], "photo_url": entries[0]["url"]})
+        quiz_id = int(result.lastrowid)
+        correct_option_id: int | None = None
+        for index, option in enumerate(options):
+            opt_result = connection.execute(text("""
+                INSERT INTO drink_quiz_options (quiz_id, text, position, is_correct)
+                VALUES (:quiz_id, :text, :position, :is_correct)
+            """), {"quiz_id": quiz_id, "text": option["text"], "position": index,
+                   "is_correct": 1 if option["is_correct"] else 0})
+            if option["is_correct"]:
+                correct_option_id = int(opt_result.lastrowid)
+        connection.execute(
+            text("UPDATE drink_description_quizzes SET correct_option_id = :id WHERE id = :quiz"),
+            {"id": correct_option_id, "quiz": quiz_id},
+        )
+        created.append(quiz_id)
     return created
 
 
-def _insert_photos(connection: Connection, description_id: int, kind: str, urls: list[str]) -> None:
-    for index, url in enumerate(urls):
+def _insert_photos(connection: Connection, description_id: int, kind: str,
+                   entries: list[dict[str, Any]]) -> None:
+    for index, entry in enumerate(entries):
         connection.execute(text(
-            "INSERT INTO drink_description_photos (description_id, kind, url, position) "
-            "VALUES (:description_id, :kind, :url, :position)"
-        ), {"description_id": description_id, "kind": kind, "url": url, "position": index})
+            "INSERT INTO drink_description_photos (description_id, kind, url, author_id, position) "
+            "VALUES (:description_id, :kind, :url, :author_id, :position)"
+        ), {"description_id": description_id, "kind": kind, "url": entry["url"],
+            "author_id": entry["author_id"], "position": index})
 
 
 def _award_publish_xp(connection: Connection, author_id: int, items: list[dict[str, Any]],
-                      latte_photos: list[str], description_id: int) -> dict[str, int]:
+                      latte_photos: list[dict[str, Any]], description_id: int) -> dict[str, int]:
     """Опыт за публикацию: «Команда» + «Сенсорика» (+ «Молоко» за латте-арт с молоком)."""
     amounts = dict(XP_PUBLISH)
     if latte_photos and any(item["category"] == MILK_COFFEE for item in items):
@@ -622,19 +608,22 @@ def _items_for(connection: Connection, description_ids: list[int]) -> dict[int, 
     return grouped
 
 
-def _photos_for(connection: Connection, description_ids: list[int]) -> dict[int, dict[str, list[str]]]:
+def _photos_for(connection: Connection, description_ids: list[int]) -> dict[int, dict[str, list[dict[str, Any]]]]:
     if not description_ids:
         return {}
     rows = connection.execute(
-        text("SELECT description_id, kind, url FROM drink_description_photos "
+        text("SELECT description_id, kind, url, author_id FROM drink_description_photos "
              "WHERE description_id IN :ids ORDER BY description_id, kind, position, id")
         .bindparams(bindparam("ids", expanding=True)),
         {"ids": description_ids},
     ).mappings().all()
-    grouped: dict[int, dict[str, list[str]]] = {}
+    grouped: dict[int, dict[str, list[dict[str, Any]]]] = {}
     for row in rows:
         bucket = grouped.setdefault(int(row["description_id"]), {"latte_art": [], "meme": []})
-        bucket.setdefault(row["kind"], []).append(row["url"])
+        bucket.setdefault(row["kind"], []).append({
+            "url": row["url"],
+            "author_id": int(row["author_id"]) if row["author_id"] is not None else None,
+        })
     return grouped
 
 
@@ -670,9 +659,13 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
              "WHERE quiz_id IN :ids ORDER BY quiz_id, position, id").bindparams(bindparam("ids", expanding=True)),
         {"ids": quiz_ids},
     ).mappings().all()
-    count_rows = connection.execute(
-        text("SELECT quiz_id, option_id, COUNT(*) AS votes FROM drink_quiz_votes "
-             "WHERE quiz_id IN :ids GROUP BY quiz_id, option_id").bindparams(bindparam("ids", expanding=True)),
+    voter_rows = connection.execute(
+        text("""
+            SELECT v.quiz_id, v.option_id, COALESCE(u.display_name, u.name) AS name
+            FROM drink_quiz_votes v JOIN users u ON u.id = v.user_id
+            WHERE v.quiz_id IN :ids
+            ORDER BY v.created_at, v.user_id
+        """).bindparams(bindparam("ids", expanding=True)),
         {"ids": quiz_ids},
     ).mappings().all()
     my_rows = connection.execute(
@@ -680,9 +673,13 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
              "WHERE quiz_id IN :ids AND user_id = :me").bindparams(bindparam("ids", expanding=True)),
         {"ids": quiz_ids, "me": int(viewer_id)},
     ).mappings().all()
-    counts: dict[int, dict[int, int]] = {}
-    for row in count_rows:
-        counts.setdefault(int(row["quiz_id"]), {})[int(row["option_id"])] = int(row["votes"])
+    voters: dict[int, dict[int, list[str]]] = {}
+    for row in voter_rows:
+        voters.setdefault(int(row["quiz_id"]), {}).setdefault(int(row["option_id"]), []).append(row["name"])
+    counts: dict[int, dict[int, int]] = {
+        quiz_id: {option_id: len(names) for option_id, names in quiz_options.items()}
+        for quiz_id, quiz_options in voters.items()
+    }
     my_votes = {int(row["quiz_id"]): int(row["option_id"]) for row in my_rows}
     options_by_quiz: dict[int, list[Any]] = {}
     for row in option_rows:
@@ -701,6 +698,7 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
                 "id": option_id,
                 "text": row["text"],
                 "votes": counts.get(quiz_id, {}).get(option_id, 0),
+                "voters": (voters.get(quiz_id, {}).get(option_id, []) if reveal else []),
                 "is_correct": bool(row["is_correct"]) if reveal else None,
             })
         grouped.setdefault(description_id, []).append({
@@ -711,14 +709,14 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
             "voted": my_option is not None,
             "my_option_id": my_option,
             "correct_option_id": int(quiz["correct_option_id"]) if reveal and quiz["correct_option_id"] else None,
-            "voters": sum(counts.get(quiz_id, {}).values()),
+            "votes": sum(counts.get(quiz_id, {}).values()),
             "options": options,
         })
     return grouped
 
 
 def _serialize_description(row: Any, items: list[dict[str, Any]], quizzes: list[dict[str, Any]],
-                           photos: dict[str, list[str]], viewer_id: int) -> dict[str, Any]:
+                           photos: dict[str, list[dict[str, Any]]], viewer_id: int) -> dict[str, Any]:
     latte = photos.get("latte_art") or []
     meme = photos.get("meme") or []
     return {
@@ -727,8 +725,8 @@ def _serialize_description(row: Any, items: list[dict[str, Any]], quizzes: list[
         "shift_date": row["shift_date"],
         "note": row["note"],
         "photos": {"latte_art": latte, "meme": meme},
-        "latte_art_photo": latte[0] if latte else None,
-        "meme_photo": meme[0] if meme else None,
+        "latte_art_photo": latte[0]["url"] if latte else None,
+        "meme_photo": meme[0]["url"] if meme else None,
         "created_at": row["created_at"],
         "author": {"id": int(row["author_id"]), "name": row["author_name"]},
         "partner": (
@@ -916,9 +914,12 @@ async def create_description(request: Request,
         partner_id = None
     shift_date = _clean_shift_date(payload.get("shift_date"))
     note = _optional_text(payload, "note", "заметка", MAX_NOTE)
-    latte_photos = _photo_list(payload.get("latte_art_photos") or payload.get("latte_art_photo"), "латте-арт")
-    meme_photos = _photo_list(payload.get("meme_photos") or payload.get("meme_photo"), "мем")
-    photos = {"latte_art": latte_photos, "meme": meme_photos}
+    photos = {
+        "latte_art": _photo_entries(
+            payload.get("latte_art_photos") or payload.get("latte_art_photo"), "латте-арт", int(user["id"])),
+        "meme": _photo_entries(
+            payload.get("meme_photos") or payload.get("meme_photo"), "мем", int(user["id"])),
+    }
 
     with engine.begin() as connection:
         partner: dict[str, Any] | None = None
@@ -950,6 +951,15 @@ async def create_description(request: Request,
         ), {"id": user["id"]}).mappings().first()
         author_name = author_row["name"] if author_row else "Сотрудник"
 
+        # Фото привязываются к бариста смены: автор поста или его напарник.
+        name_by_id = {int(user["id"]): author_name}
+        if partner is not None:
+            name_by_id[int(partner["id"])] = partner["name"]
+        for kind in QUIZ_KINDS:
+            for entry in photos.get(kind) or []:
+                if int(entry["author_id"]) not in name_by_id:
+                    raise HTTPException(status_code=422, detail="Фото может принадлежать только бариста смены")
+
         result = connection.execute(text("""
             INSERT INTO drink_descriptions
                 (author_id, partner_id, point, shift_date, note, latte_art_photo, meme_photo)
@@ -957,17 +967,15 @@ async def create_description(request: Request,
         """), {
             "author": int(user["id"]), "partner": partner_id, "point": point,
             "date": shift_date, "note": note,
-            "latte": latte_photos[0] if latte_photos else None,
-            "meme": meme_photos[0] if meme_photos else None,
+            "latte": photos["latte_art"][0]["url"] if photos["latte_art"] else None,
+            "meme": photos["meme"][0]["url"] if photos["meme"] else None,
         })
         description_id = int(result.lastrowid)
         _insert_items(connection, description_id, items)
-        _insert_photos(connection, description_id, "latte_art", latte_photos)
-        _insert_photos(connection, description_id, "meme", meme_photos)
-        quiz_ids = _create_quizzes(
-            connection, description_id, int(user["id"]), author_name, partner, photos, payload,
-        )
-        xp = _award_publish_xp(connection, int(user["id"]), items, latte_photos, description_id)
+        _insert_photos(connection, description_id, "latte_art", photos["latte_art"])
+        _insert_photos(connection, description_id, "meme", photos["meme"])
+        quiz_ids = _create_quizzes(connection, description_id, name_by_id, photos)
+        xp = _award_publish_xp(connection, int(user["id"]), items, photos["latte_art"], description_id)
     return {"ok": True, "id": description_id, "quizzes": quiz_ids, "xp": xp}
 
 
