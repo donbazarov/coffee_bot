@@ -537,6 +537,18 @@
     el.editCancel?.addEventListener('click', stopEdit);
   }
 
+  /* Клик по картинке сообщения открывает её в лайтбоксе (общий просмотрщик
+     из app.js). Долгое нажатие в чате открывает меню сообщения, поэтому
+     синтетический click сразу после него просмотр не раскрывает. */
+  function wireChatImages() {
+    el.log.addEventListener('click', (event) => {
+      const image = event.target.closest('.chat-image');
+      if (!image || !image.src) return;
+      if (state.longPress || Date.now() - state.menuOpenedAt < 600) return;
+      window.Neft.openMediaViewer?.([{ url: image.src, caption: image.alt || '' }], 0);
+    });
+  }
+
   /* --- Мобильная раскладка ------------------------------------------------ */
 
   const mobileQuery = window.matchMedia ? window.matchMedia('(max-width: 760px)') : null;
@@ -863,7 +875,7 @@
   function messageHtml(message) {
     const mine = Number(message.sender_id) === ME;
     const image = message.image_url
-      ? `<a class="chat-image" href="${escapeHtml(message.image_url)}" target="_blank" rel="noopener"><img src="${escapeHtml(message.image_url)}" alt="Изображение" loading="lazy"></a>`
+      ? `<img class="chat-image" src="${escapeHtml(message.image_url)}" alt="Изображение" loading="lazy">`
       : '';
     const text = message.text ? `<p class="chat-text">${linkify(message.text)}</p>` : '';
     const poll = pollBlock(message);
@@ -1466,6 +1478,7 @@
     wireComposer();
     wirePaste();
     wireMessageMenu();
+    wireChatImages();
     wirePolls();
     wirePollDialog();
     wireShareDialog();

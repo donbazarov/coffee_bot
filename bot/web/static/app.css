@@ -31,7 +31,7 @@
   --bg: #10110f;
   --bg-deep: #0b0c0a;
   --surface: #191a17;
-  --surface-raised: #20211d;
+  --surface-raised: #20211d9e;
   --surface-sunken: #151613;
   --rail-bg: #141512;
   --field-bg: #131411;
@@ -1066,8 +1066,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-text { margin: 0; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-text a { color: var(--accent); }
 .chat-mention { color: var(--accent); font-weight: 600; }
-.chat-image { display: block; margin-bottom: 6px; }
-.chat-image img { max-width: min(320px, 60vw); max-height: 320px; border-radius: 10px; }
+.chat-image { display: block; max-width: min(320px, 60vw); max-height: 320px; margin-bottom: 6px; border-radius: 10px; cursor: zoom-in; }
 .chat-time { position: absolute; right: 10px; bottom: 5px; color: var(--muted); font: 9px var(--mono); }
 .chat-state { min-height: 0; margin: 0; color: var(--muted); font-size: 11px; text-align: center; }
 .chat-state[hidden] { display: none; }

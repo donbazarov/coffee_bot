@@ -6866,6 +6866,7 @@ window.Neft = {
   avatarMarkup,
   setView,
   closeDrawer,
+  openMediaViewer,
   get user() {
     return {
       id: Number(document.body.dataset.userId || 0),
