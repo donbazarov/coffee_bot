@@ -6,7 +6,8 @@
    инлайновый <script> в <head> заблокировался бы. Значения читаются из
    localStorage (устройство), по умолчанию — «как в системе».
 
-   Значения ключей: 'neft-theme' = system|light|dark, 'neft-accent' = #rrggbb.
+   Ключи: 'neft-theme' = system|light|dark, 'neft-accent' = #rrggbb,
+   'neft-glass' = 'true'|'false' (Liquid Glass включён, если значение не 'false').
    (В Релизе 2 те же ключи будут синхронизироваться с настройками аккаунта.)
    ========================================================================= */
 (function () {
@@ -15,6 +16,7 @@
   var root = document.documentElement;
   var THEME_KEY = 'neft-theme';
   var ACCENT_KEY = 'neft-accent';
+  var GLASS_KEY = 'neft-glass';
   var DEFAULT_ACCENT = '#f47369';
 
   function readStored(key) {
@@ -51,6 +53,12 @@
     root.style.setProperty('--accent', accent);
     root.style.setProperty('--accent-contrast', contrastOn(accent));
   }
+
+  /* Liquid Glass — основной вид оформления. Флаг ставим на <html> до первой
+     отрисовки, чтобы страница не мигала классической темой. Выключить его можно
+     только явно: галочка «Классическая тема» в личном кабинете пишет 'false'.
+     Настройка живёт на этом устройстве (localStorage), синхронизации нет. */
+  if (readStored(GLASS_KEY) !== 'false') root.setAttribute('data-glass', 'on');
 
   /* Пока выбрано «как в системе» — следим за сменой темы ОС. */
   if (window.matchMedia) {

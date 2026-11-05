@@ -1769,6 +1769,214 @@ body { transition: background-color .3s ease, color .3s ease; }
 .evaluation-dialog textarea { width: 100%; min-height: 52px; padding: 10px 12px; resize: vertical; }
 
 .session-list { display: grid; gap: 8px; }
+
+/* =========================================================================
+   Liquid Glass — экспериментальный стиль «жидкого стекла»
+
+   Включается галочкой в личном кабинете (блок «Тема и акцент»). Флаг живёт
+   в localStorage ('neft-glass'); theme-boot.js до первой отрисовки ставит
+   атрибут data-glass="on" на <html>, чтобы включённое стекло не мигало.
+
+   Физика:
+     • преломление краёв — SVG-фильтр #lg-refraction (feTurbulence +
+       feDisplacementMap + feSpecularLighting) через backdrop-filter: url();
+       применяется только у крупных поверхностей;
+     • толщина — тонкая полупрозрачная рамка + один тонкий верхний блик
+       (никаких inset-«фасок»: они выглядели как кнопки из 2000-х);
+     • фон — анимированные «масляные разводы» под интерфейсом (static/
+       glass-bg.js); именно их и преломляет стекло;
+     • форма — скругления по шкале HIG, где поддерживается — сквиркл.
+
+   Кнопки в этой теме непрозрачные, пункты меню растворяются в фоне, чипы и
+   панели — полупрозрачные. Текст всегда остаётся над стеклом (WCAG).
+   ========================================================================= */
+
+:root {
+  /* Стеклянная плёнка панелей: полупрозрачная, без белых градиентов. */
+  --lg-fill: rgba(20, 21, 18, .55);
+  --lg-border: rgba(255, 255, 255, .12);
+  --lg-edge: rgba(255, 255, 255, .1);      /* один тонкий верхний блик */
+  --lg-drop: 0 14px 40px rgba(0, 0, 0, .38);
+  --lg-btn: var(--surface-raised);         /* КНОПКИ — непрозрачные */
+  --lg-chip: rgba(255, 255, 255, .08);     /* чипы — полупрозрачные */
+  --lg-drawer: rgba(20, 21, 18, .84);      /* меню: плотный материал */
+
+  /* Шкала скруглений в духе HIG (действует только в режиме стекла). */
+  --lg-r-panel: 20px;
+  --lg-r-tile: 14px;
+  --lg-r-btn: 12px;
+  --lg-r-nav: 12px;
+  --lg-r-dock: 22px;
+}
+[data-theme="light"] {
+  --lg-fill: rgba(255, 255, 255, .55);
+  --lg-border: rgba(255, 255, 255, .6);
+  --lg-edge: rgba(255, 255, 255, .8);
+  --lg-drop: 0 14px 38px rgba(30, 26, 18, .14);
+  --lg-btn: var(--surface-raised);
+  --lg-chip: rgba(255, 255, 255, .55);
+  --lg-drawer: rgba(252, 250, 246, .86);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+
+  /* --- Крупные поверхности: стекло с преломлением краёв --------------- */
+  /* .drawer здесь нет намеренно: у меню свой, более плотный материал — ниже. */
+  [data-glass="on"] :is(.panel, .dock, .toast, .team-summary,
+      .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
+      .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row) {
+    border-color: var(--lg-border);
+    background-color: var(--lg-fill);
+    /* background-image здесь НЕ трогаем: у акцентных панелей (.level-panel,
+       .achievements-panel, .schedule-summary, .announcements-panel) в нём
+       фирменный градиент — он остаётся поверх стекла. Белый градиент ушёл
+       сам собой: мы его больше не добавляем. */
+    box-shadow:
+      inset 0 1px 0 var(--lg-edge),
+      var(--lg-drop);
+    border-radius: var(--lg-r-panel);
+    /* Прогрессивное улучшение: честное преломление (Chromium). Если браузер не
+       умеет url() в backdrop-filter — объявление отбрасывается, остаётся blur. */
+    -webkit-backdrop-filter: blur(12px) saturate(1.5);
+    backdrop-filter: blur(12px) saturate(1.5);
+    -webkit-backdrop-filter: blur(5px) saturate(1.8) url(#lg-refraction);
+    backdrop-filter: blur(5px) saturate(1.8) url(#lg-refraction);
+    transition: border-color .25s ease, box-shadow .25s ease, background-color .25s ease;
+  }
+
+  /* --- Боковое меню: отдельный «плотный» материал --------------------- */
+  /* Меню — это навигация, поэтому у него своя, более плотная поверхность и
+     одинаковый вид на всех ширинах. Иначе на десктопе (сайдбар запинен, слоя
+     затемнения нет) сквозь стекло просвечивал яркий анимированный фон, и оно
+     выглядело белёсым, а displacement-фильтр давал мутную «грязь». */
+  [data-glass="on"] .drawer {
+    border-radius: 0 var(--lg-r-panel) var(--lg-r-panel) 0;
+    border-color: var(--lg-border);
+    background-color: var(--lg-drawer);
+    background-image: none;
+    box-shadow:
+      inset 0 1px 0 var(--lg-edge),
+      var(--lg-drop);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    backdrop-filter: blur(18px) saturate(1.2);
+  }
+  /* Текст меню плотнее остального интерфейса: иначе в светлой теме он «сереет»
+     на светлом стекле, а в тёмной — теряется на затемнении позади. */
+  [data-glass="on"] .drawer .nav-item { color: var(--text-soft); }
+  [data-glass="on"] .drawer .nav-icon { color: var(--muted); }
+
+  /* --- Кнопки: непрозрачные, без «фаски» ------------------------------ */
+  [data-glass="on"] :is(.button:not(.button-primary), .icon-button) {
+    border-color: var(--lg-border);
+    background-color: var(--lg-btn);
+    background-image: none;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .28);
+    border-radius: var(--lg-r-btn);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* --- Чипы: полупрозрачное стекло, пилюли сохраняем ------------------ */
+  [data-glass="on"] .chip {
+    border-color: var(--lg-border);
+    background-color: var(--lg-chip);
+    background-image: none;
+    box-shadow: none;
+    -webkit-backdrop-filter: blur(10px) saturate(1.4);
+    backdrop-filter: blur(10px) saturate(1.4);
+  }
+
+  /* --- Внутренние плитки и сегмент-контролы: стекло + скругление ------ */
+  [data-glass="on"] :is(.theme-switch, .workload-metric, .analytics-metric,
+      .kb-pantone, .kb-serve, .drink-item, .matrix-mode) {
+    border-color: var(--lg-border);
+    background-color: var(--lg-chip);
+    background-image: none;
+    box-shadow: none;
+    border-radius: var(--lg-r-tile);
+    -webkit-backdrop-filter: blur(10px) saturate(1.4);
+    backdrop-filter: blur(10px) saturate(1.4);
+  }
+  /* Дети сегмент-контролов — концентричное скругление. Так обходимся без
+     overflow: hidden, который обрезал бы фокус-обводку button:focus-visible. */
+  [data-glass="on"] :is(.theme-switch, .matrix-mode) > * {
+    border-radius: calc(var(--lg-r-tile) - 3px);
+  }
+
+  /* --- Меню: пункты растворяются в фоне, активный — акцентный --------- */
+  [data-glass="on"] .nav-item {
+    border-color: transparent;
+    background: transparent;
+    background-image: none;
+    box-shadow: none;
+    border-radius: var(--lg-r-nav);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  [data-glass="on"] .nav-item:hover { background-color: rgba(var(--hl), .06); }
+  [data-glass="on"] .nav-item.is-active {
+    border-color: transparent;
+    background-color: var(--accent-soft);
+    box-shadow: none;
+    color: var(--accent);
+  }
+  [data-glass="on"] .nav-item.is-active .nav-icon { color: var(--accent); }
+  [data-glass="on"] .chip.is-selected { background-color: var(--accent-soft); }
+}
+
+/* Подъём карточки при наведении не должен терять акцентную кромку. */
+[data-glass="on"] .panel:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--lg-border)); }
+
+/* --- Адаптив и доступность ------------------------------------------- */
+/* Сенсорные и узкие экраны: убираем дорогое преломление (url) — функция
+   остаётся (обычный blur), но FPS защищаем. */
+@media (pointer: coarse), (max-width: 760px) {
+  [data-glass="on"] :is(.panel, .dock, .toast, .team-summary,
+      .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
+      .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row) {
+    -webkit-backdrop-filter: blur(10px) saturate(1.5);
+    backdrop-filter: blur(10px) saturate(1.5);
+  }
+}
+
+/* --- Сквиркл: «непрерывная» кривизна углов, как в интерфейсах Apple --- */
+/* В браузерах без поддержки правило просто не применяется — остаётся
+   обычный border-radius. */
+@supports (corner-shape: squircle) {
+  [data-glass="on"] :is(.panel, .drawer, .dock, .toast, .team-summary,
+      .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
+      .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row,
+      .button:not(.button-primary), .icon-button, .nav-item, .chip,
+      .theme-switch, .workload-metric, .analytics-metric, .kb-pantone,
+      .kb-serve, .drink-item, .matrix-mode) { corner-shape: squircle; }
+}
+
+/* --- Плавающий док: отвязываем от нижнего края (только режим стекла) -- */
+@media (max-width: 760px) {
+  /* Высота дока растёт на отступы, чтобы контент и чат не заезжали под него. */
+  [data-glass="on"] { --dock-h: calc(86px + env(safe-area-inset-bottom)); }
+  [data-glass="on"] .dock {
+    right: max(12px, env(safe-area-inset-right));
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
+    /* Отступ под «домашний индикатор» уже в позиционировании — внутри не дублируем. */
+    padding: 6px;
+    border: 1px solid var(--lg-border);
+    border-radius: var(--lg-r-dock);
+    background-color: var(--lg-fill);
+    background-image: none;
+    box-shadow:
+      inset 0 1px 0 var(--lg-edge),
+      var(--lg-drop);
+    -webkit-backdrop-filter: blur(14px) saturate(1.6);
+    backdrop-filter: blur(14px) saturate(1.6);
+  }
+}
+
+/* --- Галочка в личном кабинете --------------------------------------- */
+.glass-setting { border-top: 0; }
+.glass-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font: 500 9px var(--sans); letter-spacing: .04em; vertical-align: middle; text-transform: uppercase; }
+
 .session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto auto; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line-faint); }
 .session-main strong { display: block; font-size: 13px; }
 .session-main span { color: var(--muted); font-size: 10px; }
@@ -1886,4 +2094,45 @@ body { transition: background-color .3s ease, color .3s ease; }
   font-size: 12px;
   color: var(--text);
 }
+
+
+/* =========================================================================
+   Liquid Glass: анимированный фон под стеклом (только при data-glass="on")
+
+   Canvas с «масляными разводами» (static/glass-bg.js) даёт стеклу что
+   преломлять — на однотонном фоне backdrop-filter размывал пустоту. Canvas
+   лежит на z-index:-1: выше фона <html>, ниже контента; чтобы он был виден,
+   тело делаем прозрачным. Виньетка гасит фон по краям и держит контраст
+   текста; на светлой теме виньетка светлая.
+   ========================================================================= */
+#glass-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  display: none;
+  width: 100%;
+  height: 100%;
+  opacity: .6;                     /* «умеренный» уровень (выбор из макета) */
+  filter: blur(.5px) saturate(1.15);
+  pointer-events: none;
+}
+.glass-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  display: none;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 8%, rgba(16, 17, 15, 0) 36%, rgba(16, 17, 15, .5) 78%, var(--bg) 100%),
+    linear-gradient(180deg, rgba(16, 17, 15, .4) 0%, rgba(16, 17, 15, .14) 32%, rgba(16, 17, 15, .66) 100%);
+}
+[data-theme="light"] .glass-vignette {
+  background:
+    radial-gradient(120% 90% at 50% 8%, rgba(244, 241, 234, 0) 42%, rgba(244, 241, 234, .3) 80%, var(--bg) 100%),
+    linear-gradient(180deg, rgba(244, 241, 234, .24) 0%, rgba(244, 241, 234, .08) 34%, rgba(244, 241, 234, .46) 100%);
+}
+[data-glass="on"] #glass-bg,
+[data-glass="on"] .glass-vignette { display: block; }
+/* Фон переезжает на <html>, тело прозрачное — иначе оно перекрыло бы canvas. */
+[data-glass="on"] body { background-color: transparent; }
 

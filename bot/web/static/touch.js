@@ -1,8 +1,10 @@
 /* МОБИЛЬНЫЕ ТАЧ-ЖЕСТЫ.
  *
- *   • В чате (открытая переписка) свайп от левого края возвращает к списку
- *     чатов: тред «съезжает» вправо, показывая контакты/темы. Сэндвич-меню
- *     открывается только кнопкой (свайпом — нет).
+ *   • Свайп от левого края открывает сэндвич-меню (как в iOS). Кромка — это
+ *     «зона меню», она приоритетнее жеста чата, поэтому возврат к списку
+ *     чатов делается свайпом ПРАВЕЕ кромки (см. EDGE).
+ *   • В чате (открытая переписка) свайп вправо возвращает к списку чатов:
+ *     тред «съезжает» вправо, показывая контакты/темы.
  *   • Сэндвич-меню закрывается свайпом влево (по нему же).
  *   • Pull-to-Refresh — собственный индикатор (в iOS-PWA нативного нет);
  *     работает только когда страница в самом верху и чат не открыт.
@@ -16,8 +18,9 @@
   const touchCapable = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
   if (!touchCapable) return;
 
-  const EDGE = 30;             // «горячая зона» у левого края
+  const EDGE = 30;             // «горячая зона» у левого края (открытие меню)
   const CHAT_OPEN_FRACTION = 0.3;
+  const DRAWER_OPEN_FRACTION = 0.4;  // доля ширины меню, достаточная для открытия
   const CLOSE_DISTANCE = 60;   // свайп влево, достаточный для закрытия меню
   const PTR_TRIGGER = 84;
   const PTR_MAX = 140;
@@ -29,7 +32,9 @@
   const chatMain = document.getElementById('chat-main');
 
   const drawerWidth = () => (drawer ? drawer.getBoundingClientRect().width || 320 : 320);
-  const isDrawerOpen = () => Boolean(!document.body.classList.contains('is-sidebar-pinned') && drawer && drawer.classList.contains('is-open'));
+  // Класс «меню запинено» ставит app.js на широком десктопе (сайдбар всегда на месте).
+  const sidebarPinned = () => document.body.classList.contains('is-sidebar-pinned');
+  const isDrawerOpen = () => Boolean(!sidebarPinned() && drawer && drawer.classList.contains('is-open'));
   const dialogOpen = () => Boolean(document.querySelector('dialog[open]'));
   const inMatrix = (target) => Boolean(target && target.closest && target.closest('.matrix-scroll'));
   const isMobile = () => window.matchMedia(MOBILE_QUERY).matches;
@@ -117,7 +122,7 @@
 
   /* --- Жесты -------------------------------------------------------------- */
 
-  let mode = null;   // 'drawer-close' | 'chat' | 'ptr' | 'ptr-maybe'
+  let mode = null;   // 'drawer-open' | 'drawer-close' | 'chat' | 'ptr' | 'ptr-maybe'
   let startX = 0;
   let startY = 0;
   let lastX = 0;
@@ -133,6 +138,9 @@
       mode = drawer && drawer.contains(event.target) ? 'drawer-close' : null;
       return;
     }
+    // Левая кромка — зона меню (как в iOS). В открытом треде чата возврат к
+    // контактам остаётся доступен свайпом правее кромки.
+    if (drawer && startX < EDGE && !sidebarPinned()) { mode = 'drawer-open'; return; }
     if (startX < EDGE && chatThreadOpen()) { mode = 'chat'; return; }
     if (!chatVisible() && window.scrollY <= 0 && !inMatrix(event.target)) { mode = 'ptr-maybe'; return; }
     mode = null;
@@ -145,6 +153,16 @@
     const dy = touch.clientY - startY;
     lastX = touch.clientX;
 
+    if (mode === 'drawer-open') {
+      if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) {
+        // Вертикаль — меню не открываем: отдаём жест скроллу или pull-to-refresh.
+        mode = (dy > 0 && !chatVisible() && window.scrollY <= 0 && !inMatrix(event.target)) ? 'ptr-maybe' : null;
+        return;
+      }
+      event.preventDefault();
+      previewDrawer(dx / (drawerWidth() * 0.9));
+      return;
+    }
     if (mode === 'chat') {
       if (dx <= 0 || Math.abs(dy) > Math.abs(dx)) return;
       event.preventDefault();
@@ -171,7 +189,9 @@
   }, { passive: false });
 
   document.addEventListener('touchend', () => {
-    if (mode === 'chat') {
+    if (mode === 'drawer-open') {
+      settleDrawer(lastX - startX > drawerWidth() * DRAWER_OPEN_FRACTION);
+    } else if (mode === 'chat') {
       settleChat(lastX - startX > window.innerWidth * CHAT_OPEN_FRACTION);
     } else if (mode === 'drawer-close') {
       if (startX - lastX > CLOSE_DISTANCE) window.Neft?.closeDrawer?.();
@@ -189,7 +209,7 @@
 
   document.addEventListener('touchcancel', () => {
     if (mode === 'ptr') hidePtr();
-    if (mode === 'drawer-close') settleDrawer(false);
+    if (mode === 'drawer-open' || mode === 'drawer-close') settleDrawer(false);
     if (mode === 'chat') settleChat(false);
     mode = null;
   }, { passive: true });

@@ -20,12 +20,19 @@
   <script src="/static/pwa-install.js?v={{ static_version }}" defer></script>
   <script src="/static/chat.js?v={{ static_version }}" defer></script>
   <script src="/static/touch.js?v={{ static_version }}" defer></script>
+  {# Анимированный фон для режима Liquid Glass (масляные разводы). Рисует только
+     при data-glass="on"; обычный вид не трогает. #}
+  <script src="/static/glass-bg.js?v={{ static_version }}" defer></script>
   {# 3D-витрина наград: бандл model-viewer лежит локально (static/vendor).
      Внешний CDN не проходит по CSP `script-src 'self'` и не кешируется
      Service Worker'ом, поэтому в офлайне витрина осталась бы пустой. #}
   <script type="module" src="/static/vendor/model-viewer.min.js?v={{ static_version }}"></script>
 </head>
 <body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}" data-pwa-launch="{{ 'true' if utm_source == 'pwa' else 'false' }}">
+  {# Фон Liquid Glass: canvas с разводами + виньетка. Видны только при
+     data-glass="on" (CSS); на мобильных рисуется реже и в меньшем разрешении. #}
+  <canvas id="glass-bg" aria-hidden="true"></canvas>
+  <div class="glass-vignette" aria-hidden="true"></div>
   {# Инлайновый спрайт иконок: SVG с currentColor вместо эмодзи-символов. #}
   <svg class="icon-sprite" aria-hidden="true" focusable="false" width="0" height="0">
     <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/></symbol>
@@ -72,6 +79,22 @@
     <symbol id="i-text-color" viewBox="0 0 24 24"><path d="M6 16.5L11 5l5 11.5"/><path d="M7.6 12.5h6.8"/><path d="M4 20.5h16"/></symbol>
     <symbol id="i-highlight" viewBox="0 0 24 24"><path d="M8 12l4.5-4.5L17 12l-4.5 4.5z"/><path d="M4 20.5h16"/></symbol>
     <symbol id="i-clear" viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M8 7v11a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V7"/><path d="M10 4h4"/><path d="M10.5 11l3.5 3.5M14 11l-3.5 3.5"/></symbol>
+  </svg>
+  {# SVG-фильтры для Liquid Glass (экспериментальный стиль). Скрыты (0×0),
+     инлайновые — проходят CSP без ослаблений. filter используется в
+     backdrop-filter: url(#lg-refraction) — честное преломление краёв.
+     feTurbulence даёт рельеф, feDisplacementMap искажает фон вдоль него,
+     feSpecularLighting добавляет блик на гранях. #}
+  <svg class="icon-sprite lg-defs" aria-hidden="true" focusable="false" width="0" height="0">
+    <filter id="lg-refraction" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
+      <feTurbulence type="fractalNoise" baseFrequency="0.009 0.013" numOctaves="2" seed="11" result="lg-noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="lg-noise" scale="12" xChannelSelector="R" yChannelSelector="G" result="lg-refracted"/>
+      <feSpecularLighting in="lg-noise" surfaceScale="2.4" specularConstant="0.42" specularExponent="18" lighting-color="#ffffff" result="lg-spec">
+        <feDistantLight azimuth="235" elevation="58"/>
+      </feSpecularLighting>
+      <feComposite in="lg-spec" in2="lg-refracted" operator="in" result="lg-spec-clip"/>
+      <feBlend in="lg-refracted" in2="lg-spec-clip" mode="screen"/>
+    </filter>
   </svg>
   {% if not user %}
   <main class="login-screen">
@@ -458,6 +481,18 @@
             <strong>Акцентный цвет</strong>
             <small>Кнопки, ссылки и логотип следуют за акцентом.</small>
             <div class="accent-row" id="accent-row"></div>
+          </div>
+          {# Liquid Glass — основной вид оформления. Галочка возвращает
+             «классическую тему»; выбор хранится на этом устройстве
+             (localStorage), флаг ставит theme-boot.js до отрисовки. #}
+          <div class="appearance-group">
+            <label class="module-setting glass-setting">
+              <span>
+                <strong>Классическая тема</strong>
+                <small>Основной вид — Liquid Glass: панели и меню преломляют анимированный фон, у карточек и кнопок скруглённые углы. Включите галочку, чтобы вернуть прежнее плоское оформление. Настройка действует на этом устройстве.</small>
+              </span>
+              <input type="checkbox" id="classic-theme-toggle"><i></i>
+            </label>
           </div>
         </section>
         {# Уведомления на устройстве. Панель показывается только в режиме PWA (standalone). #}

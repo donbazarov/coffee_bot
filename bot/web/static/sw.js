@@ -39,6 +39,7 @@ const SHELL = [
   `/static/theme-boot.js?v=${VERSION}`,
   `/static/app.css?v=${VERSION}`,
   `/static/app.js?v=${VERSION}`,
+  `/static/glass-bg.js?v=${VERSION}`,
   '/static/icons/logo.svg',
   // 3D-витрина наград: без бандла model-viewer и медали вкладка «Развитие»
   // в офлайне осталась бы с пустым местом вместо медали.

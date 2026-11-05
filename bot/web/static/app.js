@@ -3209,6 +3209,7 @@ const THEME_KEY = 'neft-theme';
 const ACCENT_KEY = 'neft-accent';
 const DEFAULT_ACCENT = '#f47369';
 const ACCENT_PRESETS = ['#f47369', '#f4a259', '#e9c46a', '#2a9d8f', '#4a7ede', '#9b6bd6'];
+const GLASS_KEY = 'neft-glass';
 
 function storedItem(key) { try { return localStorage.getItem(key); } catch (error) { return null; } }
 function storeItem(key, value) { try { localStorage.setItem(key, value); } catch (error) { /* приватный режим */ } }
@@ -3242,6 +3243,28 @@ function syncThemeColor() {
 function applyAccent(hex) {
   document.documentElement.style.setProperty('--accent', hex);
   document.documentElement.style.setProperty('--accent-contrast', contrastOn(hex));
+}
+
+/* Liquid Glass — основной вид интерфейса. Галочка в личном кабинете включает
+   «классическую тему» (стекло выключено); выбор живёт на этом устройстве
+   (localStorage 'neft-glass'), а флаг data-glass="on" до первой отрисовки
+   ставит theme-boot.js. Оформление — в CSS, фон — в static/glass-bg.js. */
+function glassEnabled() { return storedItem(GLASS_KEY) !== 'false'; }
+
+function applyGlassPreference(on) {
+  if (on) document.documentElement.setAttribute('data-glass', 'on');
+  else document.documentElement.removeAttribute('data-glass');
+}
+
+function setupGlass() {
+  const box = document.querySelector('#classic-theme-toggle');
+  if (box) {
+    box.checked = !glassEnabled();
+    box.addEventListener('change', () => {
+      applyGlassPreference(!box.checked);
+      storeItem(GLASS_KEY, box.checked ? 'false' : 'true');
+    });
+  }
 }
 
 function syncAppearanceControls() {
@@ -3311,6 +3334,7 @@ function setupAppearance() {
   }));
   renderAccentSwatches();
   syncAppearanceControls();
+  setupGlass();
 }
 
 /* --- Профиль: имя и фото ------------------------------------------------ */
