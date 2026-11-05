@@ -428,11 +428,14 @@ def _normalize_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
             "milk_drop": _choice(raw.get("milk_drop"), MILK_DROP_LEVELS, "молочная капля"),
         })
     # Молочный напиток с галочкой «рецепт как на эспрессо» копирует числа из эспрессо.
+    # Зерно тоже наследуем (если у эспрессо оно выбрано) — молочный на том же зерне.
     espresso = next((item for item in items if item["category"] == BLACK_COFFEE), None)
     for item in items:
         if item["category"] == MILK_COFFEE and item["is_espresso_recipe"] and espresso:
             for field in ("recipe_dose", "recipe_yield", "recipe_time", "recipe_temp"):
                 item[field] = espresso[field]
+            if espresso["bean_id"] is not None:
+                item["bean_id"] = espresso["bean_id"]
     return items
 
 
@@ -744,11 +747,13 @@ def _serialize_description(row: Any, items: list[dict[str, Any]], quizzes: list[
 
 @router.get("")
 def list_descriptions(point: str | None = None, author_id: int | None = None,
-                      limit: int = DEFAULT_PAGE, offset: int = 0,
+                      state: str | None = None, limit: int = DEFAULT_PAGE, offset: int = 0,
                       user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Лента описаний с фильтрами по точке и бариста и постраничной загрузкой."""
+    """Лента описаний с фильтрами по точке, бариста и статусу голосования."""
     if point not in (None, "all") and point not in POINT_VALUES:
         raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
+    if state not in (None, "all", "unvoted", "voted"):
+        raise HTTPException(status_code=422, detail="Неизвестный фильтр голосования")
     limit = max(1, min(int(limit or DEFAULT_PAGE), MAX_PAGE))
     offset = max(0, int(offset or 0))
     conditions: list[str] = []
@@ -759,6 +764,15 @@ def list_descriptions(point: str | None = None, author_id: int | None = None,
     if author_id:
         conditions.append("(d.author_id = :author OR d.partner_id = :author)")
         params["author"] = int(author_id)
+    if state in ("unvoted", "voted"):
+        params["viewer"] = int(user["id"])
+        # «Не голосовал» — есть викторина без моего голоса; «голосовал» — викторины
+        # есть, и мой голос стоит во всех.
+        pending = ("EXISTS (SELECT 1 FROM drink_description_quizzes q "
+                   "WHERE q.description_id = d.id AND NOT EXISTS (SELECT 1 FROM drink_quiz_votes v "
+                   "WHERE v.quiz_id = q.id AND v.user_id = :viewer))")
+        has_quiz = "EXISTS (SELECT 1 FROM drink_description_quizzes q WHERE q.description_id = d.id)"
+        conditions.append(pending if state == "unvoted" else f"({has_quiz} AND NOT {pending})")
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
     with engine.connect() as connection:
         rows = connection.execute(text(
@@ -828,18 +842,20 @@ def list_memes(author_id: int | None = None, limit: int = 30, offset: int = 0,
     limit = max(1, min(int(limit or 30), 60))
     offset = max(0, int(offset or 0))
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
+    # Автор мема — владелец фото (легаси-строки без автора деградируют на автора поста).
+    author_expr = "COALESCE(p.author_id, d.author_id)"
     condition = ""
     if author_id:
-        condition = "AND d.author_id = :author"
+        condition = f"AND {author_expr} = :author"
         params["author"] = int(author_id)
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
             SELECT p.id, p.url, p.description_id, p.position, d.point, d.shift_date, d.created_at,
-                   d.author_id, COALESCE(au.display_name, au.name) AS author_name,
+                   {author_expr} AS author_id, COALESCE(au.display_name, au.name) AS author_name,
                    COALESCE(pu.display_name, pu.name) AS partner_name
             FROM drink_description_photos p
             JOIN drink_descriptions d ON d.id = p.description_id
-            JOIN users au ON au.id = d.author_id
+            JOIN users au ON au.id = {author_expr}
             LEFT JOIN users pu ON pu.id = d.partner_id
             WHERE p.kind = 'meme' {condition}
             ORDER BY d.created_at DESC, d.id DESC, p.position, p.id
@@ -847,11 +863,11 @@ def list_memes(author_id: int | None = None, limit: int = 30, offset: int = 0,
         """), params).mappings().all()
         has_more = len(rows) > limit
         rows = rows[:limit]
-        authors = connection.execute(text("""
+        authors = connection.execute(text(f"""
             SELECT DISTINCT u.id, COALESCE(u.display_name, u.name) AS name
             FROM drink_description_photos p
             JOIN drink_descriptions d ON d.id = p.description_id
-            JOIN users u ON u.id = d.author_id
+            JOIN users u ON u.id = {author_expr}
             WHERE p.kind = 'meme'
             ORDER BY name
         """)).mappings().all()

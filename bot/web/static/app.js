@@ -3690,6 +3690,7 @@ function openAnnouncementDialog(item = null) {
   if (!dialog || !form) return;
   const errorNode = document.querySelector('#announcement-form-error');
   form.reset();
+  clearDraftNotice(form);
   form.dataset.announcementId = item ? String(item.id) : '';
   form.elements.category.innerHTML = (announcementsState.categories || [])
     .map((entry) => `<option value="${escapeHtml(entry.code)}">${escapeHtml(entry.label)}</option>`).join('');
@@ -3709,6 +3710,12 @@ function openAnnouncementDialog(item = null) {
     form.elements.category.value = (announcementsState.categories.find((entry) => entry.code === 'event') || {}).code || '';
   }
   if (errorNode) errorNode.hidden = true;
+  // Черновик восстанавливаем только для нового анонса (правку не подменяем).
+  const draft = item ? null : readDraft('announcement');
+  if (draft) {
+    applyFields(form, draft.fields);
+    renderDraftNotice(form, 'announcement', () => form.reset());
+  }
   dialog.showModal();
 }
 
@@ -4093,6 +4100,7 @@ function setupAnnouncements() {
     try {
       if (id) await api(`/api/announcements/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
       else await api('/api/announcements', { method: 'POST', body: JSON.stringify(payload) });
+      if (!id) clearDraft('announcement');
       dialog?.close();
       await loadAnnouncements();
       showToast(id ? 'Анонс обновлён' : 'Анонс опубликован');
@@ -4236,6 +4244,7 @@ const kbState = {
   query: '',
   selectedId: null,
   current: null,
+  recipesPageId: null,
   ready: false,
   canEdit: managerRole,
 };
@@ -4345,13 +4354,61 @@ function kbBeanMarkup(bean) {
   return `${pantone}<div class="kb-fields">${kbFieldMarkup('Обжарка', roast)}${kbFieldMarkup('Описание', bean.description)}</div>${status}`;
 }
 
+/* История рецептов зерна: как его описывали на сменах (клик → карточка ленты). */
+function kbRecipeNumbers(recipe) {
+  return [
+    recipe.dose != null ? `вход ${recipe.dose} г` : '',
+    recipe.yield != null ? `выход ${recipe.yield} г` : '',
+    recipe.water != null ? `вода ${recipe.water} мл` : '',
+    recipe.time != null ? `${recipe.time} с` : '',
+    recipe.temp != null ? `${recipe.temp} °C` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+function kbRecipeHistoryMarkup(items) {
+  const head = '<p class="kb-field-label">История рецептов</p>';
+  if (!items.length) {
+    return `${head}<p class="kb-empty">Пока это зерно описывали без рецептуры.</p>`;
+  }
+  const rows = items.map((item) => {
+    const title = item.drink && item.drink.title ? `${item.drink.title} · ` : '';
+    const meta = [
+      kbTime(item.created_at),
+      item.author ? item.author.name : '',
+      drinkPointLabel(item.point),
+      item.is_espresso_recipe ? 'как эспрессо' : '',
+    ].filter(Boolean);
+    return `<button class="kb-recipe-row" type="button" data-kb-recipe="${item.description_id}">
+      <span class="kb-recipe-main">${escapeHtml(title + (kbRecipeNumbers(item.recipe) || 'рецепт не указан'))}</span>
+      <span class="kb-recipe-meta">${escapeHtml(meta.join(' · '))}</span>
+    </button>`;
+  }).join('');
+  return `${head}<div class="kb-recipe-list">${rows}</div>`;
+}
+
+async function loadKbRecipes(pageId) {
+  const box = document.querySelector('#kb-recipe-history');
+  if (!box) return;
+  kbState.recipesPageId = Number(pageId);
+  try {
+    const data = await api(`/api/kb/pages/${pageId}/recipes?limit=10`);
+    // Страницу могли переключить, пока шёл запрос.
+    if (kbState.recipesPageId !== Number(pageId)) return;
+    box.innerHTML = kbRecipeHistoryMarkup(data.items || []);
+  } catch (error) {
+    box.innerHTML = `<p class="kb-empty">${escapeHtml(error.message)}</p>`;
+  }
+}
+
 /* Блок подачи: заголовок, фото (если есть) и текст. */
 function kbServeMarkup(label, text, photo) {
   const hasText = text != null && String(text).trim() !== '';
   if (!hasText && !photo) return '';
-  const image = photo ? `<img class="kb-serve-photo" src="${escapeHtml(photo)}" alt="${escapeHtml(label)}" loading="lazy">` : '';
+  const image = photo
+    ? `<img class="kb-serve-photo" src="${escapeHtml(photo)}" alt="${escapeHtml(label)}" loading="lazy" data-media-url="${escapeHtml(photo)}" data-media-caption="${escapeHtml(label)}">`
+    : '';
   const body = hasText ? `<p class="kb-field-value">${escapeHtml(text)}</p>` : '';
-  return `<div class="kb-serve"><p class="kb-field-label">${escapeHtml(label)}</p>${image}${body}</div>`;
+  return `<div class="kb-serve" data-media-gallery><p class="kb-field-label">${escapeHtml(label)}</p>${image}${body}</div>`;
 }
 
 function kbDrinkMarkup(drink) {
@@ -4459,10 +4516,13 @@ function renderKbPage() {
     ? `<div class="kb-actions"><button class="button button-quiet" type="button" data-kb-edit="${page.id}"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg> Редактировать</button><button class="button button-quiet kb-danger" type="button" data-kb-delete="${page.id}"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg> Удалить</button></div>`
     : '';
   let body = '';
-  if (page.category === 'beans') body = kbBeanMarkup(page.bean);
-  else if (page.category === 'drinks') body = kbDrinkMarkup(page.drink);
+  if (page.category === 'beans') {
+    body = kbBeanMarkup(page.bean)
+      + '<div class="kb-recipe-history" id="kb-recipe-history"><p class="kb-empty">Загрузка истории…</p></div>';
+  } else if (page.category === 'drinks') body = kbDrinkMarkup(page.drink);
   const content = kbBodyMarkup(page);
   node.innerHTML = `<header class="kb-page-head"><div><p class="eyebrow">${escapeHtml(kbCategoryLabel(page.category))}</p><h3 class="kb-page-title">${escapeHtml(page.title)}</h3><div class="kb-meta-row">${meta.join('')}</div></div>${actions}</header><div class="kb-page-body">${body}${content}</div>`;
+  if (page.category === 'beans') loadKbRecipes(page.id);
 }
 
 async function openKbPage(id) {
@@ -4625,6 +4685,7 @@ function openKbDialog(page) {
   kbRenderPantone();
   form.reset();
   kbResetDrinkPhotos();
+  clearDraftNotice(form);
   const errorNode = document.querySelector('#kb-form-error');
   if (errorNode) errorNode.hidden = true;
   form.dataset.pageId = page ? String(page.id) : '';
@@ -4679,7 +4740,18 @@ function openKbDialog(page) {
     }
   }
   kbSyncFields();
+  // Черновик — только для новой страницы; правку существующей не подменяем.
+  const draft = page ? null : readDraft('kb');
+  if (draft) {
+    applyFields(form, draft.fields);
+    kbSetDrinkPhoto('serve_here', (draft.fields || {}).serve_here_photo || '');
+    kbSetDrinkPhoto('serve_takeaway', (draft.fields || {}).serve_takeaway_photo || '');
+    kbSyncFields();
+  }
   dialog.showModal();
+  if (draft) {
+    renderDraftNotice(form, 'kb', () => { form.reset(); kbResetDrinkPhotos(); kbSyncFields(); });
+  }
 }
 
 async function submitKbForm(event) {
@@ -4736,6 +4808,7 @@ async function submitKbForm(event) {
       showToast('Страница создана');
     }
     document.querySelector('#kb-page-dialog')?.close();
+    clearDraft('kb');
     await loadKnowledgeBase();
     if (targetId) openKbPage(targetId);
   } catch (error) {
@@ -4894,7 +4967,8 @@ function kbSetDrinkPhoto(field, url) {
   const preview = document.querySelector(`#kb-photo-${field}`);
   const image = preview ? preview.querySelector('img') : null;
   if (image) {
-    if (url) image.src = url; else image.removeAttribute('src');
+    if (url) { image.src = url; image.dataset.mediaUrl = url; }
+    else { image.removeAttribute('src'); delete image.dataset.mediaUrl; }
   }
   if (preview) preview.hidden = !url;
 }
@@ -4938,6 +5012,8 @@ function setupKnowledgeBase() {
   });
   document.querySelector('#kb-add-page')?.addEventListener('click', () => openKbDialog(null));
   document.querySelector('#kb-page')?.addEventListener('click', (event) => {
+    const recipe = event.target.closest('[data-kb-recipe]');
+    if (recipe) { openDrinkCard(Number(recipe.dataset.kbRecipe)); return; }
     const edit = event.target.closest('[data-kb-edit]');
     if (edit) { openKbDialog(kbState.current); return; }
     const remove = event.target.closest('[data-kb-delete]');
@@ -4968,13 +5044,439 @@ function setupKnowledgeBase() {
   }
 }
 
+/* --- Черновики форм (localStorage) ---------------------------------------
+   Планшет общий, поэтому ключ включает id пользователя. TTL — сутки: черновик
+   переживает закрытие модалки и блокировку экрана, но мусор не копится. Один
+   черновик на модуль (перезаписывается). */
+const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
+
+function draftKey(scope) {
+  return `neft-draft:${document.body.dataset.userId || '0'}:${scope}`;
+}
+
+function readDraft(scope) {
+  try {
+    const raw = localStorage.getItem(draftKey(scope));
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !data.savedAt) return null;
+    if (Date.now() - Number(data.savedAt) > DRAFT_TTL_MS) {
+      localStorage.removeItem(draftKey(scope));
+      return null;
+    }
+    return data;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveDraft(scope, data) {
+  try {
+    if (!data) { localStorage.removeItem(draftKey(scope)); return; }
+    localStorage.setItem(draftKey(scope), JSON.stringify({ ...data, savedAt: Date.now() }));
+  } catch (error) {
+    /* Приватный режим — черновики просто не работают. */
+  }
+}
+
+function clearDraft(scope) {
+  try { localStorage.removeItem(draftKey(scope)); } catch (error) { /* приватный режим */ }
+}
+
+/* Поля формы как объект `{name: value}` — годится и анонсам, и базе знаний. */
+function serializeFields(form) {
+  const data = {};
+  Array.from(form.elements).forEach((node) => {
+    if (!node.name || ['file', 'submit', 'button', 'reset'].includes(node.type)) return;
+    if (node.type === 'checkbox') { data[node.name] = node.checked; return; }
+    if (node.type === 'radio') {
+      if (node.checked || !(node.name in data)) data[node.name] = node.checked ? node.value : '';
+      return;
+    }
+    data[node.name] = node.value;
+  });
+  return data;
+}
+
+function applyFields(form, data) {
+  if (!data) return;
+  Array.from(form.elements).forEach((node) => {
+    if (!node.name || !(node.name in data)) return;
+    if (node.type === 'checkbox') { node.checked = Boolean(data[node.name]); return; }
+    if (node.type === 'radio') { node.checked = String(data[node.name]) === node.value; return; }
+    node.value = data[node.name] == null ? '' : String(data[node.name]);
+  });
+}
+
+function clearDraftNotice(form) {
+  form.querySelector('[data-draft-notice]')?.remove();
+}
+
+/* Плашка «черновик восстановлен» внутри формы. */
+function renderDraftNotice(form, scope, onClear) {
+  clearDraftNotice(form);
+  form.insertAdjacentHTML('afterbegin',
+    '<div class="draft-notice" data-draft-notice><span>Черновик восстановлен — можно продолжить с того же места.</span><button class="button button-quiet" type="button" data-draft-clear>Очистить</button></div>');
+  form.querySelector('[data-draft-clear]')?.addEventListener('click', () => {
+    clearDraft(scope);
+    clearDraftNotice(form);
+    if (onClear) onClear();
+  });
+}
+
+/* Автосохранение: debounce на ввод, а также на закрытие модалки и уход в фон
+   (мобильный сценарий «заблокировал телефон» модалку не закрывает). */
+function bindDraftAutosave(form, scope, serialize) {
+  if (!form || form.dataset.draftBound === scope) return;
+  form.dataset.draftBound = scope;
+  let timer = null;
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    saveDraft(scope, serialize());
+  };
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(flush, 400);
+  };
+  form.addEventListener('input', schedule);
+  form.addEventListener('change', schedule);
+  form.closest('dialog')?.addEventListener('close', flush);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+  window.addEventListener('pagehide', flush);
+  return flush;
+}
+
+/* --- Черновик «Описание напитков» (строки, шкалы, заметка, фото) --------- */
+function serializeDrinkDraft() {
+  const items = Array.from(document.querySelectorAll('#drink-items .drink-item-form')).map((row) => {
+    const fields = {};
+    row.querySelectorAll('[data-drink-field]').forEach((node) => {
+      fields[node.dataset.drinkField] = node.type === 'checkbox' ? node.checked : node.value;
+    });
+    const scales = {};
+    row.querySelectorAll('[data-drink-scale]').forEach((node) => {
+      scales[node.dataset.drinkScale] = node.value;
+    });
+    return { category: row.dataset.category, fields, scales };
+  });
+  const photos = {};
+  ['latte_art', 'meme'].forEach((kind) => {
+    photos[kind] = (drinkState.photos[kind] || []).map((entry) => ({ url: entry.url, author_id: entry.author_id }));
+  });
+  const partnerRow = document.querySelector('#drink-partner-row');
+  return {
+    items,
+    note: document.querySelector('#drink-note')?.value || '',
+    point: document.querySelector('#drink-point')?.value || '',
+    partner: document.querySelector('#drink-partner')?.value || '',
+    manual: Boolean(partnerRow && !partnerRow.hidden),
+    photos,
+  };
+}
+
+function restoreDrinkDraft(draft) {
+  const container = document.querySelector('#drink-items');
+  if (!container) return;
+  container.innerHTML = '';
+  (draft.items || []).forEach((entry) => {
+    addDrinkItemRow(entry.category);
+    const row = container.lastElementChild;
+    if (!row) return;
+    Object.entries(entry.fields || {}).forEach(([field, value]) => {
+      const node = row.querySelector(`[data-drink-field="${field}"]`);
+      if (!node) return;
+      if (node.type === 'checkbox') node.checked = Boolean(value);
+      else node.value = value == null ? '' : String(value);
+    });
+    Object.entries(entry.scales || {}).forEach(([attr, value]) => {
+      const node = row.querySelector(`[data-drink-scale="${attr}"]`);
+      if (!node) return;
+      node.value = value;
+      const list = (drinkState.scales || DRINK_FALLBACK_SCALES)[node.dataset.drinkGroup] || [];
+      const out = node.parentElement.querySelector('output');
+      if (out) out.textContent = list[Number(node.value)] || '';
+    });
+  });
+  const note = document.querySelector('#drink-note');
+  if (note) note.value = draft.note || '';
+  const manualRow = document.querySelector('#drink-partner-row');
+  if (manualRow && draft.manual) manualRow.hidden = false;
+  const point = document.querySelector('#drink-point');
+  if (point && draft.point) point.value = draft.point;
+  const partner = document.querySelector('#drink-partner');
+  if (partner && draft.partner !== undefined) partner.value = draft.partner || '';
+  ['latte_art', 'meme'].forEach((kind) => {
+    drinkState.photos[kind] = ((draft.photos || {})[kind] || []).map((entry) => ({
+      url: entry.url, author_id: entry.author_id, author_name: drinkBaristaName(entry.author_id),
+    }));
+  });
+  // Если справочник напарников не загрузился (офлайн), не отфильтровываем фото
+  // по паре — иначе потеряли бы снимки напарника.
+  if (partner && partner.options.length > 1) {
+    refreshDrinkBaristas();
+  } else {
+    drinkState.baristas = drinkBaristas();
+    renderDrinkUploads();
+    renderDrinkPreviews('latte_art');
+    renderDrinkPreviews('meme');
+  }
+  drinkSyncEspresso();
+}
+
+/* Кнопка «Очистить» в черновике: возвращаем форму к состоянию «с нуля». */
+function resetDrinkDraftForm() {
+  const container = document.querySelector('#drink-items');
+  if (container) container.innerHTML = '';
+  addDrinkItemRow('черный кофе');
+  const note = document.querySelector('#drink-note');
+  if (note) note.value = '';
+  drinkState.photos = { latte_art: [], meme: [] };
+  renderDrinkPreviews('latte_art');
+  renderDrinkPreviews('meme');
+}
+
+/* Есть ли в форме что сохранять: пустую форму черновиком не считаем, иначе
+   плашка «черновик восстановлен» всплывала бы после простого открытия модалки. */
+function drinkDraftHasContent(draft) {
+  if (!draft) return false;
+  if (String(draft.note || '').trim()) return true;
+  if (((draft.photos || {}).latte_art || []).length) return true;
+  if (((draft.photos || {}).meme || []).length) return true;
+  if ((draft.items || []).length > 1) return true;
+  return (draft.items || []).some((item) =>
+    Object.values(item.fields || {}).some((value) => value !== '' && value !== false));
+}
+
+/* --- Подключение черновиков к формам ------------------------------------- */
+function setupFormDrafts() {
+  const drinkForm = document.querySelector('#drink-form');
+  if (drinkForm) {
+    drinkState.flushDraft = bindDraftAutosave(drinkForm, 'drink', () => {
+      const draft = serializeDrinkDraft();
+      return drinkDraftHasContent(draft) ? draft : null;
+    });
+  }
+  const kbForm = document.querySelector('#kb-page-form');
+  if (kbForm) {
+    // Правим существующую страницу — черновик не нужен и только мешает.
+    bindDraftAutosave(kbForm, 'kb', () => (kbForm.dataset.pageId ? null : { fields: serializeFields(kbForm) }));
+  }
+  const announcementForm = document.querySelector('#announcement-form');
+  if (announcementForm) {
+    bindDraftAutosave(announcementForm, 'announcement',
+      () => (announcementForm.dataset.announcementId ? null : { fields: serializeFields(announcementForm) }));
+  }
+}
+
+/* --- Просмотр изображений (лайтбокс) ------------------------------------
+   Один диалог на всё приложение: зум (колесо / пинч / двойной тап),
+   панорамирование и свайп по галерее. Жесты — через Pointer Events, поэтому
+   одинаково работают мышью и пальцем. Галерея — ближайший предок с
+   `data-media-gallery`, элементы — с `data-media-url`. */
+const MEDIA_MAX_SCALE = 6;
+const MEDIA_SWIPE_SLOP = 60;
+const MEDIA_TAP_SLOP = 10;
+const mediaState = {
+  items: [], index: 0, scale: 1, x: 0, y: 0,
+  pointers: new Map(), pinchStart: 0, pinchScale: 1,
+  dragOrigin: null, moved: false, lastTap: 0,
+};
+
+function mediaStageRect() {
+  return document.querySelector('#media-viewer-stage')?.getBoundingClientRect() || null;
+}
+
+function mediaApplyTransform() {
+  const image = document.querySelector('#media-viewer-image');
+  if (!image) return;
+  image.style.transform = `translate3d(${mediaState.x}px, ${mediaState.y}px, 0) scale(${mediaState.scale})`;
+}
+
+/* Держим картинку в границах: при увеличении сдвиг не больше её «запаса». */
+function mediaClampPan() {
+  const rect = mediaStageRect();
+  if (!rect) return;
+  const maxX = Math.max(0, (rect.width * (mediaState.scale - 1)) / 2);
+  const maxY = Math.max(0, (rect.height * (mediaState.scale - 1)) / 2);
+  mediaState.x = Math.min(maxX, Math.max(-maxX, mediaState.x));
+  mediaState.y = Math.min(maxY, Math.max(-maxY, mediaState.y));
+}
+
+function mediaResetZoom() {
+  mediaState.scale = 1;
+  mediaState.x = 0;
+  mediaState.y = 0;
+  mediaApplyTransform();
+}
+
+function mediaZoom(factor) {
+  mediaState.scale = Math.min(MEDIA_MAX_SCALE, Math.max(1, mediaState.scale * factor));
+  if (mediaState.scale === 1) { mediaState.x = 0; mediaState.y = 0; }
+  mediaClampPan();
+  mediaApplyTransform();
+}
+
+function mediaRenderItem() {
+  const item = mediaState.items[mediaState.index];
+  if (!item) return;
+  const image = document.querySelector('#media-viewer-image');
+  const count = document.querySelector('#media-viewer-count');
+  const open = document.querySelector('#media-viewer-open');
+  const hint = document.querySelector('#media-viewer-hint');
+  if (image) {
+    image.src = item.url;
+    image.alt = item.caption || 'Просмотр изображения';
+  }
+  if (count) count.textContent = mediaState.items.length > 1 ? `${mediaState.index + 1} / ${mediaState.items.length}` : '';
+  if (open) open.href = item.url;
+  if (hint) hint.hidden = mediaState.items.length < 2;
+  mediaResetZoom();
+}
+
+function mediaStep(delta) {
+  const total = mediaState.items.length;
+  if (total < 2) return;
+  mediaState.index = (mediaState.index + delta + total) % total;
+  mediaRenderItem();
+}
+
+function openMediaViewer(items, index = 0) {
+  const list = (items || [])
+    .map((item) => (typeof item === 'string' ? { url: item } : item))
+    .filter((item) => item && item.url);
+  if (!list.length) return;
+  mediaState.items = list;
+  mediaState.index = Math.max(0, Math.min(Number(index) || 0, list.length - 1));
+  mediaRenderItem();
+  const dialog = document.querySelector('#media-viewer');
+  if (dialog && !dialog.open) dialog.showModal();
+}
+
+function setupMediaViewer() {
+  const dialog = document.querySelector('#media-viewer');
+  const stage = document.querySelector('#media-viewer-stage');
+  if (!dialog || !stage) return;
+  const image = document.querySelector('#media-viewer-image');
+  document.querySelector('#media-viewer-close')?.addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+  dialog.addEventListener('close', () => { mediaState.items = []; mediaState.pointers.clear(); mediaResetZoom(); });
+
+  // Клик по любому изображению в галерее открывает просмотр. Фото оценок и
+  // превью в формах не помечаем в разметке — их (единственное) берём из <img>.
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('button, a')) return;
+    let target = event.target.closest('[data-media-url]');
+    if (!target) {
+      const image = event.target.closest('img');
+      const holder = image && image.closest('#evaluation-photo-preview, .kb-photo-preview');
+      if (!holder || !image.src) return;
+      openMediaViewer([{ url: image.src, caption: image.alt || '' }], 0);
+      return;
+    }
+    const gallery = target.closest('[data-media-gallery]');
+    const nodes = gallery ? Array.from(gallery.querySelectorAll('[data-media-url]')) : [target];
+    openMediaViewer(
+      nodes.map((node) => ({ url: node.dataset.mediaUrl, caption: node.dataset.mediaCaption || '' })),
+      nodes.indexOf(target),
+    );
+  });
+
+  dialog.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowRight') mediaStep(1);
+    else if (event.key === 'ArrowLeft') mediaStep(-1);
+    else if (event.key === '+' || event.key === '=') mediaZoom(1.4);
+    else if (event.key === '-') mediaZoom(1 / 1.4);
+  });
+
+  stage.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    mediaZoom(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  const pointerDistance = () => {
+    const points = Array.from(mediaState.pointers.values());
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  };
+
+  stage.addEventListener('pointerdown', (event) => {
+    stage.setPointerCapture?.(event.pointerId);
+    mediaState.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (mediaState.pointers.size === 1) {
+      mediaState.dragOrigin = { x: event.clientX, y: event.clientY, panX: mediaState.x, panY: mediaState.y };
+      mediaState.moved = false;
+    } else if (mediaState.pointers.size === 2) {
+      mediaState.pinchStart = pointerDistance();
+      mediaState.pinchScale = mediaState.scale;
+    }
+  });
+
+  stage.addEventListener('pointermove', (event) => {
+    const point = mediaState.pointers.get(event.pointerId);
+    if (!point) return;
+    mediaState.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (mediaState.pointers.size >= 2) {
+      if (mediaState.pinchStart > 0) {
+        const factor = pointerDistance() / mediaState.pinchStart;
+        mediaState.scale = Math.min(MEDIA_MAX_SCALE, Math.max(1, mediaState.pinchScale * factor));
+        if (image) image.classList.add('is-dragging');
+        mediaClampPan();
+        mediaApplyTransform();
+      }
+      mediaState.moved = true;
+      return;
+    }
+    const origin = mediaState.dragOrigin;
+    if (!origin) return;
+    const dx = event.clientX - origin.x;
+    const dy = event.clientY - origin.y;
+    if (Math.abs(dx) > MEDIA_TAP_SLOP || Math.abs(dy) > MEDIA_TAP_SLOP) mediaState.moved = true;
+    if (mediaState.scale > 1) {
+      mediaState.x = origin.panX + dx;
+      mediaState.y = origin.panY + dy;
+      mediaClampPan();
+      if (image) image.classList.add('is-dragging');
+      mediaApplyTransform();
+    }
+  });
+
+  const releasePointer = (event) => {
+    mediaState.pointers.delete(event.pointerId);
+    if (mediaState.pointers.size < 2) mediaState.pinchStart = 0;
+    if (image) image.classList.remove('is-dragging');
+    if (mediaState.pointers.size > 0) return;
+    const origin = mediaState.dragOrigin;
+    mediaState.dragOrigin = null;
+    if (!origin) return;
+    const dx = event.clientX - origin.x;
+    const dy = event.clientY - origin.y;
+    if (!mediaState.moved) {
+      // Одиночный тап — ничего; двойной тап — зум.
+      const now = Date.now();
+      if (now - mediaState.lastTap < 320) {
+        mediaState.lastTap = 0;
+        mediaZoom(mediaState.scale > 1 ? 1 / mediaState.scale : 2.5);
+        return;
+      }
+      mediaState.lastTap = now;
+      return;
+    }
+    if (mediaState.scale <= 1.01 && Math.abs(dx) > MEDIA_SWIPE_SLOP && Math.abs(dx) > Math.abs(dy)) {
+      mediaState.x = 0;
+      mediaState.y = 0;
+      mediaStep(dx < 0 ? 1 : -1);
+    }
+  };
+
+  stage.addEventListener('pointerup', releasePointer);
+  stage.addEventListener('pointercancel', releasePointer);
+}
 /* --- Описание напитков -------------------------------------------------- */
 
 const DRINK_POINT_LABELS = { 'ДЕ': 'Декабристов', 'УЯ': 'Университетская', 'другое': 'Другое' };
 const DRINK_ITEM_LABELS = { 'черный кофе': 'Чёрный кофе', 'кофе с молоком': 'Молочный напиток' };
 const DRINK_LABELS = { acidity: 'Кислотность', sweetness: 'Сладость', bitterness: 'Горечь' };
 const drinkState = {
-  items: [], points: [], authors: [], point: '', author: '',
+  items: [], points: [], authors: [], point: '', author: '', state: 'all',
   offset: 0, limit: 20, hasMore: false, loaded: false,
   options: null, shift: null, baristas: [], photos: { latte_art: [], meme: [] }, tab: 'feed',
   memes: { items: [], authors: [], author: '', offset: 0, limit: 30, hasMore: false, loaded: false },
@@ -5001,6 +5503,31 @@ async function openDrinks() {
   if (drinkState.tab === 'memes' && !drinkState.memes.loaded) loadMemes(true);
 }
 
+/* Переход из базы знаний (история рецептов зерна) в конкретную карточку ленты. */
+async function openDrinkCard(descriptionId) {
+  const target = Number(descriptionId);
+  if (!target) return;
+  drinkState.point = '';
+  drinkState.author = '';
+  drinkState.state = 'all';
+  drinkState.loaded = false;
+  setView('drinks');
+  setDrinksTab('feed');
+  await loadDrinks(true);
+  const find = () => document.querySelector(`[data-drink-id="${target}"]`);
+  let card = find();
+  let guard = 0;
+  while (!card && drinkState.hasMore && guard < 6) {
+    guard += 1;
+    await loadDrinks(false);
+    card = find();
+  }
+  if (!card) { showToast('Не удалось найти описание в ленте'); return; }
+  card.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+  card.classList.add('is-highlighted');
+  setTimeout(() => card.classList.remove('is-highlighted'), 2200);
+}
+
 async function loadDrinks(reset = false) {
   const feed = document.querySelector('#drinks-feed');
   if (reset) {
@@ -5012,6 +5539,7 @@ async function loadDrinks(reset = false) {
     const params = new URLSearchParams({ limit: String(drinkState.limit), offset: String(drinkState.offset) });
     if (drinkState.point) params.set('point', drinkState.point);
     if (drinkState.author) params.set('author_id', drinkState.author);
+    if (drinkState.state && drinkState.state !== 'all') params.set('state', drinkState.state);
     const data = await api(`/api/drink-descriptions?${params.toString()}`);
     drinkState.points = data.points || [];
     drinkState.authors = data.authors || [];
@@ -5041,6 +5569,16 @@ function renderDrinkFilters() {
     select.innerHTML = '<option value="">Все</option>' + (drinkState.authors || []).map(
       (author) => `<option value="${author.id}">${escapeHtml(author.name)}</option>`).join('');
     select.value = current;
+  }
+  const states = document.querySelector('#drinks-state-filter');
+  if (states) {
+    const options = [
+      { value: 'all', label: 'Все' },
+      { value: 'unvoted', label: 'Не голосовал' },
+      { value: 'voted', label: 'Голосовал' },
+    ];
+    states.innerHTML = options.map((option) =>
+      `<button class="chip${drinkState.state === option.value ? ' is-selected' : ''}" type="button" data-drink-state="${option.value}">${escapeHtml(option.label)}</button>`).join('');
   }
 }
 
@@ -5093,15 +5631,39 @@ function drinkItemView(item) {
 function drinkPhotosBlock(desc, kind, quiz) {
   const photos = ((desc.photos || {})[kind]) || [];
   if (!photos.length) return '';
-  const figures = photos.map((photo, index) => `
-    <figure class="drink-photo">
+  // Автор на фото раскрываем только после ответа, иначе викторина теряет смысл.
+  // Если викторины нет (одно фото или все от одного бариста) — показываем сразу.
+  const revealed = !quiz || Boolean(quiz.correct_option_id);
+  const figures = photos.map((photo, index) => {
+    const caption = revealed ? drinkPhotoAuthor(desc, photo.author_id) : '';
+    return `
+    <figure class="drink-photo" data-media-url="${escapeHtml(photo.url)}" data-media-caption="${escapeHtml(caption || `Фото ${index + 1}`)}">
       <span class="drink-photo-index">${index + 1}</span>
       <img src="${escapeHtml(photo.url)}" alt="Фото" loading="lazy">
-    </figure>`).join('');
+      ${caption ? `<figcaption class="drink-photo-author">${escapeHtml(caption)}</figcaption>` : ''}
+    </figure>`;
+  }).join('');
   return `<div class="drink-block" data-kind="${kind}">
-    <div class="drink-photos">${figures}</div>
+    <div class="drink-photos" data-media-gallery>${figures}</div>
     ${quiz ? drinkQuizMarkup(quiz) : ''}
   </div>`;
+}
+
+/* Имя автора фото: ищем среди участников смены (автор поста и напарник). */
+function drinkPhotoAuthor(desc, authorId) {
+  if (!authorId) return '';
+  const people = [desc.author, desc.partner].filter(Boolean);
+  const found = people.find((person) => Number(person.id) === Number(authorId));
+  return found ? found.name : '';
+}
+
+/* Статус голосования по викторинам карточки. */
+function drinkVoteBadge(desc) {
+  const quizzes = desc.quizzes || [];
+  if (!quizzes.length) return '';
+  const pending = quizzes.filter((quiz) => !quiz.voted).length;
+  if (!pending) return '<span class="drink-vote-badge is-done">✓ Вы проголосовали</span>';
+  return `<button class="drink-vote-badge is-pending" type="button" data-drink-vote-jump="${desc.id}">Голосовать: ${pending}</button>`;
 }
 
 function drinkCardMarkup(desc) {
@@ -5112,7 +5674,7 @@ function drinkCardMarkup(desc) {
   return `<article class="drink-card" data-drink-id="${desc.id}">
     <header class="drink-card-head">
       <div><strong>${escapeHtml(desc.author.name)}</strong><span class="drink-meta">${escapeHtml(drinkPointLabel(desc.point))}${partner}</span></div>
-      <time class="drink-date">${escapeHtml(formatDrinkDate(desc.created_at))}</time>
+      <div class="drink-card-status">${drinkVoteBadge(desc)}<time class="drink-date">${escapeHtml(formatDrinkDate(desc.created_at))}</time></div>
     </header>
     <div class="drink-card-items">${items}</div>
     ${desc.note ? `<p class="drink-card-note">${escapeHtml(desc.note)}</p>` : ''}
@@ -5167,6 +5729,14 @@ function drinkWidgetSummary(desc) {
   return parts.join(' · ') || 'Описание смены';
 }
 
+function drinkWidgetVote(desc) {
+  const quizzes = desc.quizzes || [];
+  if (!quizzes.length) return '';
+  const pending = quizzes.filter((quiz) => !quiz.voted).length;
+  if (!pending) return '<span class="drinks-widget-vote is-done">✓ Проголосовали</span>';
+  return `<span class="drinks-widget-vote">Голосовать: ${pending}</span>`;
+}
+
 async function loadDrinksWidget() {
   const list = document.querySelector('#drinks-widget-list');
   if (!list) return;
@@ -5182,7 +5752,7 @@ async function loadDrinksWidget() {
         <span class="drinks-widget-point">${escapeHtml(drinkPointLabel(desc.point))}</span>
         <strong>${escapeHtml(desc.author.name)}</strong>
         <span class="drinks-widget-note">${escapeHtml(drinkWidgetSummary(desc))}</span>
-        ${(desc.quizzes || []).length ? '<span class="drinks-widget-vote">Голосовать →</span>' : ''}
+        ${drinkWidgetVote(desc)}
       </button>`).join('');
     list.querySelectorAll('[data-view]').forEach((button) =>
       button.addEventListener('click', () => setView(button.dataset.view)));
@@ -5277,7 +5847,8 @@ function drinkSyncEspresso() {
   const black = rows.find((row) => row.dataset.category === 'черный кофе');
   const source = {};
   if (black) {
-    ['recipe_dose', 'recipe_yield', 'recipe_time', 'recipe_temp'].forEach((field) => {
+    // Зерно копируем вместе с рецептом: молочный напиток на том же эспрессо.
+    ['bean_id', 'recipe_dose', 'recipe_yield', 'recipe_time', 'recipe_temp'].forEach((field) => {
       const input = black.querySelector(`[data-drink-field="${field}"]`);
       source[field] = input ? input.value : '';
     });
@@ -5292,6 +5863,12 @@ function drinkSyncEspresso() {
       if (on) input.value = source[field] ?? '';
       input.disabled = on;
     });
+    // Зерно копируем только когда у эспрессо оно выбрано — иначе не затираем своё.
+    const bean = row.querySelector('[data-drink-field="bean_id"]');
+    if (bean) {
+      if (on && source.bean_id) bean.value = source.bean_id;
+      bean.disabled = on;
+    }
   });
 }
 
@@ -5334,9 +5911,11 @@ async function openDrinkDialog() {
   if (container) container.innerHTML = '';
   const errorNode = document.querySelector('#drink-form-error');
   if (errorNode) errorNode.hidden = true;
+  if (form) clearDraftNotice(form);
+  const draft = readDraft('drink');
   drinkState.photos = { latte_art: [], meme: [] };
   drinkState.baristas = [];
-  resetDrinkPhoto('latte');
+  resetDrinkPhoto('latte_art');
   resetDrinkPhoto('meme');
   renderDrinkUploads();
   const manualRow = document.querySelector('#drink-partner-row');
@@ -5356,14 +5935,22 @@ async function openDrinkDialog() {
     drinkState.scales = Object.assign({}, DRINK_FALLBACK_SCALES, options.scales || {});
     fillDrinkShift(shift, options);
     refreshDrinkBaristas();
+    if (draft) {
+      restoreDrinkDraft(draft);
+      if (form) renderDraftNotice(form, 'drink', resetDrinkDraftForm);
+    }
   } catch (error) {
     if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
     // Фоллбэк: даже без ответа сервера даём заполнить точку и напарника вручную.
     if (manualRow) manualRow.hidden = false;
     if (status) status.textContent = 'Не удалось определить смену — выберите вручную';
     refreshDrinkBaristas();
+    if (draft) {
+      restoreDrinkDraft(draft);
+      if (form) renderDraftNotice(form, 'drink', resetDrinkDraftForm);
+    }
   }
-  addDrinkItemRow('черный кофе');
+  if (!draft) addDrinkItemRow('черный кофе');
 }
 
 function showDrinkError(message) {
@@ -5458,6 +6045,7 @@ async function uploadDrinkPhoto(kind, authorId, files) {
       showDrinkError(error.message);
     }
   }
+  drinkState.flushDraft?.();
 }
 
 async function submitDrinkForm(event) {
@@ -5468,6 +6056,7 @@ async function submitDrinkForm(event) {
   if (submit) submit.disabled = true;
   try {
     const data = await api('/api/drink-descriptions', { method: 'POST', body: JSON.stringify(payload) });
+    clearDraft('drink');
     document.querySelector('#drink-dialog')?.close();
     const xp = data.xp ? Object.values(data.xp).reduce((sum, value) => sum + value, 0) : 0;
     showToast(xp ? `Описание опубликовано · +${xp} опыта` : 'Описание опубликовано');
@@ -5581,13 +6170,17 @@ function renderDrinkPreviews(kind) {
   const container = document.querySelector(`[data-previews="${kind}"]`);
   if (!container) return;
   const entries = drinkState.photos[kind] || [];
-  container.innerHTML = entries.map((entry, index) => `
+  container.dataset.mediaGallery = '';
+  container.innerHTML = entries.map((entry, index) => {
+    const author = entry.author_name || drinkBaristaName(entry.author_id);
+    return `
     <div class="drink-photo-preview">
       <span class="drink-photo-index">${index + 1}</span>
-      <img src="${escapeHtml(entry.url)}" alt="Фото">
-      <span class="drink-photo-author">${escapeHtml(entry.author_name || drinkBaristaName(entry.author_id))}</span>
+      <img src="${escapeHtml(entry.url)}" alt="Фото" data-media-url="${escapeHtml(entry.url)}" data-media-caption="${escapeHtml(author)}">
+      <span class="drink-photo-author">${escapeHtml(author)}</span>
       <button class="button button-quiet" type="button" data-drink-photo-remove="${escapeHtml(kind)}" data-index="${index}">Убрать</button>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function resetDrinkPhoto(kind) {
@@ -5644,7 +6237,7 @@ function renderMemes() {
       grid.innerHTML = '<p class="empty-state">Пока нет мемов смен.</p>';
     } else {
       grid.innerHTML = drinkState.memes.items.map((meme) => `
-        <figure class="meme-card">
+        <figure class="meme-card" data-media-url="${escapeHtml(meme.url)}" data-media-caption="${escapeHtml(`${meme.author.name} · ${drinkPointLabel(meme.point)}`)}">
           <img src="${escapeHtml(meme.url)}" alt="Мем смены" loading="lazy">
           <figcaption><strong>${escapeHtml(meme.author.name)}</strong><span>${escapeHtml(drinkPointLabel(meme.point))} · ${escapeHtml(formatDrinkDate(meme.created_at))}</span></figcaption>
         </figure>`).join('');
@@ -5685,7 +6278,20 @@ function setupDrinks() {
     drinkState.author = event.target.value;
     loadDrinks(true);
   });
+  document.querySelector('#drinks-state-filter')?.addEventListener('click', (event) => {
+    const chip = event.target.closest('[data-drink-state]');
+    if (!chip) return;
+    drinkState.state = chip.dataset.drinkState;
+    renderDrinkFilters();
+    loadDrinks(true);
+  });
   document.querySelector('#drinks-feed')?.addEventListener('click', (event) => {
+    const jump = event.target.closest('[data-drink-vote-jump]');
+    if (jump) {
+      jump.closest('[data-drink-id]')?.querySelector('[data-quiz-id]')
+        ?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+      return;
+    }
     const button = event.target.closest('[data-drink-vote]');
     const card = button ? button.closest('[data-drink-id]') : null;
     if (!button || !card || button.disabled) return;
@@ -5730,6 +6336,7 @@ function setupDrinks() {
     const index = Number(remove.dataset.index);
     drinkState.photos[kind] = (drinkState.photos[kind] || []).filter((_, position) => position !== index);
     renderDrinkPreviews(kind);
+    drinkState.flushDraft?.();
   });
   document.querySelector('#drink-partner')?.addEventListener('change', refreshDrinkBaristas);
   document.querySelector('#drink-manual-toggle')?.addEventListener('click', () => {
@@ -5751,6 +6358,8 @@ function setupDashboard() {
   loadAnnouncements();
   setupKnowledgeBase();
   setupDrinks();
+  setupMediaViewer();
+  setupFormDrafts();
   loadDrinksWidget();
   setupDevelopment();
   setupAchievements();

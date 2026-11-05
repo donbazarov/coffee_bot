@@ -1527,6 +1527,64 @@ body { transition: background-color .3s ease, color .3s ease; }
 
 .drink-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 18px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); }
 .drink-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.drink-card-status { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.drink-vote-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--field-bg);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.drink-vote-badge.is-pending { border-color: var(--accent); background: var(--accent); color: var(--accent-contrast); cursor: pointer; }
+.drink-vote-badge.is-done { border-color: transparent; background: transparent; color: var(--accent); }
+.drink-photos .drink-photo-author {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 1;
+  margin: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(8, 9, 12, .68);
+  color: #f4f4f2;
+  font-size: 11px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drinks-widget-vote.is-done { color: var(--text-soft); }
+.drinks-state-filter { margin-top: 8px; }
+
+/* История рецептов зерна в базе знаний */
+.kb-recipe-history { margin-top: 16px; }
+.kb-recipe-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.kb-recipe-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--field-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+}
+.kb-recipe-row:hover { border-color: var(--accent); }
+.kb-recipe-main { font-size: 13px; font-weight: 600; }
+.kb-recipe-meta { font-size: 11px; color: var(--muted); }
+.drink-card.is-highlighted { outline: 2px solid var(--accent); outline-offset: 2px; }
 .drink-card-head strong { display: block; font-size: 15px; color: var(--text); }
 .drink-meta { display: block; margin-top: 3px; font-size: 11px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
 .drink-date { font: 500 11px/1.4 var(--mono); color: var(--dim); white-space: nowrap; }
@@ -1732,5 +1790,82 @@ body { transition: background-color .3s ease, color .3s ease; }
   .session-score { grid-area: 2 / 1; }
   .session-xp { grid-area: 2 / 2; }
   .session-edit { grid-area: 2 / 3; width: 44px; height: 44px; }
+}
+
+/* --- Просмотр изображений (лайтбокс) ------------------------------------- */
+.media-viewer {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  background: rgba(8, 9, 12, .95);
+  color: #f4f4f2;
+  overflow: hidden;
+}
+.media-viewer::backdrop { background: rgba(4, 5, 7, .8); }
+.media-viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: max(10px, env(safe-area-inset-top)) 14px 8px;
+}
+.media-viewer-count { font: 600 13px/1 var(--mono); color: #cfcfc8; }
+.media-viewer-tools { display: flex; align-items: center; gap: 8px; }
+.media-viewer-tools .button { color: #f4f4f2; border-color: rgba(244, 244, 242, .3); background: transparent; }
+.media-viewer-close { color: #f4f4f2; }
+.media-viewer-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+}
+.media-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transform-origin: center center;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: transform .18s ease-out;
+}
+.media-viewer-image.is-dragging { transition: none; cursor: grabbing; }
+.media-viewer-hint {
+  margin: 0 0 max(12px, env(safe-area-inset-bottom));
+  font-size: 12px;
+  color: #9a9a93;
+  text-align: center;
+}
+.media-viewer-hint[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .media-viewer-image { transition: none; }
+}
+
+/* --- Плашка «черновик восстановлен» в формах ------------------------------ */
+.draft-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--field-bg);
+  font-size: 12px;
+  color: var(--text);
 }
 

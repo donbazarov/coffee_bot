@@ -591,6 +591,72 @@ def kb_page_detail(page_id: int, _: dict[str, Any] = Depends(require_user)) -> d
     return page
 
 
+@kb_router.get("/pages/{page_id}/recipes")
+def kb_page_recipes(page_id: int, limit: int = 20, offset: int = 0,
+                    _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """История рецептов зерна: как его описывали на сменах (для страницы `beans`).
+
+    Данные берём из описаний смен (`drink_description_items.bean_id`) — отдельной
+    таблицы рецептур нет, история формируется сама по мере публикаций.
+    """
+    limit = max(1, min(int(limit or 20), 60))
+    offset = max(0, int(offset or 0))
+    with engine.connect() as connection:
+        page = connection.execute(
+            text("SELECT category FROM kb_pages WHERE id = :id"), {"id": page_id}
+        ).mappings().first()
+        if page is None:
+            raise HTTPException(status_code=404, detail="Страница не найдена")
+        bean = connection.execute(
+            text("SELECT id FROM coffee_beans WHERE page_id = :id"), {"id": page_id}
+        ).mappings().first() if page["category"] == "beans" else None
+        if bean is None:
+            return {"items": [], "has_more": False, "limit": limit, "offset": offset}
+        rows = connection.execute(text("""
+            SELECT i.id AS item_id, i.category, i.drink_id,
+                   i.recipe_dose, i.recipe_yield, i.recipe_water, i.recipe_time, i.recipe_temp,
+                   i.is_espresso_recipe,
+                   d.id AS description_id, d.point, d.shift_date, d.created_at,
+                   d.author_id, COALESCE(u.display_name, u.name) AS author_name,
+                   m.title AS drink_title
+            FROM drink_description_items i
+            JOIN drink_descriptions d ON d.id = i.description_id
+            LEFT JOIN users u ON u.id = d.author_id
+            LEFT JOIN menu_drinks m ON m.id = i.drink_id
+            WHERE i.bean_id = :bean
+              AND (i.recipe_dose IS NOT NULL OR i.recipe_yield IS NOT NULL
+                   OR i.recipe_water IS NOT NULL OR i.recipe_time IS NOT NULL
+                   OR i.recipe_temp IS NOT NULL)
+            ORDER BY d.created_at DESC, d.id DESC, i.position, i.id
+            LIMIT :limit OFFSET :offset
+        """), {"bean": int(bean["id"]), "limit": limit + 1, "offset": offset}).mappings().all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    return {
+        "items": [{
+            "id": int(row["item_id"]),
+            "description_id": int(row["description_id"]),
+            "category": row["category"],
+            "point": row["point"],
+            "shift_date": row["shift_date"],
+            "created_at": row["created_at"],
+            "author": {"id": int(row["author_id"]), "name": row["author_name"]} if row["author_id"] else None,
+            "drink": {"title": row["drink_title"]} if row["drink_title"] else None,
+            "recipe": {
+                "dose": row["recipe_dose"],
+                "yield": row["recipe_yield"],
+                "water": row["recipe_water"],
+                "time": row["recipe_time"],
+                "temp": row["recipe_temp"],
+            },
+            "is_espresso_recipe": bool(row["is_espresso_recipe"]),
+        } for row in rows],
+        "has_more": has_more,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
 @kb_router.post("/pages")
 async def kb_create_page(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
     """Создаёт страницу. Для beans/drinks автоматически заводит запись справочника."""
