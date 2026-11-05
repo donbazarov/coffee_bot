@@ -1921,6 +1921,7 @@ function startShiftDrag(event, cell) {
   document.body.appendChild(ghost);
   shiftDrag = {
     source, ghost, sourceEl: cell, targetEl: null, active: false,
+    dragEl: cell.closest('table'),
     pointerId: event.pointerId, pointerType: event.pointerType,
     originX: event.clientX, originY: event.clientY, holdTimer: 0,
   };
@@ -1936,6 +1937,11 @@ function startShiftDrag(event, cell) {
 function activateShiftDrag() {
   if (!shiftDrag) return;
   shiftDrag.active = true;
+  // Захват указателя ставим только когда перенос реально начался. Если захватить
+  // на pointerdown, браузер перенаправит последующий click на таблицу матрицы,
+  // и одиночный клик по заполненной ячейке (шаблон «Выходной», окно смены)
+  // перестанет работать.
+  try { shiftDrag.dragEl?.setPointerCapture(shiftDrag.pointerId); } catch (error) { /* указателя уже нет */ }
   shiftDrag.ghost.hidden = false;
   shiftDrag.sourceEl?.classList.add('is-drag-source');
   document.body.classList.add('shift-dragging');
@@ -1949,6 +1955,7 @@ function cancelShiftDrag() {
   shiftDrag = null;
   if (!drag) return;
   window.clearTimeout(drag.holdTimer);
+  try { drag.dragEl?.releasePointerCapture(drag.pointerId); } catch (error) { /* не был захвачен */ }
   drag.ghost.remove();
   drag.sourceEl?.classList.remove('is-drag-source');
   drag.targetEl?.classList.remove('is-drop-target');
@@ -6577,10 +6584,7 @@ function setupDashboard() {
     if (!editMode || matrixMode !== 'edit' || event.button > 0) return;
     const cell = event.target.closest('[data-matrix-cell]');
     if (!cell) return;
-    if (!startShiftDrag(event, cell)) return;
-    try {
-      matrix.setPointerCapture(event.pointerId);
-    } catch (error) { /* указателя уже нет — перенос отработает на pointermove/up */ }
+    startShiftDrag(event, cell);
   });
   matrix?.addEventListener('pointermove', (event) => {
     const drag = shiftDrag;
