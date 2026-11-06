@@ -2820,6 +2820,8 @@ function setView(name) {
     // В режиме чата документ прибит к видимой области (см. app.css) —
     // прокрутки у него нет, поэтому и scrollTo(0, 0) больше не нужен.
     document.documentElement.classList.toggle('is-chat-open', isChat);
+    // Ушли из чата — снимаем и «клавиатурный» режим дока (ставит chat.js).
+    if (!isChat) document.documentElement.classList.remove('is-keyboard-open');
     document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('is-active', button.dataset.view === name));
     // Нижний док: пункты чата подсвечивает сам chat.js, при уходе с чата гасим их.
     if (name !== 'chat') document.querySelectorAll('[data-chat-open]').forEach((button) => button.classList.remove('is-active'));

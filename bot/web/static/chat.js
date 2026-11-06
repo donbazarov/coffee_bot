@@ -642,10 +642,19 @@
   const mobileQuery = window.matchMedia ? window.matchMedia('(max-width: 760px)') : null;
   const isMobile = () => Boolean(mobileQuery && mobileQuery.matches);
 
+  /* Клавиатура на телефоне: пока фокус в поле ввода, нижний док уезжает
+     (html.is-keyboard-open в app.css), чтобы не занимать место над
+     клавиатурой. Высоту чата по-прежнему считает только CSS. */
+  function setKeyboardOpen(open) {
+    if (!isMobile()) return;
+    document.documentElement.classList.toggle('is-keyboard-open', open);
+  }
+
   /* Высоту чата считает ТОЛЬКО CSS (блок @media в app.css): документ прибит к
      100dvh, скроллится лишь лента сообщений, а клавиатуру учитывает
-     interactive-widget=resizes-content. Ни одного слушателя focus/blur/resize
-     для подгонки высоты экрана здесь нет — они конфликтовали с вёрсткой. */
+     interactive-widget=resizes-content. Слушателей resize для подгонки высоты
+     экрана здесь нет — они конфликтовали с вёрсткой. focus/blur поля ввода
+     лишь переключают класс is-keyboard-open (док уезжает), высоту не трогают. */
 
   /* --- Диалог опроса ------------------------------------------------------ */
 
@@ -845,6 +854,7 @@
     state.peerId = null;
     state.roomId = null;
     stopEdit();
+    setKeyboardOpen(false);
     closeMentions();
     closeAttachMenu();
     closeMessageMenu();
@@ -872,6 +882,9 @@
   function back() {
     state.threadOpen = false;
     stopEdit();
+    // Уходим из треда — на телефоне заодно прячем клавиатуру и возвращаем док.
+    if (isMobile()) el.input.blur();
+    setKeyboardOpen(false);
     closeMentions();
     closeAttachMenu();
     closeMessageMenu();
@@ -1135,8 +1148,10 @@
     });
     el.input.addEventListener('focus', () => {
       if (!isMobile()) return;
+      setKeyboardOpen(true);
       setTimeout(() => { autoGrow(); scrollToBottom(); }, 80);
     });
+    el.input.addEventListener('blur', () => setKeyboardOpen(false));
     if (el.mentions) {
       el.mentions.addEventListener('mousedown', (event) => {
         const button = event.target.closest('[data-mention-index]');
