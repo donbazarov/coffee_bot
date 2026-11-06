@@ -7,8 +7,9 @@
 Модель данных:
 
 * `kb_pages` — дерево страниц (Notion-lite): `parent_id` строит иерархию,
-  `category` делит базу на разделы (`beans`, `drinks`, `wiki`, `standards`),
-  `content_json` хранит тело страницы (Markdown или JSON-строку).
+  `category` делит базу на разделы (системные `beans`/`drinks` и кастомные,
+  задаваемые в панели управления), `content_json` хранит тело страницы
+  (Markdown или JSON-строку).
 * `coffee_beans` — справочник зерна, привязанный к странице (`page_id`);
   `roast_type` хранит один или несколько типов обжарки через запятую (`espresso`,
   `filter`, `omni`).
@@ -51,9 +52,15 @@ kb_router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 # Псевдоним, чтобы имя совпадало с ТЗ.
 router = kb_router
 
-# Разделы базы знаний (совпадает с kb_pages.category). Порядок задаёт оглавление
-# в интерфейсе: справка (вики/стандарты) идёт выше справочников напитков и зерна.
-CATEGORY_KEYS = ("wiki", "standards", "beans", "drinks")
+# Системные разделы: их ключи (`kb_pages.category`) привязаны к другим модулям
+# (зерно — оценки/рецепты, напитки — описание напитков), поэтому ключи beans/drinks
+# фиксированы, меняется только подпись. Прочие разделы — кастомные; их список
+# настраивается в панели управления (`SECTIONS`, формат `ключ=Название`).
+SYSTEM_SECTIONS = (("beans", "Зерно"), ("drinks", "Напитки"))
+SYSTEM_SECTION_KEYS = tuple(key for key, _ in SYSTEM_SECTIONS)
+# Разделы по умолчанию для уже работающих баз: прежние «вики» и «стандарты»
+# остаются доступными, поэтому миграция данных не нужна.
+DEFAULT_SECTIONS = ("wiki=Вики", "standards=Стандарты")
 # Тип обжарки зерна (coffee_beans.roast_type).
 BEAN_ROAST_TYPES = ("espresso", "filter", "omni")
 # Категории меню напитков (menu_drinks.category).
@@ -71,6 +78,7 @@ MAX_TAGS = 12
 modules.register_defaults("kb", {
     "MAX_TITLE": MAX_TITLE, "MAX_SLUG": MAX_SLUG, "MAX_TEXT": MAX_TEXT,
     "MAX_TAG": MAX_TAG, "MAX_TAGS": MAX_TAGS,
+    "SECTIONS": DEFAULT_SECTIONS,
     "BEAN_ROAST_TYPES": BEAN_ROAST_TYPES, "DRINK_CATEGORIES": DRINK_CATEGORIES,
 })
 
@@ -78,6 +86,49 @@ modules.register_defaults("kb", {
 def _cfg(key: str) -> Any:
     """Редактируемая настройка модуля «База знаний» (панель управления)."""
     return modules.setting("kb", key)
+
+
+# --- Разделы базы знаний --------------------------------------------------- #
+#
+# Список разделов собирается на лету из настройки `SECTIONS` (панель управления)
+# и системных `beans`/`drinks`. Это единый источник истины и для валидации
+# `kb_pages.category`, и для оглавления, отдаваемого фронтенду в `/api/kb/pages`.
+
+
+def _section_entries() -> list[dict[str, Any]]:
+    """Кастомные разделы из настроек: `("wiki=Вики", ...)` → `{"key", "label"}`.
+
+    Поддерживаем два формата записи: `ключ=Название` (ключ стабилен) и просто
+    `Название` (ключ получаем транслитом). Системные ключи (`beans`/`drinks`) и
+    дубли молча пропускаем — системные разделы всегда доступны отдельно.
+    """
+    entries: list[dict[str, Any]] = []
+    seen = set(SYSTEM_SECTION_KEYS)
+    for item in _cfg("SECTIONS") or ():
+        prefix, separator, label = str(item).partition("=")
+        key, label = (prefix.strip(), label.strip()) if separator else ("", prefix.strip())
+        key = _clean_slug(key) or _slugify(label)
+        if not key or not label or key in seen:
+            continue
+        seen.add(key)
+        entries.append({"key": key, "label": label[:60], "system": False})
+    return entries
+
+
+def kb_sections() -> list[dict[str, Any]]:
+    """Оглавление базы знаний: кастомные разделы, ниже — системные (зерно, напитки)."""
+    system = [{"key": key, "label": label, "system": True} for key, label in SYSTEM_SECTIONS]
+    return _section_entries() + system
+
+
+def section_keys() -> tuple[str, ...]:
+    """Допустимые значения `kb_pages.category` (кастомные + системные разделы)."""
+    return tuple(section["key"] for section in kb_sections())
+
+
+def _section_labels() -> str:
+    """Подписи разделов для текста ошибок валидации."""
+    return ", ".join(section["label"] for section in kb_sections())
 
 # Каталог фото подач напитков (не в git) — как аватары, чат и фото оценок.
 _KB_PHOTOS_DIR: Path | None = None
@@ -552,8 +603,8 @@ def create_page(engine: Engine, author_id: int, payload: dict[str, Any]) -> int:
     if not isinstance(payload, dict):
         raise ValueError("Ожидался объект страницы")
     category = _clean(payload.get("category"), 32)
-    if category not in CATEGORY_KEYS:
-        raise ValueError("Раздел: " + ", ".join(CATEGORY_KEYS))
+    if category not in section_keys():
+        raise ValueError("Раздел: " + _section_labels())
     title = _clean(payload.get("title"), _cfg("MAX_TITLE"))
     if not title:
         raise ValueError("Заголовок обязателен")
@@ -594,8 +645,8 @@ def update_page(engine: Engine, page_id: int, payload: dict[str, Any]) -> bool:
     category = current["category"]
     if payload.get("category") is not None:
         category = _clean(payload.get("category"), 32)
-        if category not in CATEGORY_KEYS:
-            raise ValueError("Раздел: " + ", ".join(CATEGORY_KEYS))
+        if category not in section_keys():
+            raise ValueError("Раздел: " + _section_labels())
     title = _clean(payload.get("title"), _cfg("MAX_TITLE")) or current["title"]
 
     if payload.get("slug"):
@@ -672,10 +723,19 @@ async def _json_object(request: Request) -> dict[str, Any]:
 @kb_router.get("/pages")
 def kb_list_pages(category: str | None = None, q: str | None = None,
                   _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Список страниц. Фильтры: `?category=beans|drinks|wiki|standards` и `?q=<поиск>`."""
-    if category is not None and category not in CATEGORY_KEYS:
+    """Список страниц. Фильтры: `?category=<ключ раздела>` и `?q=<поиск>`.
+
+    Оглавление (`sections`) отдаём вместе со списком, чтобы фронтенд строил
+    фильтры и выпадающий список разделов из настроек панели управления, а не из
+    константы в коде.
+    """
+    if category is not None and category not in section_keys():
         raise HTTPException(status_code=422, detail="Неизвестный раздел")
-    return {"items": list_pages(engine, category, q), "categories": list(CATEGORY_KEYS)}
+    return {
+        "items": list_pages(engine, category, q),
+        "sections": kb_sections(),
+        "categories": list(section_keys()),
+    }
 
 
 @kb_router.get("/pages/{page_id}")

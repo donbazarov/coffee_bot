@@ -151,6 +151,8 @@ SETTINGS_SCHEMA: dict[str, tuple[dict[str, Any], ...]] = {
         {"key": "MAX_TEXT", "label": "Макс. длина текста страницы", "type": "int", "min": 1000, "max": 200000},
         {"key": "MAX_TAG", "label": "Макс. длина тега", "type": "int", "min": 1, "max": 120},
         {"key": "MAX_TAGS", "label": "Макс. число тегов", "type": "int", "min": 1, "max": 50},
+        {"key": "SECTIONS", "label": "Разделы базы знаний (кроме «Зерно»/«Напитки»)", "type": "list",
+         "hint": "через запятую как ключ=Название, напр. wiki=Вики, standards=Стандарты"},
         {"key": "BEAN_ROAST_TYPES", "label": "Типы обжарки зерна", "type": "list",
          "hint": "через запятую, напр. espresso, filter, omni"},
         {"key": "DRINK_CATEGORIES", "label": "Категории напитков", "type": "list",

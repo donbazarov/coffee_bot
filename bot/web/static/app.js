@@ -4376,19 +4376,27 @@ function setupAnnouncements() {
 }
 
 /* --- База знаний (Notion-lite) --------------------------------------------
-   Разделы: зерно (beans), напитки (drinks), вики (wiki), стандарты (standards).
-   Дерево строится из parent_id, чтение доступно всем сотрудникам, а правка —
-   только senior/mentor (managerRole); запись повторно проверяет бэкенд. */
+   Разделы задаются на сервере (настройка «kb» в панели управления): «Зерно»
+   (beans) и «Напитки» (drinks) — системные (привязаны к другим модулям),
+   остальные — кастомные. Список приходит в `/api/kb/pages` (`sections`) и
+   хранится в `kbState.sections`; KB_SECTIONS — запасной набор до первой
+   загрузки. Дерево строится из parent_id, чтение доступно всем сотрудникам,
+   а правка — только senior/mentor (managerRole); запись повторно проверяет
+   бэкенд. */
 
 const CACHE_KEY_KB_LIST = 'neft-cache:kb-list';
 const CACHE_KEY_KB_PAGE = 'neft-cache:kb-page';
 
-const KB_CATEGORIES = [
-  { key: 'wiki', label: 'Вики' },
-  { key: 'standards', label: 'Стандарты' },
-  { key: 'beans', label: 'Зерно' },
-  { key: 'drinks', label: 'Напитки' },
+// Системные ключи совпадают с серверными (SYSTEM_SECTIONS); кастомные разделы
+// подтянутся из `/api/kb/pages`. Здесь — запасной набор для первого (в т.ч.
+// офлайн) показа, пока серверный список ещё не получен.
+const KB_SECTIONS = [
+  { key: 'wiki', label: 'Вики', system: false },
+  { key: 'standards', label: 'Стандарты', system: false },
+  { key: 'beans', label: 'Зерно', system: true },
+  { key: 'drinks', label: 'Напитки', system: true },
 ];
+const KB_SYSTEM_KEYS = ['beans', 'drinks'];
 const KB_CATEGORY_ALL = 'all';
 const KB_ROAST_LABELS = { espresso: 'Эспрессо', filter: 'Фильтр', omni: 'Омни' };
 
@@ -4419,7 +4427,8 @@ const KB_MAX_TAG_LEN = 40;
 
 const kbState = {
   items: [],
-  categories: KB_CATEGORIES.map((item) => item.key),
+  sections: KB_SECTIONS.slice(),
+  categories: KB_SECTIONS.map((item) => item.key),
   filter: KB_CATEGORY_ALL,
   query: '',
   selectedId: null,
@@ -4439,8 +4448,36 @@ const kbState = {
 const kbNav = { busy: false, pending: 0 };
 
 function kbCategoryLabel(key) {
-  const found = KB_CATEGORIES.find((item) => item.key === key);
+  const found = kbState.sections.find((item) => item.key === key);
   return found ? found.label : key;
+}
+
+/* Системный раздел («Зерно»/«Напитки»): у него своя карточка и отдельные поля;
+   кастомные разделы — обычный текстовый раздел с редактором. */
+function kbIsSystemSection(key) {
+  return KB_SYSTEM_KEYS.includes(key);
+}
+
+/* Применяет разделы с сервера: подписи для фильтров/заголовков и ключи для
+   фильтрации дерева. Пустой список игнорируем — остаётся текущий (запасной). */
+function kbApplySections(sections) {
+  if (!Array.isArray(sections) || !sections.length) return;
+  kbState.sections = sections
+    .filter((item) => item && item.key)
+    .map((item) => ({ key: String(item.key), label: item.label || String(item.key), system: Boolean(item.system) }));
+  kbState.categories = kbState.sections.map((item) => item.key);
+}
+
+/* Пересобирает выпадающий список разделов формы (источник — kbState.sections). */
+function kbRenderCategorySelect() {
+  const select = document.querySelector('#kb-field-category');
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = kbState.sections
+    .map((item) => `<option value="${escapeHtml(item.key)}">${escapeHtml(item.label)}</option>`)
+    .join('');
+  if (kbState.sections.some((item) => item.key === previous)) select.value = previous;
+  else select.selectedIndex = 0;
 }
 
 function kbPantoneHex(value) {
@@ -5072,18 +5109,21 @@ async function loadKnowledgeBase() {
   const cached = readCache(CACHE_KEY_KB_LIST);
   if (cached && Array.isArray(cached.items)) {
     kbState.items = cached.items;
-    if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
+    if (Array.isArray(cached.sections) && cached.sections.length) kbApplySections(cached.sections);
+    else if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
     kbFilterChips();
+    kbRenderCategorySelect();
     kbRenderTagSuggestions();
     renderKbTree();
   }
   try {
     const data = await api('/api/kb/pages');
     kbState.items = data.items || [];
-    if (Array.isArray(data.categories) && data.categories.length) kbState.categories = data.categories;
-    writeCache(CACHE_KEY_KB_LIST, { items: kbState.items, categories: kbState.categories });
+    kbApplySections(data.sections);
+    writeCache(CACHE_KEY_KB_LIST, { items: kbState.items, sections: kbState.sections });
     writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     kbFilterChips();
+    kbRenderCategorySelect();
     kbRenderTagSuggestions();
     renderKbTree();
     return true;
@@ -5191,6 +5231,10 @@ function kbSyncFields() {
   form.querySelectorAll('[data-kb-for]').forEach((field) => {
     field.hidden = !String(field.dataset.kbFor).split(/\s+/).includes(category);
   });
+  // Поле текста показываем для любого кастомного (несистемного) раздела.
+  form.querySelectorAll('[data-kb-for-custom]').forEach((field) => {
+    field.hidden = kbIsSystemSection(category);
+  });
   const hidden = document.querySelector('#kb-field-pantone');
   if (category === 'beans' && hidden && !hidden.value) kbSelectPantone(KB_PANTONE[0].value);
   else kbSyncPantoneCustom();
@@ -5209,6 +5253,7 @@ function openKbDialog(page) {
   if (!dialog || !form) return;
   kbRenderPantone();
   form.reset();
+  kbRenderCategorySelect();
   kbResetDrinkPhotos();
   clearDraftNotice(form);
   const errorNode = document.querySelector('#kb-form-error');
@@ -5695,7 +5740,7 @@ function kbSyncEditorForCategory() {
   const form = document.querySelector('#kb-page-form');
   if (!form) return;
   const category = form.elements.category.value;
-  const usesEditor = category === 'wiki' || category === 'standards';
+  const usesEditor = !kbIsSystemSection(category);
   const canUseEditor = kbEditorAvailable();
   const fallback = document.querySelector('#kb-editor-fallback');
   const mount = document.querySelector('#kb-editor');
@@ -6001,6 +6046,7 @@ function setupKnowledgeBase() {
   setupKbTreeFab();
   const form = document.querySelector('#kb-page-form');
   if (form) {
+    kbRenderCategorySelect();
     form.elements.category.addEventListener('change', () => { kbSyncFields(); kbSyncEditorForCategory(); });
     form.addEventListener('submit', submitKbForm);
   }
