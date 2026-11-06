@@ -4199,8 +4199,9 @@ function setupAnnouncements() {
       if (errorNode) { errorNode.textContent = error.message; errorNode.hidden = false; }
     }
   });
+  // Закрытие — только кнопками .dialog-close: клик по краю окна не должен
+  // закрывать форму (на десктопе это сплошные случайные промахи).
   document.querySelectorAll('#announcement-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
-  dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
 
   const categoryDialog = document.querySelector('#announcement-category-dialog');
   const categoryForm = document.querySelector('#announcement-category-form');
@@ -4223,7 +4224,6 @@ function setupAnnouncements() {
     }
   });
   document.querySelectorAll('#announcement-category-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => categoryDialog?.close()));
-  categoryDialog?.addEventListener('click', (event) => { if (event.target === categoryDialog) categoryDialog.close(); });
 
   // Свайп по слайд-шоу (как в Instagram): карточка следует за пальцем, а на
   // отпускании дощёлкивает к соседней. Пока тянем — автослайд на паузе.
@@ -4333,7 +4333,6 @@ function setupAnnouncements() {
     } catch { if (status) status.textContent = event.currentTarget.dataset.url || ''; }
   });
   document.querySelectorAll('#announcements-feed-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => feedDialog?.close()));
-  feedDialog?.addEventListener('click', (event) => { if (event.target === feedDialog) feedDialog.close(); });
 
   document.querySelector('#push-enable')?.addEventListener('click', enablePush);
   document.querySelector('#push-disable')?.addEventListener('click', disablePush);
@@ -6064,7 +6063,6 @@ function setupMediaViewer() {
   if (dialog.open) dialog.close();
   const image = document.querySelector('#media-viewer-image');
   document.querySelector('#media-viewer-close')?.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
   dialog.addEventListener('close', () => { mediaState.items = []; mediaState.pointers.clear(); mediaResetZoom(); });
 
   // Клик по любому изображению в галерее открывает просмотр. Фото оценок и
@@ -7164,8 +7162,7 @@ function setupDashboard() {
     dialog.showModal();
   };
   document.querySelector('#add-user-button')?.addEventListener('click', () => setDialogMode());
-  document.querySelectorAll('.dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
-  dialog?.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+  document.querySelectorAll('#user-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
 
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -7486,8 +7483,9 @@ function setupDashboard() {
     }
   });
 
+  // Все диалоги закрываются только кнопками .dialog-close (или Esc): клик по
+  // краю окна/подложке больше не закрывает форму.
   document.querySelectorAll('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
-  document.querySelectorAll('dialog').forEach((dialog) => dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); }));
 
   updateEditControls();
   loadPreferences().then(() => {

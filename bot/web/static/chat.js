@@ -651,7 +651,6 @@
     document.querySelectorAll('#poll-dialog .dialog-close').forEach((button) => {
       button.addEventListener('click', () => pollDialog?.close());
     });
-    pollDialog?.addEventListener('click', (event) => { if (event.target === pollDialog) pollDialog.close(); });
   }
 
   /* --- Приватные темы ----------------------------------------------------- */
@@ -1464,7 +1463,6 @@
       openRoomDialog(roomById(button.dataset.roomEdit) || { id: Number(button.dataset.roomEdit), name: '' });
     });
     document.querySelectorAll('#room-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => roomDialog?.close()));
-    roomDialog?.addEventListener('click', (event) => { if (event.target === roomDialog) roomDialog.close(); });
     roomForm?.addEventListener('submit', submitRoom);
     roomVisibility?.querySelectorAll('[data-room-visibility]').forEach((button) => {
       button.addEventListener('click', async () => {
