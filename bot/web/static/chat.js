@@ -88,6 +88,7 @@
     mentionIndex: 0,
     pageItems: [],       // страницы базы знаний для подсказки `@`
     pageQuery: null,     // запрос, под который получены pageItems
+    pageLoading: false,  // поиск статей ещё идёт (попап нельзя закрывать)
     pageSeq: 0,          // защита от «опоздавших» ответов поиска
     roomVisibility: 'all',
     attachMenuOpen: false,
@@ -322,6 +323,7 @@
     state.mentionIndex = 0;
     state.pageItems = [];
     state.pageQuery = null;
+    state.pageLoading = false;
     state.pageSeq += 1;              // «опоздавшие» ответы поиска уже не нужны
     clearTimeout(pageSearchTimer);
     if (!el.mentions) return;
@@ -334,11 +336,13 @@
   function requestPageTargets(needle) {
     state.pageQuery = needle;
     state.pageItems = [];
+    state.pageLoading = true;
     const seq = ++state.pageSeq;
     clearTimeout(pageSearchTimer);
     pageSearchTimer = setTimeout(async () => {
       const items = await kbSearchPages(needle);
       if (seq !== state.pageSeq) return;
+      state.pageLoading = false;
       state.pageItems = Array.isArray(items) ? items : [];
       if (mentionQuery()) renderMentions();
     }, 150);
@@ -351,9 +355,10 @@
     const needle = context.query.toLowerCase();
     // Статьи ищем на сервере (с дебаунсом), людей — в памяти: контактов немного.
     if (state.pageQuery !== needle) requestPageTargets(needle);
-    const pages = state.pageQuery === needle
-      ? state.pageItems.filter((page) => !needle || String(page.title || '').toLowerCase().includes(needle))
-      : [];
+    // Результат сервера не перефильтровываем: он ищет и по тегам, и по
+    // справочнику — локальная проверка по заголовку выбрасывала бы часть
+    // совпадений. `pageQuery` лишь отсекает ответ на устаревший запрос.
+    const pages = state.pageQuery === needle ? state.pageItems : [];
     // Сначала те, чьё имя или @-handle начинается с набранного, потом остальные.
     const people = state.contacts
       .map((person) => ({
@@ -370,11 +375,23 @@
         return rank(a) - rank(b) || a.name.localeCompare(b.name, 'ru');
       })
       .slice(0, 6);
+    const pageRows = pages.slice(0, 5);
+    const personRows = people.slice(0, pageRows.length ? 4 : 5);
     const items = [
-      ...pages.slice(0, 4).map((page) => ({ kind: 'page', key: `p${Number(page.id)}`, page })),
-      ...people.map((entry) => ({ kind: 'user', key: `u${Number(entry.person.id)}`, person: entry.person, handle: entry.handle })),
+      ...pageRows.map((page) => ({ kind: 'page', key: `p${Number(page.id)}`, page })),
+      ...personRows.map((entry) => ({ kind: 'user', key: `u${Number(entry.person.id)}`, person: entry.person, handle: entry.handle })),
     ];
-    if (!items.length) { closeMentions(); return; }
+    if (!items.length) {
+      // Статьи ещё ищутся — попап не закрываем. Иначе он «пропадает» на втором
+      // символе: сотрудников с таким началом имени нет, а ответ поиска ещё в пути.
+      if (!state.pageLoading) { closeMentions(); return; }
+      state.mentionItems = [];
+      state.mentionIndex = 0;
+      el.mentions.innerHTML = '<p class="chat-mention-group">База знаний</p>'
+        + '<p class="chat-mention-empty">Ищем статью…</p>';
+      el.mentions.hidden = false;
+      return;
+    }
     // Страницы приезжают позже людей: держим подсветку на том же пункте, чтобы
     // Enter не срабатывал по внезапно подменившемуся элементу.
     const previousKey = (state.mentionItems[state.mentionIndex] || {}).key || '';

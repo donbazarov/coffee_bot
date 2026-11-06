@@ -2658,3 +2658,6 @@ body { transition: background-color .3s ease, color .3s ease; }
 .chat-mention-icon { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; color: var(--muted); }
 .chat-mention-icon .icon { width: 16px; height: 16px; }
 
+/* Строка «Ищем статью…»: подсказка остаётся на экране, пока не пришёл ответ. */
+.chat-mention-empty { margin: 0; padding: 8px 9px; color: var(--dim); font-size: 12px; }
+

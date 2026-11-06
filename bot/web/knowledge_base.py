@@ -138,6 +138,14 @@ def _section_labels() -> str:
     """Подписи разделов для текста ошибок валидации."""
     return ", ".join(section["label"] for section in kb_sections())
 
+
+def _link_rank(title: str, needle: str) -> int:
+    """Релевантность подсказки `@`: 0 — заголовок с запроса, 1 — внутри, 2 — прочее."""
+    lowered = title.lower()
+    if lowered.startswith(needle):
+        return 0
+    return 1 if needle in lowered else 2
+
 # Каталог фото подач напитков (не в git) — как аватары, чат и фото оценок.
 _KB_PHOTOS_DIR: Path | None = None
 KB_PHOTO_MAX_BYTES = 8 * 1024 * 1024
@@ -344,11 +352,12 @@ def _clean_int(value: Any) -> int | None:
 def _prepare_content(raw: str, limit: int) -> str | None:
     """Готовит текст к сохранению.
 
-    Ссылки на другие страницы (`@[Заголовок](kb:12)`) приводим к актуальным
-    заголовкам, а обрезку по `MAX_TEXT` делаем так, чтобы не разорвать маркер.
+    Подпись ссылки на другую страницу (`@[статье о чае](kb:3)`) — авторский
+    текст, поэтому не переписывается; снимаются только переходы на удалённые
+    страницы. Обрезку по `MAX_TEXT` делаем так, чтобы не разорвать маркер.
     """
     value = page_links.truncate_safe(raw, limit)
-    value = page_links.refresh_titles(engine, value)
+    value = page_links.repair_links(engine, value)
     return page_links.truncate_safe(value, limit) or None
 
 
@@ -764,10 +773,15 @@ def kb_link_targets(q: str | None = None, limit: int = 8,
     """Подсказки для ссылок через `@` в статьях, анонсах и чате.
 
     Отдаём только то, что нужно выпадающему списку: id, заголовок и раздел.
-    Поиск — тот же, что у оглавления (`list_pages`), поэтому подсказки
-    совпадают с тем, что сотрудник видит в разделе «База знаний».
+    Поиск — тот же, что у оглавления (`list_pages`: заголовок, теги, справочник),
+    но результаты сортируем по релевантности: совпадение в заголовке важнее
+    совпадения по тегу, иначе в короткий список попадало бы «не то».
     """
     limit = max(1, min(int(limit), 20))
+    needle = (q or "").strip().lower()
+    items = list_pages(engine, None, q)
+    if needle:
+        items.sort(key=lambda item: _link_rank(str(item["title"]), needle))
     return {
         "items": [
             {
@@ -776,7 +790,7 @@ def kb_link_targets(q: str | None = None, limit: int = 8,
                 "category": item["category"],
                 "category_label": _section_label(item["category"]),
             }
-            for item in list_pages(engine, None, q)[:limit]
+            for item in items[:limit]
         ],
     }
 

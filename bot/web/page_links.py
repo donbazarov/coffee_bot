@@ -7,13 +7,16 @@ Markdown-строке, и в JSON блоков Editor.js, и в `TEXT` из SQLi
 БД менять не нужно, а клиентский рендер (`kbLinkify` в `app.js`) превращает его
 в ссылку `/?view=kb&page=12`.
 
+Подпись ссылки — свободный текст автора: `@[статье о чае](kb:3)` ведёт на
+страницу 3, как бы она ни называлась. Поэтому при сохранении подпись НЕ
+переписывается — иначе авторская формулировка терялась бы при публикации.
+
 Серверу остаются три задачи:
 
 * `plain_text` — снять маркеры там, где текст уходит в плейн-текст (push и
   `.ics`-фид): `@[Заголовок](kb:12)` → `Заголовок`;
-* `refresh_titles` — при сохранении подтянуть актуальные заголовки страниц
-  (переименование статьи обновляет ссылки на неё, как в Notion), а ссылки на
-  удалённые страницы деградируют до простого текста;
+* `repair_links` — ссылки на удалённые страницы деградируют до простого текста
+  (без «мёртвого» перехода); живые ссылки остаются как есть;
 * `truncate_safe` — обрезка по лимиту, которая не рвёт маркер пополам.
 
 Модуль изолирован, как `modules.py`: только регулярки и чтение `kb_pages`.
@@ -30,19 +33,6 @@ from sqlalchemy.engine import Engine
 # `@[Заголовок](kb:12)`. Заголовок без `]` и переводов строк — так регэкспе
 # достаточно, а вставка на клиенте чистит недопустимые символы заранее.
 PAGE_LINK_RE = re.compile(r"@\[([^\]\n]{1,200})\]\(kb:(\d{1,12})\)")
-
-MAX_TITLE = 200
-
-
-def sanitize_title(value: Any, limit: int = MAX_TITLE) -> str:
-    """Чистит заголовок для маркера.
-
-    Убираем `[]()` (они ломают разбор), плюс HTML-спецсимволы: в блоках
-    Editor.js текст сохраняется как HTML, и `&`/`<` дали бы двойное
-    экранирование. Клиент чистит так же (`kbPageLinkTitle`).
-    """
-    text_value = re.sub(r"[\[\]()<>&\n\r]+", " ", str(value or ""))
-    return " ".join(text_value.split())[:limit]
 
 
 def page_ids(value: Any) -> set[int]:
@@ -67,12 +57,12 @@ def truncate_safe(value: Any, limit: int) -> str:
     return cut
 
 
-def refresh_titles(database_engine: Engine, value: Any) -> str:
-    """Приводит подписи ссылок к текущим заголовкам страниц.
+def repair_links(database_engine: Engine, value: Any) -> str:
+    """Снимает переходы на удалённые страницы, сохраняя подпись автора.
 
-    Переименовали статью — текст ссылок на неё в других статьях обновляется при
-    их следующем сохранении; удалили страницу — ссылка становится обычным
-    текстом (без «мёртвого» перехода).
+    Подписи существующих ссылок не трогаем: `@[статье о чае](kb:3)` — это
+    формулировка автора, и после сохранения она должна остаться такой, какой её
+    написали, даже если сама страница называется иначе. Переход всё равно по id.
     """
     text_value = str(value or "")
     ids = page_ids(text_value)
@@ -80,21 +70,18 @@ def refresh_titles(database_engine: Engine, value: Any) -> str:
         return text_value
     with database_engine.connect() as connection:
         rows = connection.execute(
-            text("SELECT id, title FROM kb_pages WHERE id IN :ids").bindparams(
+            text("SELECT id FROM kb_pages WHERE id IN :ids").bindparams(
                 bindparam("ids", expanding=True)
             ),
             {"ids": sorted(ids)},
         ).all()
-    titles = {int(row[0]): str(row[1]) for row in rows}
+    alive = {int(row[0]) for row in rows}
 
     def replace(match: re.Match[str]) -> str:
-        page_id = int(match.group(2))
-        title = titles.get(page_id)
-        if title is None:
-            return match.group(1)
-        return f"@[{sanitize_title(title) or match.group(1)}](kb:{page_id})"
+        # Страница удалена — оставляем только текст подписи, ссылка не нужна.
+        return match.group(0) if int(match.group(2)) in alive else match.group(1)
 
     return PAGE_LINK_RE.sub(replace, text_value)
 
 
-__all__ = ["PAGE_LINK_RE", "page_ids", "plain_text", "refresh_titles", "sanitize_title", "truncate_safe"]
+__all__ = ["PAGE_LINK_RE", "page_ids", "plain_text", "repair_links", "truncate_safe"]
