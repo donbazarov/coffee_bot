@@ -5552,10 +5552,82 @@ class KbImageTool {
   save() { return { url: this.data.url, caption: this.data.caption }; }
 }
 
+/* Русская локализация интерфейса Editor.js.
+   Ключи словаря — оригинальные английские строки (так их ищет I18n._t),
+   поэтому переводим только значения. `ui` — ядро (подсказки тулбара, тулбокс,
+   поиск, настройки блока), `toolNames` — подписи блоков в тулбоксе,
+   `tools.<ключ>` — надписи плагинов, `blockTunes.<ключ>` — меню блока. */
+function kbEditorMessages() {
+  return {
+    ui: {
+      blockTunes: { toggler: { 'Click to tune': 'Настроить блок', 'or drag to move': 'или перетащите мышью' } },
+      inlineToolbar: { converter: { 'Convert to': 'Преобразовать в' } },
+      toolbar: { toolbox: { Add: 'Добавить блок' } },
+      popover: { Filter: 'Поиск', 'Nothing found': 'Ничего не найдено', 'Convert to': 'Преобразовать в' },
+    },
+    toolNames: {
+      Text: 'Текст',
+      Link: 'Ссылка',
+      Bold: 'Полужирный',
+      Italic: 'Курсив',
+      Heading: 'Заголовок',
+      'Unordered List': 'Маркированный список',
+      'Ordered List': 'Нумерованный список',
+      Checklist: 'Чек-лист',
+      Table: 'Таблица',
+      Quote: 'Цитата',
+      Delimiter: 'Разделитель',
+    },
+    tools: {
+      link: { 'Add a link': 'Вставьте ссылку' },
+      stub: { 'The block can not be displayed correctly.': 'Блок не может быть отображён корректно' },
+      header: { 'Heading 2': 'Заголовок 2', 'Heading 3': 'Заголовок 3', 'Heading 4': 'Заголовок 4' },
+      list: {
+        Unordered: 'Маркированный',
+        Ordered: 'Нумерованный',
+        Checklist: 'Чек-лист',
+        'Start with': 'Начать с',
+        'Counter type': 'Тип нумерации',
+        Numeric: 'Цифры',
+        'Lower Roman': 'Римские строчные',
+        'Upper Roman': 'Римские заглавные',
+        'Lower Alpha': 'Латинские строчные',
+        'Upper Alpha': 'Латинские заглавные',
+      },
+      table: {
+        Heading: 'Заголовок',
+        'Add column to left': 'Вставить столбец слева',
+        'Add column to right': 'Вставить столбец справа',
+        'Add row above': 'Вставить строку выше',
+        'Add row below': 'Вставить строку ниже',
+        'Delete column': 'Удалить столбец',
+        'Delete row': 'Удалить строку',
+        'With headings': 'С заголовками',
+        'Without headings': 'Без заголовков',
+        Collapse: 'Свернуть',
+        Stretch: 'Растянуть',
+      },
+      quote: {
+        'Enter a quote': 'Введите цитату',
+        'Enter a caption': 'Подпись (необязательно)',
+        'Align Left': 'По левому краю',
+        'Align Center': 'По центру',
+      },
+    },
+    blockTunes: {
+      delete: { Delete: 'Удалить', 'Click to delete': 'Нажмите, чтобы удалить' },
+      moveUp: { 'Move up': 'Переместить вверх' },
+      moveDown: { 'Move down': 'Переместить вниз' },
+      'move-up': { 'Move up': 'Переместить вверх' },
+      'move-down': { 'Move down': 'Переместить вниз' },
+    },
+  };
+}
+
 /* Инструменты Editor.js: базовые плагины + кастомная картинка. */
 function kbEditorTools() {
   return {
-    header: { class: window.Header, inlineToolbar: true, config: { levels: [2, 3, 4], defaultLevel: 2 } },
+    header: { class: window.Header, inlineToolbar: true, config: { levels: [2, 3, 4], defaultLevel: 2, placeholder: 'Заголовок' } },
     list: { class: window.EditorjsList, inlineToolbar: true, config: { defaultStyle: 'unordered' } },
     checklist: { class: window.Checklist, inlineToolbar: true },
     table: { class: window.Table, inlineToolbar: true },
@@ -5600,6 +5672,7 @@ function kbEnsureEditor() {
       data: { blocks: kbParseContentToBlocks() },
       placeholder: 'Начните писать или нажмите «+» слева…',
       minHeight: 120,
+      i18n: { messages: kbEditorMessages() },
       tools: kbEditorTools(),
     });
   } catch (error) {

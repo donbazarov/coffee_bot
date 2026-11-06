@@ -1886,25 +1886,140 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* Холдер Editor.js: тёмная/светлая тема на переменных проекта, рамка как у поля. */
 .kb-editor-mount { border: 1px solid var(--line); background: var(--field-bg); padding: 11px 12px; min-height: 160px; }
 .kb-editor-mount[hidden] { display: none; }
-.kb-editor-mount .cdx-input { border: 1px solid var(--line-strong); }
 .kb-editor-mount .codex-editor__redactor { padding-bottom: 40px !important; }
 .kb-editor-mount .ce-block__content, .kb-editor-mount .ce-toolbar__content { max-width: none; }
 .kb-editor-mount .ce-toolbar__plus, .kb-editor-mount .ce-toolbar__settings-btn { color: var(--text-soft); }
-.kb-editor-mount .ce-toolbar__plus:hover, .kb-editor-mount .ce-toolbar__settings-btn:hover { background: rgba(var(--hl), .08); color: var(--surface-raised); }
-/* Кнопка «+»: у Editor.js фон #fff и светлая рамка прописаны жёстко. */
-.kb-editor-mount .ce-toolbar__plus { background-color: var(--surface-raised); border-color: var(--line-strong); box-shadow: none; }
+.kb-editor-mount .ce-toolbar__plus:hover,
+.kb-editor-mount .ce-toolbar__settings-btn:hover,
+.kb-editor-mount .ce-toolbar__plus--active,
+.kb-editor-mount .ce-toolbar__settings-btn--active { background-color: rgba(var(--hl), .08); color: var(--text); }
+/* Кнопки «+» и «настройки»: у Editor.js фон #fff и светлая рамка прописаны жёстко. */
+.kb-editor-mount .ce-toolbar__plus,
+.kb-editor-mount .ce-toolbar__settings-btn { background-color: var(--surface-raised); border-color: var(--line-strong); box-shadow: none; }
+
+.kb-editor-mount .cdx-block,
+.kb-editor-mount .ce-paragraph,
+.kb-editor-mount .ce-header { color: var(--text); }
+.kb-editor-mount .ce-paragraph[data-placeholder]:empty::before { color: var(--dim); }
+.kb-editor-mount .cdx-input { background: var(--field-bg); color: var(--text); border: 1px solid var(--line-strong); }
+
+/* Палитра Editor.js на переменных темы.
+   Ядро и плагины объявляют свои --color-* на собственных узлах
+   (.ce-popover, .ce-inline-toolbar, .tc-wrap, .cdx-list) — там фон #fff/#f9f9fb
+   и чёрный текст прописаны жёстко. Перекрываем набор на каждом таком классе:
+   вендорные стили инжектятся скриптами после app.css, поэтому на порядок
+   в каскаде полагаться нельзя — работает только специфичность. */
+.kb-editor-mount .ce-popover,
+.kb-editor-mount .ce-inline-toolbar {
+  --color-background: var(--surface-raised);
+  --color-text-primary: var(--text);
+  --color-text-secondary: var(--muted);
+  --color-border: var(--line-strong);
+  --color-shadow: rgba(0, 0, 0, .3);
+  --color-border-icon: var(--line-strong);
+  --color-border-icon-disabled: var(--line-faint);
+  --color-text-icon-active: var(--accent);
+  --color-background-icon-active: var(--accent-soft);
+  --color-background-item-hover: rgba(var(--hl), .07);
+  --color-background-item-focus: var(--accent-faint);
+  --color-shadow-item-focus: transparent;
+  --color-background-item-confirm: var(--warn);
+  --color-background-item-confirm-hover: color-mix(in srgb, var(--warn) 82%, black);
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.kb-editor-mount .ce-popover__container { background: var(--surface-raised); border-color: var(--line-strong); box-shadow: var(--shadow-1); }
+.kb-editor-mount .ce-popover-item__title { color: var(--text); }
+.kb-editor-mount .ce-popover-item__secondary-title { color: var(--muted); }
 /* Иконки пунктов тулбокса: по умолчанию берут --color-text-primary (black). */
 .kb-editor-mount .ce-popover-item__icon { color: var(--dim); }
 .kb-editor-mount .ce-popover-item__icon svg { color: inherit; }
-.kb-editor-mount .cdx-block, .kb-editor-mount .ce-paragraph { color: var(--text); }
-.kb-editor-mount .ce-paragraph[data-placeholder]:empty::before { color: var(--dim); }
-.kb-editor-mount .cdx-search-field, .kb-editor-mount .ce-popover, .kb-editor-mount .ce-popover__container { background: var(--surface-raised); color: var(--text); border-color: var(--line-strong); }
-.kb-editor-mount .ce-popover-item__title { color: var(--text); }
-.kb-editor-mount .ce-inline-toolbar { background: var(--surface-raised); border-color: var(--line-strong); }
+.kb-editor-mount .ce-popover-item--confirmation .ce-popover-item__title,
+.kb-editor-mount .ce-popover-item--confirmation .ce-popover-item__icon { color: var(--accent-contrast); }
+.kb-editor-mount .ce-popover__nothing-found-message { color: var(--muted); }
 .kb-editor-mount .ce-inline-tool { color: var(--text-soft); }
-.kb-editor-mount .cdx-input { background: var(--field-bg); color: var(--text); border-color: var(--line-strong); }
+.kb-editor-mount .ce-inline-tool:hover,
+.kb-editor-mount .ce-inline-toolbar__dropdown:hover { background: rgba(var(--hl), .08); }
+.kb-editor-mount .ce-inline-toolbar__dropdown { border-color: var(--line-strong); }
+.kb-editor-mount .ce-inline-tool-input { background: var(--field-bg); border-color: var(--line-strong); color: var(--text); }
+.kb-editor-mount .ce-inline-tool-input::placeholder { color: var(--dim); }
+.kb-editor-mount .cdx-search-field { background: var(--surface-sunken); border-color: var(--line-strong); color: var(--text); }
+.kb-editor-mount .cdx-search-field__icon svg { color: var(--muted); }
+.kb-editor-mount .cdx-search-field__input { color: var(--text); }
+.kb-editor-mount .cdx-search-field__input::placeholder { color: var(--dim); }
+.kb-editor-mount .cdx-settings-button:hover { background-color: rgba(var(--hl), .08); }
+.kb-editor-mount .cdx-settings-button--active { color: var(--accent); }
+
+/* Служебные узлы ядра: заглушки, кнопки, лоадер, выделение блока. */
+.kb-editor-mount .cdx-button { background: var(--surface); border-color: var(--line-strong); color: var(--text-soft); box-shadow: none; }
+.kb-editor-mount .cdx-button:hover { background: var(--surface-sunken); }
+.kb-editor-mount .ce-stub { background: var(--surface-sunken); border-color: var(--line); color: var(--muted); }
+.kb-editor-mount .cdx-loader { border-color: var(--line-strong); }
+.kb-editor-mount .cdx-loader::before { border-color: var(--line-strong); border-left-color: var(--accent); }
+.kb-editor-mount .ce-block--selected .ce-block__content { background: var(--accent-soft); }
+.kb-editor-mount .codex-editor ::selection { background: var(--accent-soft); }
+.kb-editor-mount .codex-editor [data-placeholder]:empty::before,
+.kb-editor-mount .codex-editor [data-placeholder-active]:empty::before { color: var(--dim); }
+.kb-editor-mount .ce-delimiter { color: var(--dim); }
+
+/* Таблица: --color-background у плагина равен #f9f9fb — самая заметная
+   «белая» плашка. Строку заголовка и подсветку выбора ведём от темы. */
+.kb-editor-mount .tc-wrap {
+  --color-background: var(--surface-sunken);
+  --color-text-secondary: var(--muted);
+  --color-border: var(--line-strong);
+  color: var(--text);
+}
+.kb-editor-mount .tc-toolbox { --toggler-dots-color: var(--muted); --toggler-dots-color-hovered: var(--text); }
 .kb-editor-mount .tc-table { color: var(--text); }
 .kb-editor-mount .tc-table, .kb-editor-mount .tc-row, .kb-editor-mount .tc-cell { border-color: var(--line); }
+.kb-editor-mount .tc-table--heading .tc-row:first-child { background: var(--surface-sunken); }
+.kb-editor-mount .tc-row--selected, .kb-editor-mount .tc-cell--selected { background: var(--accent-faint); }
+.kb-editor-mount .tc-popover {
+  --color-border: var(--line-strong);
+  --color-background: var(--surface-raised);
+  --color-background-hover: rgba(var(--hl), .07);
+  --color-background-confirm: var(--warn);
+  --color-background-confirm-hover: color-mix(in srgb, var(--warn) 82%, black);
+  --color-text-confirm: var(--accent-contrast);
+  background: var(--surface-raised);
+  border-color: var(--line-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.kb-editor-mount .tc-popover__item-icon { background: var(--surface); border-color: var(--line-strong); }
+.kb-editor-mount .tc-popover__item--confirm .tc-popover__item-icon { background: var(--warn); border-color: transparent; }
+
+/* Списки и чек-лист плагинов: чекбоксы брали #fff / #C9C9C9 / #369FFF. */
+.kb-editor-mount .cdx-list {
+  --checkbox-background: var(--field-bg);
+  --color-border: var(--line-strong);
+  --color-bg-checked: var(--accent);
+  --color-bg-checked-hover: var(--accent-hover);
+  --color-tick: var(--accent-contrast);
+  --grayText: var(--dim);
+  color: var(--text);
+}
+.kb-editor-mount .cdx-list-start-with-field { background: var(--surface-sunken); border-color: var(--line-strong); }
+.kb-editor-mount .cdx-list-start-with-field__input { color: var(--text); }
+.kb-editor-mount .cdx-list-start-with-field--invalid { background: var(--danger-soft); border-color: var(--danger-line); }
+.kb-editor-mount .cdx-list-start-with-field--invalid .cdx-list-start-with-field__input { color: var(--danger-text); }
+.kb-editor-mount .cdx-checklist__item-checkbox-check { background: var(--field-bg); border-color: var(--line-strong); }
+.kb-editor-mount .cdx-checklist__item--checked .cdx-checklist__item-checkbox-check { background: var(--accent); border-color: var(--accent); }
+.kb-editor-mount .cdx-checklist__item--checked .cdx-checklist__item-checkbox-check svg path { stroke: var(--accent-contrast); }
+.kb-editor-mount .cdx-checklist__item-checkbox-check::before { background: var(--accent); }
+
+/* Цитата: плейсхолдеры плагина залиты #707684. */
+.kb-editor-mount .cdx-quote [contenteditable][data-placeholder]::before { color: var(--dim); }
+
+/* На телефоне тулбокс и настройки блока раскрываются нижней шторкой поверх
+   текста — полупрозрачный фон там читается плохо, делаем его глухим. */
+@media (max-width: 650px) {
+  .kb-editor-mount .ce-popover,
+  .kb-editor-mount .tc-popover { --color-background: var(--surface); }
+  .kb-editor-mount .ce-popover__container,
+  .kb-editor-mount .tc-popover { background: var(--surface); }
+}
 
 /* Кастомный Image Tool. */
 .kb-image-tool { display: flex; flex-direction: column; gap: 8px; }
