@@ -22,8 +22,8 @@
   /* Акцент: по умолчанию мягкий коралл #F47369 */
   --accent: #f47369;
   --accent-contrast: #2a1310;
-  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
-  --accent-faint: color-mix(in srgb, var(--accent) 7%, transparent);
+  --accent-soft: color-mix(in srgb, var(--accent) 20%, transparent);
+  --accent-faint: color-mix(in srgb, var(--accent) 11%, transparent);
   --accent-line: color-mix(in srgb, var(--accent) 38%, transparent);
   --accent-hover: color-mix(in srgb, var(--accent) 84%, white);
 
@@ -107,8 +107,8 @@
 
   --text: #1c1b17;
   --text-soft: #4a4840;
-  --muted: #6f6d63;
-  --dim: #9a978b;
+  --muted: #a2a39d;
+  --dim: #777571;
 
   --mint: #1f7a5c;
   --mint-contrast: #ffffff;
@@ -536,7 +536,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .matrix-scroll { max-height: min(68vh, 760px); overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; border: 1px solid var(--line-strong); background: var(--surface); scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
 .shift-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 .shift-matrix th, .shift-matrix td { padding: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.shift-matrix thead th { position: sticky; z-index: 4; top: 0; height: 45px; background: var(--surface-raised); }
+.shift-matrix thead th { position: sticky; z-index: 4; top: 0; height: 45px; background: var(--surface-sunken); }
 .shift-matrix .matrix-name-header { left: 0; z-index: 6; width: 158px; min-width: 158px; padding: 0 12px; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-align: left; }
 .shift-matrix .matrix-day-header { width: var(--day-w, 62px); min-width: var(--day-w, 62px); text-align: center; }
 .matrix-day-header span, .matrix-day-header strong { display: block; }
@@ -739,8 +739,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .heading-with-icon { display: flex; align-items: center; gap: 8px; }
 .heading-with-icon .icon { width: 18px; height: 18px; color: var(--accent); }
 
-/* Категории листаются в одну строку — и на телефоне тоже, без переноса. */
-.chip-row { display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 0 16px; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+/* Категории листаются в одну строку — и на телефоне тоже, без переноса.
+   По краям контент «уходит в пустоту»: mask-image плавно растворяет чипы. */
+.chip-row { --chip-fade: 20px; display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 0 16px; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); }
 .chip-row::-webkit-scrollbar { display: none; }
 .chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 13px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
 .chip:hover { border-color: var(--accent); color: var(--text); }
@@ -2024,10 +2025,12 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* В браузерах без поддержки правило просто не применяется — остаётся
    обычный border-radius. */
 @supports (corner-shape: squircle) {
+  /* .chip намеренно исключён: чипы-фильтры остаются идеальными «таблетками»
+     (полное скругление при border-radius: 999px), без сквиркла. */
   [data-glass="on"] :is(.panel, .drawer, .dock, .toast, .team-summary,
       .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
       .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row,
-      .button, .icon-button, .nav-item, .chip,
+      .button, .icon-button, .nav-item,
       .theme-switch, .workload-metric, .analytics-metric, .kb-pantone,
       .kb-serve, .drink-item, .matrix-mode) { corner-shape: squircle; }
 }
