@@ -867,6 +867,13 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .category-actions { display: flex; flex: 0 0 auto; gap: 12px; }
 .category-actions .text-button { padding: 0; color: var(--muted); }
 .category-actions .text-button:hover { color: var(--accent); }
+/* На телефоне строка категории узкая: флаги («важное · системная») и кнопки
+   не помещаются в одну строку. Уводим флаги на отдельную строку во всю ширину,
+   кнопки оставляем рядом с названием — так панель не рвёт ширину экрана. */
+@media (max-width: 760px) {
+  .announcement-category { flex-wrap: wrap; gap: 6px 10px; }
+  .category-flags { flex: 0 0 100%; order: 1; }
+}
 .section-heading-inline { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .checkbox-row { display: flex !important; align-items: center; gap: 9px; font-size: 12px; }
 .checkbox-row input { width: auto !important; height: auto !important; margin: 0 !important; }
