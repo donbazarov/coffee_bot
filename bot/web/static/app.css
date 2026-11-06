@@ -795,15 +795,17 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .announcement-slideshow { min-height: 92px; }
 .slideshow { display: grid; gap: 10px; }
 .slideshow-viewport { position: relative; overflow: hidden; touch-action: pan-y; transition: height .45s cubic-bezier(.22,1,.36,1); }
-.slideshow-track { position: absolute; inset: 0; cursor: grab; transition: transform .5s cubic-bezier(.22,1,.36,1); will-change: transform; }
+.slideshow-track { position: absolute; inset: 0; display: flex; align-items: flex-start; cursor: grab; transition: transform .5s cubic-bezier(.22,1,.36,1); will-change: transform; }
 .slideshow-track.is-dragging { transition: none; cursor: grabbing; }
 .slideshow-track.is-dragging .announcement { cursor: grabbing; }
 /* Card cover-scale: активная карточка в фокусе, соседние уменьшены и подсунуты
-   к краю — при перелистывании они «выезжают» из-под неё. */
-.announcement-slide { position: absolute; inset: 0; opacity: 0; visibility: hidden; transform: translateX(6%) scale(.94); transform-origin: center; transition: transform .5s cubic-bezier(.22,1,.36,1), opacity .5s cubic-bezier(.22,1,.36,1), visibility .5s; will-change: transform, opacity; }
+   к центру — при перелистывании они «выезжают» из-под неё.
+   Слайды — flex-элементы во весь вьюпорт, выстроенные в ряд: трек сдвигается
+   на -index * ширину, поэтому активная карточка встаёт ровно на своё место. */
+.announcement-slide { flex: 0 0 100%; width: 100%; min-width: 0; opacity: 0; visibility: hidden; transform: translateX(6%) scale(.94); transform-origin: center; transition: transform .5s cubic-bezier(.22,1,.36,1), opacity .5s cubic-bezier(.22,1,.36,1), visibility .5s; will-change: transform, opacity; }
 .announcement-slide.is-active { opacity: 1; visibility: visible; transform: translateX(0) scale(1); }
-.announcement-slide.is-prev { transform: translateX(-6%) scale(.94); }
-.announcement-slide.is-next { transform: translateX(6%) scale(.94); }
+.announcement-slide.is-prev { transform: translateX(6%) scale(.94); }
+.announcement-slide.is-next { transform: translateX(-6%) scale(.94); }
 .slideshow .announcement { cursor: grab; }
 .slideshow .announcement-title { display: block; -webkit-line-clamp: unset; }
 .slideshow .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
