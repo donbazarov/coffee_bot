@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import modules
 from bot.web.schedule_snapshot import (
     active_employee_ids,
     prune_snapshots,
@@ -29,6 +30,9 @@ _HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 # Каналы Telegram для публикаций. Стартуют из окружения, потом правятся в панели управления.
 DEFAULT_ANNOUNCE_CHAT = os.getenv("TELEGRAM_ANNOUNCE_CHAT_ID", "@nefttest1")
 DEFAULT_SWAP_CHAT = os.getenv("TELEGRAM_SWAP_CHAT_ID", "@nefttest2")
+
+# Значения по умолчанию для панели управления (редактируются в интерфейсе).
+modules.register_defaults("calendar", {"MAX_PUBLISH_DAYS": MAX_PUBLISH_DAYS})
 
 
 def app_timezone() -> tzinfo:
@@ -587,8 +591,9 @@ def _publish_period(start: Any, end: Any) -> tuple[date | None, date | None]:
         raise ValueError("Не удалось разобрать даты диапазона публикации") from error
     if last < first:
         first, last = last, first
-    if (last - first).days + 1 > MAX_PUBLISH_DAYS:
-        raise ValueError(f"Диапазон публикации длиннее {MAX_PUBLISH_DAYS} дней")
+    max_days = modules.setting("calendar", "MAX_PUBLISH_DAYS", MAX_PUBLISH_DAYS)
+    if (last - first).days + 1 > max_days:
+        raise ValueError(f"Диапазон публикации длиннее {max_days} дней")
     return first, last
 
 
@@ -811,14 +816,13 @@ def get_shift_history(engine: Engine, year: int, month: int, limit: int = 100) -
 def get_user_preferences(engine: Engine, user_id: int) -> dict[str, Any]:
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT calendar_enabled, theme, accent, chat_notify
+            SELECT theme, accent, chat_notify
             FROM web_user_preferences WHERE user_id=:user_id
         """), {"user_id": user_id}).mappings().first()
     theme = row["theme"] if row and row["theme"] in THEME_VALUES else "system"
     accent = row["accent"] if row and _HEX_COLOR.match(row["accent"] or "") else DEFAULT_ACCENT
     chat_notify = row["chat_notify"] if row and row["chat_notify"] in CHAT_NOTIFY_VALUES else DEFAULT_CHAT_NOTIFY
     return {
-        "calendar_enabled": bool(row["calendar_enabled"]) if row else True,
         "theme": theme,
         "accent": accent,
         "chat_notify": chat_notify,
@@ -831,14 +835,13 @@ def save_user_preferences(engine: Engine, user_id: int, values: dict[str, Any]) 
     with engine.begin() as connection:
         connection.execute(text("""
             INSERT INTO web_user_preferences
-                (user_id, calendar_enabled, theme, accent, chat_notify, updated_at)
-            VALUES (:user_id, :calendar, :theme, :accent, :chat_notify, CURRENT_TIMESTAMP)
+                (user_id, theme, accent, chat_notify, updated_at)
+            VALUES (:user_id, :theme, :accent, :chat_notify, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id) DO UPDATE SET
-                calendar_enabled=excluded.calendar_enabled, theme=excluded.theme,
+                theme=excluded.theme,
                 accent=excluded.accent, chat_notify=excluded.chat_notify,
                 updated_at=CURRENT_TIMESTAMP
         """), {"user_id": user_id,
-               "calendar": int(updated["calendar_enabled"]),
                "theme": updated["theme"], "accent": updated["accent"],
                "chat_notify": updated.get("chat_notify", DEFAULT_CHAT_NOTIFY)})
     return updated

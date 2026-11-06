@@ -597,6 +597,26 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .module-setting input:checked + i { border-color: color-mix(in srgb, var(--mint) 55%, transparent); background: color-mix(in srgb, var(--mint) 42%, transparent); }
 .module-setting input:checked + i::after { transform: translateX(17px); background: var(--mint); }
 .module-setting input:focus-visible + i { outline: 2px solid var(--mint); outline-offset: 3px; }
+
+/* Строка настройки: слева заголовок с пояснением, справа — поле ввода, прижатое
+   к правому краю. Единый паттерн с тумблерами (.module-setting): тот же шрифт
+   подписи и та же логика «подпись ↔ управляющий элемент». */
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 56px; padding: 9px 0; border-top: 1px solid var(--line); }
+.setting-row:first-of-type { border-top: 0; padding-top: 0; }
+.setting-row > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.setting-row > span strong { color: var(--text); font-size: 12px; font-weight: 500; }
+.setting-row > span small { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.setting-row > input, .setting-row > select { flex: 0 0 auto; width: 190px; max-width: 46%; min-height: 40px; margin: 0; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--field-bg); color: var(--text); font: 500 13px var(--sans); text-align: right; transition: border-color .2s; }
+.setting-row > input::placeholder { color: var(--dim); }
+.setting-row > input[type="number"] { font-family: var(--mono); }
+.setting-row > input[type="text"], .setting-row > input:not([type]) { width: 240px; text-align: left; }
+.setting-row > input:focus-visible, .setting-row > select:focus-visible { border-color: var(--accent-line); }
+/* Формы со строками-настройками идут без внешнего gap: ритм задают сами строки. */
+.template-form:has(.setting-row) { gap: 0; }
+@media (max-width: 640px) {
+  .setting-row { flex-wrap: wrap; }
+  .setting-row > input, .setting-row > select { width: 100%; max-width: none; }
+}
 .settings-active .main-area { scroll-margin-top: 12px; }
 .calendar-editing .matrix-cell { cursor: pointer; }
 .calendar-editing .matrix-cell.is-empty .matrix-empty-mark { opacity: .45; }
@@ -1210,6 +1230,9 @@ body { transition: background-color .3s ease, color .3s ease; }
   .chat-composer textarea,
   .user-dialog textarea,
   .story-admin-edit input[type="text"], .story-admin-edit textarea { font-size: 16px; }
+  /* Строка настройки задаёт свой размер шрифта (13px) — на телефоне возвращаем
+     16px, иначе iOS зумит страницу при фокусе в поле. */
+  .setting-row > input, .setting-row > select { font-size: 16px; }
   .chat-mention-name { font-size: 15px; }
   .chat-layout { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
   .chat-list { width: 100%; max-height: none; flex: 1 1 auto; }
@@ -1905,6 +1928,51 @@ body { transition: background-color .3s ease, color .3s ease; }
 }
 @media (prefers-reduced-motion: reduce) {
   .kb-tree-fold, .kb-tree-toggle .icon, .kb-tree-fab { transition: none; }
+}
+
+/* =========================================================================
+   Панель управления: список модулей слева + блок настроек справа.
+   Лэйаут и приёмы (fold, fab) повторяют базу знаний — привычная навигация.
+   ========================================================================= */
+.control-layout { display: grid; gap: 14px; }
+.control-nav-panel { padding: 19px 21px; }
+.control-nav-heading { align-items: center; }
+.control-nav-actions { display: flex; align-items: center; gap: 8px; }
+.control-nav-toggle .icon { width: 15px; height: 15px; transition: transform .24s ease; }
+.control-nav-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+.control-tree-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
+.control-tree-fold.is-open { grid-template-rows: 1fr; }
+.control-tree-fold-inner { overflow: hidden; min-height: 0; }
+.control-tree-fold.is-open .control-tree-fold-inner { padding-top: 4px; }
+.control-nav { display: flex; flex-direction: column; gap: 2px; }
+.control-nav-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text-soft); text-align: left; cursor: pointer; transition: background-color .2s, border-color .2s, color .2s; }
+.control-nav-item:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
+.control-nav-item.is-active { border-color: var(--accent-line); background: var(--accent-soft); color: var(--text); }
+.control-nav-icon { display: inline-flex; flex: 0 0 auto; color: var(--muted); }
+.control-nav-item.is-active .control-nav-icon { color: var(--accent); }
+.control-nav-icon .icon { width: 18px; height: 18px; }
+.control-nav-title { flex: 1 1 auto; min-width: 0; font-size: 14px; }
+.control-nav-badge { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; font: 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; color: var(--muted); background: var(--surface-sunken); border: 1px solid var(--line); }
+.control-nav-item:not(.is-disabled) .control-nav-badge { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 45%, transparent); }
+.control-nav-item.is-disabled { color: var(--muted); }
+.control-nav-status { margin: 12px 0 0; min-height: 1em; color: var(--muted); font-size: 12px; }
+.control-module-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 12px; }
+.control-module-head h3 { margin: 0; font-size: 18px; }
+.module-setting-compact { max-width: 280px; min-height: 0; padding-top: 0; border-top: 0; }
+.control-tree-fab { position: fixed; z-index: 35; right: 16px; bottom: calc(var(--dock-h, 16px) + 14px); display: inline-flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 16px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--surface-raised); color: var(--text); font: 600 13px var(--sans); box-shadow: var(--shadow-1); cursor: pointer; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .22s ease, transform .22s ease; }
+.control-tree-fab.is-visible { opacity: 1; transform: none; pointer-events: auto; }
+.control-tree-fab .icon { width: 16px; height: 16px; }
+.control-tree-fab:hover { border-color: var(--accent); }
+@media (min-width: 900px) {
+  .control-layout { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: start; }
+}
+@media (max-width: 760px) {
+  .control-nav-toggle { min-width: 44px; min-height: 44px; }
+  .control-module-head { flex-direction: column; align-items: stretch; }
+  .module-setting-compact { max-width: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .control-tree-fold, .control-nav-toggle .icon, .control-tree-fab, .control-nav-item { transition: none; }
 }
 
 /* --- Контроль качества: вкладки, тип, чипы, сессии ---------------------- */

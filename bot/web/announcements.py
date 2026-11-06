@@ -27,6 +27,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import modules
 from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.announcements")
@@ -58,6 +59,12 @@ MAX_TITLE = 120
 MAX_BODY = 2000
 MAX_LABEL = 60
 MAX_LIST = 100
+
+# Значения по умолчанию для панели управления (редактируются в интерфейсе).
+modules.register_defaults("announcements", {
+    "MAX_TITLE": MAX_TITLE, "MAX_BODY": MAX_BODY,
+    "MAX_LABEL": MAX_LABEL, "MAX_LIST": MAX_LIST,
+})
 # Формат хранения даты анонса (локальное время точки); совпадает с SQLite-строкой.
 STAMP = "%Y-%m-%d %H:%M"
 
@@ -209,7 +216,7 @@ def _make_code(engine: Engine, label: str) -> str:
 
 
 def create_category(engine: Engine, label: str, color: Any = None, important: bool = True) -> str:
-    clean_label = str(label or "").strip()[:MAX_LABEL]
+    clean_label = str(label or "").strip()[:modules.setting("announcements", "MAX_LABEL", MAX_LABEL)]
     if not clean_label:
         raise ValueError("Название категории обязательно")
     code = _make_code(engine, clean_label)
@@ -237,7 +244,7 @@ def update_category(
         raise PermissionError("Системную категорию менять нельзя")
     values = {
         "code": code,
-        "label": str(label).strip()[:MAX_LABEL] if str(label or "").strip() else current["label"],
+        "label": str(label).strip()[:modules.setting("announcements", "MAX_LABEL", MAX_LABEL)] if str(label or "").strip() else current["label"],
         "color": _clean_color(color if color is not None else current["color"]),
         "important": (1 if important else 0) if important is not None else (1 if current["important"] else 0),
     }
@@ -297,8 +304,8 @@ def create(
             VALUES (:category, :title, :body, :actor_id, :actor_name, :payload, :start_at, :pinned)
         """), {
             "category": category,
-            "title": title.strip()[:MAX_TITLE] or categories[category]["label"],
-            "body": (body or "").strip()[:MAX_BODY],
+            "title": title.strip()[:modules.setting("announcements", "MAX_TITLE", MAX_TITLE)] or categories[category]["label"],
+            "body": (body or "").strip()[:modules.setting("announcements", "MAX_BODY", MAX_BODY)],
             "actor_id": actor_id,
             "actor_name": (actor_name or "").strip() or None,
             "payload": json.dumps(payload, ensure_ascii=False) if payload else None,
@@ -335,8 +342,8 @@ def update(
             WHERE id = :id
         """), {
             "id": announcement_id,
-            "title": (str(title).strip()[:MAX_TITLE] if str(title or "").strip() else current["title"]),
-            "body": (str(body).strip()[:MAX_BODY] if body is not None else (current["body"] or "")),
+            "title": (str(title).strip()[:modules.setting("announcements", "MAX_TITLE", MAX_TITLE)] if str(title or "").strip() else current["title"]),
+            "body": (str(body).strip()[:modules.setting("announcements", "MAX_BODY", MAX_BODY)] if body is not None else (current["body"] or "")),
             "category": target,
             "start_at": normalize_start_at(start_at) if start_at is not None else current["start_at"],
             "pinned": (1 if pinned else 0) if pinned is not None else int(current["pinned"] or 0),
@@ -395,7 +402,7 @@ def list_for_user(
     limit: int = 30,
 ) -> list[dict[str, Any]]:
     """Лента. `category="important"` — только важные категории (без «Замен»)."""
-    limit = max(1, min(int(limit or 30), MAX_LIST))
+    limit = max(1, min(int(limit or 30), modules.setting("announcements", "MAX_LIST", MAX_LIST)))
     categories = category_map(engine)
     params: dict[str, Any] = {"user_id": user_id, "limit": limit}
     where = ""

@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, modules, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -192,6 +192,11 @@ def migrate_database():
     init_db()
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
+    # Флаги модулей (вкл/выкл в панели управления) живут в web_app_settings —
+    # таблица уже создана initialize_calendar_schema строкой выше.
+    modules.initialize_schema(engine)
+    # Редактируемые настройки модулей (бывшие константы) — в кэш из web_app_settings.
+    modules.initialize_settings(engine)
     workload_service.initialize_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
@@ -240,12 +245,12 @@ def preferences(user: dict[str, Any] = Depends(require_user)):
 @app.patch("/api/preferences")
 async def update_preferences(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     payload = await _read_json_object(request)
-    allowed = {"calendar_enabled", "theme", "accent", "chat_notify"}
+    # Персональные настройки. Модули (вкл/выкл разделов) переехали в /api/modules
+    # и стали глобальными — здесь их больше нет.
+    allowed = {"theme", "accent", "chat_notify"}
     if not payload or set(payload) - allowed:
         raise HTTPException(status_code=422, detail="Неизвестные настройки")
     for key, value in payload.items():
-        if key == "calendar_enabled" and not isinstance(value, bool):
-            raise HTTPException(status_code=422, detail="Настройки модулей должны быть boolean")
         if key == "theme" and value not in THEME_VALUES:
             raise HTTPException(status_code=422, detail="Неизвестная тема оформления")
         if key == "accent" and not (isinstance(value, str) and ACCENT_RE.match(value)):
@@ -253,6 +258,47 @@ async def update_preferences(request: Request, user: dict[str, Any] = Depends(re
         if key == "chat_notify" and value not in CHAT_NOTIFY_VALUES:
             raise HTTPException(status_code=422, detail="Неизвестный режим уведомлений чата")
     return save_user_preferences(engine, user["id"], payload)
+
+
+@app.get("/api/modules")
+def list_modules(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Состояние модулей для навигации и панели управления (глобальное, не персональное)."""
+    is_manager = user["role"] in {"senior", "mentor"}
+    return {"modules": modules.load_modules(engine, is_manager=is_manager)}
+
+
+@app.patch("/api/modules/{code}")
+async def update_module(code: str, request: Request,
+                        _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    """Включает/выключает модуль целиком для всей команды (senior/mentor + CSRF)."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"enabled"} or not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(status_code=422, detail="Ожидался флаг enabled (boolean)")
+    try:
+        module = modules.save_module_enabled(engine, code, payload["enabled"])
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return {"ok": True, "module": module}
+
+
+@app.get("/api/modules/{code}/settings")
+def module_settings(code: str, _: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
+    """Схема и текущие значения редактируемых настроек модуля (бывших констант)."""
+    if modules.get_module(code) is None:
+        raise HTTPException(status_code=404, detail="Модуль не найден")
+    return {"ok": True, "code": code, "fields": modules.module_settings_view(code)}
+
+
+@app.patch("/api/modules/{code}/settings")
+async def update_module_settings(code: str, request: Request,
+                                 _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    """Сохраняет настройки модуля (senior/mentor + CSRF) с валидацией по типам и границам."""
+    payload = await _read_json_object(request)
+    try:
+        fields = modules.save_module_settings(engine, code, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "code": code, "fields": fields}
 
 
 @app.patch("/api/profile")
@@ -390,6 +436,9 @@ def home(request: Request):
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
+    # Модули загружаем одним запросом: из него и словарь для Jinja-гейтов
+    # навигации/вьюх, и список для левого оглавления панели управления.
+    module_list = modules.load_modules(engine, is_manager=real_role in {"senior", "mentor"})
     response = templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -421,6 +470,15 @@ def home(request: Request):
             "role_names": ROLE_NAMES,
             "real_role": real_role,
             "preview_active": preview_active,
+            # Модули: глобальное вкл/выкл разделов. Навигация и вьюхи скрываются
+            # на сервере (по `modules`), а панель управления строит из них список.
+            "modules": {item["code"]: item for item in module_list},
+            "control_modules": [item for item in module_list if item["settable"]],
+            # Редактируемые настройки (бывшие константы) — поля с текущими значениями.
+            "module_settings": {
+                item["code"]: modules.module_settings_view(item["code"])
+                for item in module_list if item["settable"]
+            },
         },
     )
     # Скользящее продление: устройство, которым пользуются, не выходит никогда.

@@ -189,7 +189,7 @@
           <div class="chip-row" id="announcements-preview-filter" role="group" aria-label="Категория анонсов"></div>
           <div class="announcement-slideshow" id="announcements-preview-list"></div>
         </section>
-        <section class="schedule-summary" id="calendar-summary" aria-label="Сводка по сменам">
+        {% if modules['calendar'].enabled %}<section class="schedule-summary" id="calendar-summary" aria-label="Сводка по сменам">
           <div class="section-heading schedule-heading"><div><p class="eyebrow">МОЙ ГРАФИК</p><h2>Этот месяц</h2></div><button class="button button-quiet" type="button" data-view="calendar">Открыть календарь <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="hours-grid">
             <article class="hour-stat"><span>ЗАПЛАНИРОВАНО</span><strong id="hours-total">—</strong><small>часов</small></article>
@@ -197,14 +197,14 @@
             <article class="hour-stat"><span>ОСТАЛОСЬ</span><strong id="hours-remaining">—</strong><small>часов</small></article>
           </div>
           <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg> Сохранить календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
-        </section>
-        <section class="panel drinks-widget" id="drinks-widget">
+        </section>{% endif %}
+        {% if modules['drinks'].enabled %}<section class="panel drinks-widget" id="drinks-widget">
           <div class="panel-heading"><div><p class="eyebrow">СМЕНА</p><h3>Описание напитков</h3></div><button class="button button-quiet" type="button" data-view="drinks">Все описания <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="drinks-widget-list" id="drinks-widget-list"></div>
-        </section>
+        </section>{% endif %}
       </section>
 
-      <section class="view" id="drinks-view" hidden>
+      {% if modules['drinks'].enabled %}<section class="view" id="drinks-view" hidden>
         <div class="section-heading drinks-heading">
           <div><p class="eyebrow">КАЧЕСТВО / СМЕНА</p><h2>Описание напитков</h2></div>
           <button class="button button-primary" type="button" id="drinks-create"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новое описание</button>
@@ -230,9 +230,9 @@
           <div class="drinks-memes" id="drinks-memes"><p class="empty-state">Загрузка…</p></div>
           <button class="button button-quiet drinks-more" type="button" id="drinks-memes-more" hidden>Показать ещё</button>
         </div>
-      </section>
+      </section>{% endif %}
 
-      <section class="view" id="development-view" hidden>
+      {% if modules['development'].enabled %}<section class="view" id="development-view" hidden>
         <div class="section-heading">
           <div><p class="eyebrow" id="development-eyebrow">ПРОКАЧКА</p><h2 id="development-title">Развитие</h2></div>
         </div>
@@ -305,9 +305,9 @@
           </section>
         </div>
         {% endif %}
-      </section>
+      </section>{% endif %}
 
-      <section class="view" id="announcements-view" hidden>
+      {% if modules['announcements'].enabled %}<section class="view" id="announcements-view" hidden>
         <div class="section-heading">
           <div><p class="eyebrow">КОМАНДА / СОБЫТИЯ</p><h2>Анонсы</h2></div>
           <div class="calendar-actions">
@@ -330,9 +330,9 @@
         </section>
         <div class="chip-row" id="announcements-filters" role="group" aria-label="Фильтр ленты"></div>
         <div class="announcement-list" id="announcements-list"></div>
-      </section>
+      </section>{% endif %}
 
-      <section class="view" id="kb-view" hidden>
+      {% if modules['kb'].enabled %}<section class="view" id="kb-view" hidden>
         <div class="section-heading">
           <div><p class="eyebrow">КОМАНДА / СПРАВОЧНИК</p><h2>База знаний</h2></div>
           <div class="calendar-actions">
@@ -355,9 +355,9 @@
             </div>
           </article>
         </div>
-      </section>
+      </section>{% endif %}
 
-      <section class="view" id="chat-view" hidden>
+      {% if modules['chat'].enabled %}<section class="view" id="chat-view" hidden>
         <div class="section-heading chat-heading">
           <div><p class="eyebrow">КОМАНДА / СВЯЗЬ</p><h2>Чат</h2></div>
           <div class="chat-tabs" role="tablist" aria-label="Тип чатов">
@@ -394,9 +394,9 @@
             <p class="chat-hint" id="chat-peer-hint" hidden>Выберите чат</p>
           </div>
         </div>
-      </section>
+      </section>{% endif %}
 
-      <section class="view" id="calendar-view" hidden>
+      {% if modules['calendar'].enabled %}<section class="view" id="calendar-view" hidden>
         <div class="section-heading calendar-heading">
           <div><p class="eyebrow">КОМАНДА / ГРАФИК</p><h2 id="calendar-month-title">График смен</h2></div>
           <div class="calendar-actions"><button type="button" class="icon-button" id="month-previous" aria-label="Предыдущий месяц" title="Предыдущий месяц"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><button type="button" class="icon-button" id="month-next" aria-label="Следующий месяц" title="Следующий месяц"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>
@@ -427,7 +427,7 @@
         <div class="matrix-templates" id="matrix-templates" hidden></div>
         <div class="matrix-scroll"><table class="shift-matrix" id="calendar-grid" aria-label="Смены по сотрудникам и дням месяца"></table></div>
         <section class="panel swaps-panel"><div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ ПРАВОК</p><h3>Изменения графика</h3></div><span class="panel-index" id="history-count">0</span></div><div id="shift-history" class="swap-list"></div></section>
-      </section>
+      </section>{% endif %}
 
       <section class="view" id="profile-view" hidden>
         <div class="section-heading"><div><p class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</p><h2>Профиль и оформление</h2></div></div>
@@ -537,9 +537,6 @@
           </div>
           <p class="account-note" id="chat-notify-note" role="status"></p>
         </section>
-        <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">МОИ МОДУЛИ</p><h3>Разделы сайта</h3></div></div>
-          <label class="module-setting"><span><strong>Календарь смен</strong><small>График команды, часы и замены</small></span><input type="checkbox" id="calendar-module-toggle"><i></i></label>
-        </section>
         {% if real_role in ['senior', 'mentor'] %}
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
           <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"{% if preview_active %} checked{% endif %}><i></i></label>
@@ -550,6 +547,37 @@
       {% if user.role in ['senior', 'mentor'] %}
       <section class="view" id="control-view" hidden>
         <div class="section-heading"><div><p class="eyebrow">АДМИНИСТРИРОВАНИЕ</p><h2>Панель управления</h2></div></div>
+        <div class="control-layout">
+          <aside class="panel settings-panel control-nav-panel">
+            <div class="panel-heading control-nav-heading">
+              <div><p class="eyebrow">МОДУЛИ</p><h3>Оглавление</h3></div>
+              <div class="control-nav-actions">
+                <span class="panel-index" id="control-count">—</span>
+                <button class="control-nav-toggle icon-button" type="button" id="control-tree-toggle" aria-expanded="true" aria-controls="control-tree-fold" aria-label="Свернуть список модулей"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>
+              </div>
+            </div>
+            <div class="control-tree-fold is-open" id="control-tree-fold"><div class="control-tree-fold-inner">
+              <nav class="control-nav" id="control-nav" aria-label="Модули сайта">
+                {% for module in control_modules %}<button class="control-nav-item{% if not module.enabled %} is-disabled{% endif %}" type="button" data-control-open="{{ module.code }}"><span class="control-nav-icon"><svg class="icon" aria-hidden="true"><use href="#{{ module.icon }}"></use></svg></span><span class="control-nav-title">{{ module.title }}</span><span class="control-nav-badge" data-control-badge="{{ module.code }}">{{ 'Вкл' if module.enabled else 'Выкл' }}</span></button>
+                {% endfor %}
+              </nav>
+              <p class="control-nav-status" id="control-nav-status" role="status"></p>
+            </div></div>
+          </aside>
+          <div class="control-body-panel">
+            {% for module in control_modules %}<section class="control-module" data-control-module="{{ module.code }}" hidden>
+              <div class="control-module-head">
+                <div><p class="eyebrow">МОДУЛЬ</p><h3>{{ module.title }}</h3></div>
+                <label class="module-setting module-setting-compact"><span><strong>Модуль включён</strong><small>Выключение скрывает раздел у всей команды</small></span><input type="checkbox" data-module-toggle="{{ module.code }}"{% if module.enabled %} checked{% endif %}><i></i></label>
+              </div>
+              {% set module_fields = module_settings[module.code] %}
+              {% if module_fields %}<form class="template-form control-settings-form" data-module-settings="{{ module.code }}">
+                {% for field in module_fields %}{% if field.type == 'int' or field.type == 'float' %}<label class="setting-row"><span><strong>{{ field.label }}</strong>{% if field.hint %}<small>{{ field.hint }}</small>{% endif %}</span><input type="number" name="{{ field.key }}" value="{{ field.value_text }}" min="{{ field.min }}" max="{{ field.max }}" step="{{ field.step }}" inputmode="numeric" required></label>
+                {% else %}<label class="setting-row"><span><strong>{{ field.label }}</strong>{% if field.hint %}<small>{{ field.hint }}</small>{% endif %}</span><input name="{{ field.key }}" value="{{ field.value_text }}" maxlength="500" autocomplete="off" spellcheck="false"{% if field.hint %} placeholder="{{ field.hint }}"{% endif %}></label>{% endif %}{% endfor %}
+                <p class="template-form-error" role="alert" hidden></p>
+                <div class="template-form-actions"><button class="button button-primary" type="submit">Сохранить настройки</button></div>
+              </form>{% endif %}
+              {% if module.code == 'calendar' %}
         <section class="panel settings-panel" id="shift-templates-panel">
           <div class="panel-heading"><div><p class="eyebrow">ГРАФИК</p><h3>Шаблоны смен</h3></div></div>
           <p class="settings-hint">Шаблон задаёт время, точку и тип смены (утро/вечер/пересмен, только выходные). В графике выберите шаблон и нажмите по ячейке — смена подставится. Флаги типа нужны разделу «Команда → Расчет часов». Шаблоны видны всей команде.</p>
@@ -579,12 +607,13 @@
             </div>
           </form>
         </section>
+              {% elif module.code == 'announcements' %}
         <section class="panel settings-panel" id="telegram-channels-panel">
           <div class="panel-heading"><div><p class="eyebrow">ПУБЛИКАЦИИ</p><h3>Каналы Telegram</h3></div></div>
           <p class="settings-hint">Бот <strong>@NeftCoffeeBot</strong> должен быть администратором этих каналов. В канал анонсов уходит картинка графика, в канал замен — текстовый лог.</p>
           <form class="template-form" id="channels-form">
-            <label>Канал анонсов<input name="announce_chat" placeholder="@nefttest1" autocomplete="off"></label>
-            <label>Канал замен<input name="swap_chat" placeholder="@nefttest2" autocomplete="off"></label>
+            <label class="setting-row"><span><strong>Канал анонсов</strong><small>@адрес канала, куда уходит картинка графика</small></span><input name="announce_chat" placeholder="@nefttest1" autocomplete="off"></label>
+            <label class="setting-row"><span><strong>Канал замен</strong><small>@адрес канала для лога замен</small></span><input name="swap_chat" placeholder="@nefttest2" autocomplete="off"></label>
             <p class="template-form-error" id="channels-form-error" role="alert" hidden></p>
             <div class="template-form-actions">
               <button class="button button-primary" id="channels-submit" type="submit">Сохранить каналы</button>
@@ -596,19 +625,21 @@
           <div class="section-heading-inline"><p class="settings-hint">Системные категории создаёт сам сервис при публикации графика — их нельзя переименовать, перекрасить или удалить. Цветом отмечаются анонсы, флажок «важное» решает, попадать ли категории в блок «Важное» на главной.</p><button class="button button-quiet" type="button" id="announcements-category-add">Новая категория</button></div>
           <div class="announcement-categories" id="announcements-categories"></div>
         </section>
+              {% elif module.code == 'chat' %}
         <section class="panel settings-panel" id="chat-rooms-panel">
           <div class="panel-heading"><div><p class="eyebrow">ЧАТ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg>Темы общего чата</h3></div><button class="button button-quiet" type="button" id="chat-room-add"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая тема</button></div>
           <p class="settings-hint">Темы — это каналы общего чата. Сотрудники видят их в разделе «Общие» и могут писать в любую.</p>
           <div class="room-list" id="chat-room-list"></div>
           <p class="account-note" id="chat-room-note" role="status"></p>
         </section>
+              {% elif module.code == 'stories' %}
         <section class="panel settings-panel" id="stories-admin-panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИИ ГОСТЕЙ</p><h3>Модерация</h3></div><span class="panel-index" id="stories-admin-stats">—</span></div>
           <p class="settings-hint">Гостевая страница живёт по прямой ссылке <a href="/stories" target="_blank" rel="noopener">/stories</a> — в навигации её нет. В карусель попадают только опубликованные истории.</p>
           <form class="template-form" id="stories-settings-form">
-            <label>Скорость прокрутки (мс)<input type="number" name="autoplay_ms" min="1000" max="60000" step="500" required></label>
-            <label>Лимит символов<input type="number" name="max_text_length" min="50" max="1200" step="10" required></label>
-            <label>Ширина карусели, px<input type="number" name="carousel_width" min="640" max="1600" step="20" required></label>
+            <label class="setting-row"><span><strong>Скорость прокрутки, мс</strong><small>Пауза между слайдами, 1000–60000</small></span><input type="number" name="autoplay_ms" min="1000" max="60000" step="500" required></label>
+            <label class="setting-row"><span><strong>Лимит символов</strong><small>Максимум текста в истории, 50–1200</small></span><input type="number" name="max_text_length" min="50" max="1200" step="10" required></label>
+            <label class="setting-row"><span><strong>Ширина карусели, px</strong><small>640–1600; при автовысоте не используется</small></span><input type="number" name="carousel_width" min="640" max="1600" step="20" required></label>
             <label class="module-setting"><span><strong>Адаптивная ширина</strong><small>min(1120px, 88vw) — поле ширины не используется</small></span><input type="checkbox" name="carousel_width_auto"><i></i></label>
             <p class="template-form-error" id="stories-settings-error" role="alert" hidden></p>
             <div class="template-form-actions">
@@ -624,10 +655,18 @@
           <p class="stories-admin-status" id="stories-admin-status" role="status"></p>
           <div class="stories-admin-list" id="stories-admin-list"></div>
         </section>
+              {% else %}
+                <p class="settings-hint">Настройки этого модуля появятся позже. Пока доступно только включение и выключение раздела.</p>
+              {% endif %}
+            </section>{% endfor %}
+          </div>
+        </div>
+        <button class="control-tree-fab" id="control-tree-fab" type="button" aria-label="Открыть список модулей"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg><span>Модули</span></button>
         {% endif %}
       </section>
 
       {% if user.role in ['senior', 'mentor'] %}
+      {% if modules['team'].enabled %}
       <section class="view" id="team-view" hidden>
         <div class="section-heading"><div><p class="eyebrow" id="team-eyebrow">ДОСТУП И РОЛИ</p><h2 id="team-title">Команда</h2></div><button type="button" class="button button-primary" id="add-user-button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Добавить сотрудника</button></div>
         <div class="theme-switch team-tabs" role="group" aria-label="Разделы команды">
@@ -678,7 +717,9 @@
           </section>
         </div>
       </section>
+      {% endif %}
 
+      {% if modules['analytics'].enabled %}
       <section class="view" id="analytics-view" hidden>
         <div class="section-heading analytics-heading">
           <div><p class="eyebrow">КОМАНДА / КАЧЕСТВО</p><h2>Аналитика команды</h2></div>
@@ -710,6 +751,7 @@
         </section>
       </section>
       {% endif %}
+      {% endif %}
 
       <footer class="app-footer"><span>НЕФТЬ / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
     </main>
@@ -717,9 +759,9 @@
 
   <nav class="dock" id="dock" aria-label="Быстрая навигация">
     <button class="dock-item is-active" type="button" data-view="overview"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
-    <button class="dock-item" type="button" data-chat-open="dm"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg></span><span>Личные</span></button>
-    <button class="dock-item" type="button" data-chat-open="room"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg></span><span>Общие</span></button>
-    <button class="dock-item" type="button" data-view="calendar"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>Календарь</span></button>
+    {% if modules['chat'].enabled %}<button class="dock-item" type="button" data-chat-open="dm"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg></span><span>Личные</span></button>
+    <button class="dock-item" type="button" data-chat-open="room"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg></span><span>Общие</span></button>{% endif %}
+    {% if modules['calendar'].enabled %}<button class="dock-item" type="button" data-view="calendar"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>Календарь</span></button>{% endif %}
   </nav>
 
   <button class="kb-tree-fab" id="kb-tree-fab" type="button" aria-label="Открыть оглавление"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg><span>Оглавление</span></button>
@@ -732,14 +774,14 @@
     </div>
     <nav class="drawer-nav" aria-label="Меню">
       <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
-      <button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>
-      <button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>
-      <button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>
-      <button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>
-      <button class="nav-item" type="button" data-view="kb"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg></span><span>База знаний</span></button>
-      <button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg></span><span>Описание напитков</span></button>
-      {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
-      {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
+      {% if modules['calendar'].enabled %}<button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>{% endif %}
+      {% if modules['announcements'].enabled %}<button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>{% endif %}
+      {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>{% endif %}
+      {% if modules['development'].enabled %}<button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>{% endif %}
+      {% if modules['kb'].enabled %}<button class="nav-item" type="button" data-view="kb"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg></span><span>База знаний</span></button>{% endif %}
+      {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg></span><span>Описание напитков</span></button>{% endif %}
+      {% if user.role in ['senior', 'mentor'] and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
+      {% if user.role in ['senior', 'mentor'] and modules['analytics'].enabled %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
       <div class="drawer-divider"></div>
       <button class="nav-item" type="button" data-view="profile"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg></span><span>Личный кабинет</span></button>

@@ -46,7 +46,7 @@ from sqlalchemy.engine import Connection, Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import gamification
+from bot.web import gamification, modules
 from bot.web.calendar_service import active_staff, app_timezone
 from bot.web.deps import require_csrf, require_user
 
@@ -86,6 +86,20 @@ MAX_QUIZ_OPTIONS = 6
 MAX_PHOTOS_PER_KIND = 6
 DEFAULT_PAGE = 20
 MAX_PAGE = 50
+
+# Значения по умолчанию для панели управления (редактируются в интерфейсе).
+modules.register_defaults("drinks", {
+    "XP_TEAM": XP_PUBLISH["team"], "XP_SENSORY": XP_PUBLISH["sensory"],
+    "XP_MILK": XP_PUBLISH_MILK["milk"], "XP_QUIZ": XP_QUIZ_CORRECT["team"],
+    "MIN_QUIZ_OPTIONS": MIN_QUIZ_OPTIONS, "MAX_QUIZ_OPTIONS": MAX_QUIZ_OPTIONS,
+    "MAX_PHOTOS_PER_KIND": MAX_PHOTOS_PER_KIND,
+    "DEFAULT_PAGE": DEFAULT_PAGE, "MAX_PAGE": MAX_PAGE,
+})
+
+
+def _cfg(key: str) -> Any:
+    """Редактируемая настройка модуля «Описание напитков» (панель управления)."""
+    return modules.setting("drinks", key)
 
 # Каталог фото постов (не в git) — как аватары, чат и фото оценок.
 _PHOTOS_DIR: Path | None = None
@@ -322,7 +336,7 @@ def _photo_entries(value: Any, label: str, default_author: int) -> list[dict[str
         except (TypeError, ValueError):
             author = int(default_author)
         entries.append({"url": url, "author_id": author})
-    if len(entries) > MAX_PHOTOS_PER_KIND:
+    if len(entries) > _cfg("MAX_PHOTOS_PER_KIND"):
         raise HTTPException(status_code=422, detail=f"Слишком много фото: {label}")
     return entries
 
@@ -501,13 +515,13 @@ def _quiz_options(name_by_id: dict[int, str], author_ids: list[int]) -> list[dic
     """
     names = [name_by_id.get(int(author_id), "Бариста") for author_id in author_ids]
     permutations = _distinct_permutations(names)
-    if len(permutations) < MIN_QUIZ_OPTIONS:
+    if len(permutations) < _cfg("MIN_QUIZ_OPTIONS"):
         return []
     correct = tuple(names)
-    if len(permutations) > MAX_QUIZ_OPTIONS:
+    if len(permutations) > _cfg("MAX_QUIZ_OPTIONS"):
         others = [option for option in permutations if option != correct]
         random.shuffle(others)
-        permutations = [correct] + others[:MAX_QUIZ_OPTIONS - 1]
+        permutations = [correct] + others[:_cfg("MAX_QUIZ_OPTIONS") - 1]
     options = []
     for option in permutations:
         text = " · ".join(f"{index + 1}. {name}" for index, name in enumerate(option))
@@ -521,7 +535,7 @@ def _create_quizzes(connection: Connection, description_id: int, name_by_id: dic
     created: list[int] = []
     for kind in QUIZ_KINDS:
         entries = photos.get(kind) or []
-        if len(entries) < MIN_QUIZ_OPTIONS:
+        if len(entries) < _cfg("MIN_QUIZ_OPTIONS"):
             continue
         author_ids = [int(entry["author_id"]) for entry in entries]
         options = _quiz_options(name_by_id, author_ids)
@@ -570,9 +584,9 @@ def _award_publish_xp(connection: Connection, author_id: int, partner_id: int | 
     в графике на этой точке (`_on_shift_with`): выбранный вручную «вне смены»
     сотрудник опыта не получает.
     """
-    amounts = dict(XP_PUBLISH)
+    amounts = {"team": _cfg("XP_TEAM"), "sensory": _cfg("XP_SENSORY")}
     if latte_photos and any(item["category"] == MILK_COFFEE for item in items):
-        for code, value in XP_PUBLISH_MILK.items():
+        for code, value in {"milk": _cfg("XP_MILK")}.items():
             amounts[code] = amounts.get(code, 0) + value
 
     def grant(recipient_id: int) -> dict[str, int]:
@@ -798,14 +812,14 @@ def _serialize_description(row: Any, items: list[dict[str, Any]], quizzes: list[
 
 @router.get("")
 def list_descriptions(point: str | None = None, author_id: int | None = None,
-                      state: str | None = None, limit: int = DEFAULT_PAGE, offset: int = 0,
+                      state: str | None = None, limit: int | None = None, offset: int = 0,
                       user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Лента описаний с фильтрами по точке, бариста и статусу голосования."""
     if point not in (None, "all") and point not in POINT_VALUES:
         raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
     if state not in (None, "all", "unvoted", "voted"):
         raise HTTPException(status_code=422, detail="Неизвестный фильтр голосования")
-    limit = max(1, min(int(limit or DEFAULT_PAGE), MAX_PAGE))
+    limit = max(1, min(int(limit or _cfg("DEFAULT_PAGE")), _cfg("MAX_PAGE")))
     offset = max(0, int(offset or 0))
     conditions: list[str] = []
     params: dict[str, Any] = {"limit": limit + 1, "offset": offset}
@@ -1152,7 +1166,7 @@ async def vote_quiz(description_id: int, quiz_id: int, request: Request,
         awarded = 0
         if option["is_correct"] and not knows_answer:
             applied = gamification.award_xp(
-                connection, user_id=int(user["id"]), amounts=dict(XP_QUIZ_CORRECT),
+                connection, user_id=int(user["id"]), amounts={"team": _cfg("XP_QUIZ")},
                 source_type="quiz", source_id=int(quiz_id), created_by=None,
             )
             awarded = sum(applied.values())

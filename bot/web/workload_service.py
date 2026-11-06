@@ -36,6 +36,8 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import modules
+
 ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 WORK_ROLES = ("newbie", "barista", "senior", "mentor")
 POINTS = ("УЯ", "ДЕ")
@@ -58,6 +60,19 @@ FORECAST_MIN_COVERAGE = 0.15
 ISDAYOFF_URL = "https://isdayoff.ru/api/getdata"
 ISDAYOFF_REGION = "ru-ta"
 ISDAYOFF_TIMEOUT = 6
+
+# Значения по умолчанию для панели управления (редактируются в интерфейсе).
+modules.register_defaults("team", {
+    "DEFAULT_MIN_HOURS": DEFAULT_MIN_HOURS, "DEFAULT_OPT_HOURS": DEFAULT_OPT_HOURS,
+    "DEFAULT_MAX_HOURS": DEFAULT_MAX_HOURS, "MAX_HOURS_LIMIT": MAX_HOURS_LIMIT,
+    "SATURATION_DEFICIT": SATURATION_DEFICIT, "SATURATION_OVERLOAD": SATURATION_OVERLOAD,
+    "ISDAYOFF_REGION": ISDAYOFF_REGION,
+})
+
+
+def _cfg(key: str) -> Any:
+    """Редактируемая настройка модуля «Команда» / «Расчёт часов» (панель управления)."""
+    return modules.setting("team", key)
 
 # Федеральные праздники РФ (месяц, день) — база офлайн-календаря.
 RU_FIXED_HOLIDAYS = (
@@ -186,7 +201,7 @@ def _fetch_isdayoff(year: int, month: int) -> dict[date, bool] | None:
     """Календарь месяца из isdayoff.ru. None — сервис недоступен или ответ битый."""
     if not _isdayoff_enabled():
         return None
-    query = urllib.parse.urlencode({"year": year, "month": month, "region": ISDAYOFF_REGION})
+    query = urllib.parse.urlencode({"year": year, "month": month, "region": _cfg("ISDAYOFF_REGION")})
     request = urllib.request.Request(
         f"{ISDAYOFF_URL}?{query}",
         headers={"User-Agent": "NeftCrewDesk/1.0", "Accept": "text/plain"},
@@ -396,9 +411,9 @@ def list_workload_users(engine: Engine) -> list[dict[str, Any]]:
 def _level(ratio: float | None) -> str:
     if ratio is None:
         return "unknown"
-    if ratio < SATURATION_DEFICIT:
+    if ratio < _cfg("SATURATION_DEFICIT"):
         return "deficit"
-    if ratio > SATURATION_OVERLOAD:
+    if ratio > _cfg("SATURATION_OVERLOAD"):
         return "overload"
     return "normal"
 
@@ -520,9 +535,9 @@ def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = Fa
             "role": user["role"],
             "role_name": ROLE_NAMES.get(user["role"], user["role"]),
             "avatar_rev": user["avatar_rev"] or 0,
-            "min_hours": int(user["min_hours"] or DEFAULT_MIN_HOURS),
-            "opt_hours": int(user["opt_hours"] or DEFAULT_OPT_HOURS),
-            "max_hours": int(user["max_hours"] or DEFAULT_MAX_HOURS),
+            "min_hours": int(user["min_hours"] or _cfg("DEFAULT_MIN_HOURS")),
+            "opt_hours": int(user["opt_hours"] or _cfg("DEFAULT_OPT_HOURS")),
+            "max_hours": int(user["max_hours"] or _cfg("DEFAULT_MAX_HOURS")),
             "fact_hours": round(facts.get(key or "", 0.0), 1),
         })
 
@@ -558,8 +573,9 @@ def _coerce_hours(value: Any, label: str) -> int:
         number = int(float(value))
     except (TypeError, ValueError) as error:
         raise ValueError(f"{label}: ожидалось целое число часов") from error
-    if number < 0 or number > MAX_HOURS_LIMIT:
-        raise ValueError(f"{label}: допустимо от 0 до {MAX_HOURS_LIMIT} часов")
+    hours_limit = _cfg("MAX_HOURS_LIMIT")
+    if number < 0 or number > hours_limit:
+        raise ValueError(f"{label}: допустимо от 0 до {hours_limit} часов")
     return number
 
 
@@ -577,9 +593,9 @@ def update_user_workload(engine: Engine, user_id: int, values: dict[str, Any]) -
         if not current:
             raise LookupError("Пользователь не найден")
         merged = {
-            "min_hours": int(current["min_hours"] or DEFAULT_MIN_HOURS),
-            "opt_hours": int(current["opt_hours"] or DEFAULT_OPT_HOURS),
-            "max_hours": int(current["max_hours"] or DEFAULT_MAX_HOURS),
+            "min_hours": int(current["min_hours"] or _cfg("DEFAULT_MIN_HOURS")),
+            "opt_hours": int(current["opt_hours"] or _cfg("DEFAULT_OPT_HOURS")),
+            "max_hours": int(current["max_hours"] or _cfg("DEFAULT_MAX_HOURS")),
         }
         for key, label in (("min_hours", "Минимум"), ("opt_hours", "Оптимум"), ("max_hours", "Максимум")):
             if key in values:
@@ -603,7 +619,7 @@ def get_user_workload(engine: Engine, user_id: int) -> dict[str, Any]:
     if not row:
         raise LookupError("Пользователь не найден")
     return {
-        "min_hours": int(row["min_hours"] or DEFAULT_MIN_HOURS),
-        "opt_hours": int(row["opt_hours"] or DEFAULT_OPT_HOURS),
-        "max_hours": int(row["max_hours"] or DEFAULT_MAX_HOURS),
+        "min_hours": int(row["min_hours"] or _cfg("DEFAULT_MIN_HOURS")),
+        "opt_hours": int(row["opt_hours"] or _cfg("DEFAULT_OPT_HOURS")),
+        "max_hours": int(row["max_hours"] or _cfg("DEFAULT_MAX_HOURS")),
     }

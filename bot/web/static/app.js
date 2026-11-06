@@ -10,7 +10,9 @@ let matrixPointerDown = false;
 let matrixClipboard = null;
 let matrixChanges = new Map();
 let editMode = false;
-let modulePreferences = { calendar_enabled: true };
+// Глобальное состояние модулей (вкл/выкл разделов) и выбранный модуль панели управления.
+let modulesState = {};
+const controlState = { current: null, treeOpen: true };
 const managerRole = document.body.dataset.manager === 'true';
 const userRole = document.body.dataset.role || '';
 const isMentor = userRole === 'mentor';
@@ -2137,19 +2139,32 @@ function discardScheduleChanges() {
   if (calendarState) renderCalendar(calendarState);
 }
 
+/* Модули: разделы выключаются глобально (флаг в web_app_settings). Сервер уже
+   не рендерит выключенные разделы, а здесь держим состояние в актуальном виде
+   после переключений в панели управления. */
 function applyModuleVisibility() {
+  for (const module of Object.values(modulesState)) {
+    if (!module.view) continue;
+    document.querySelectorAll(`[data-view="${module.view}"]`).forEach((button) => { button.hidden = !module.enabled; });
+    if (!module.enabled && document.querySelector(`#${module.view}-view`)?.classList.contains('is-visible')) setView('profile');
+  }
   const summary = document.querySelector('#calendar-summary');
-  if (summary) summary.hidden = !modulePreferences.calendar_enabled;
-  document.querySelectorAll('[data-view="calendar"]').forEach((button) => { button.hidden = !modulePreferences.calendar_enabled; });
-  if (!modulePreferences.calendar_enabled && document.querySelector('#calendar-view')?.classList.contains('is-visible')) setView('profile');
+  if (summary && modulesState.calendar) summary.hidden = !modulesState.calendar.enabled;
+}
+
+async function loadModules() {
+  try {
+    const data = await api('/api/modules');
+    modulesState = {};
+    (data.modules || []).forEach((module) => { modulesState[module.code] = module; });
+    applyModuleVisibility();
+    renderControlNav();
+  } catch (error) { /* навигация остаётся серверной — это не критично */ }
 }
 
 async function loadPreferences() {
   try {
-    modulePreferences = await api('/api/preferences');
-    document.querySelector('#calendar-module-toggle').checked = modulePreferences.calendar_enabled;
-    applyModuleVisibility();
-    applyServerAppearance(modulePreferences);
+    applyServerAppearance(await api('/api/preferences'));
   } catch (error) { showToast(error.message); }
 }
 
@@ -2796,7 +2811,8 @@ function animateNumber(node, value, decimals = 0) {
 }
 
 function setView(name) {
-  if (name === 'calendar' && !modulePreferences.calendar_enabled) name = 'profile';
+  const targetModule = Object.values(modulesState).find((module) => module.view === name);
+  if (targetModule && !targetModule.enabled) name = 'profile';
   if (name === 'control' && !managerRole) name = 'profile';
   if (name === 'analytics' && !managerRole) name = 'profile';
   const apply = () => {
@@ -2857,8 +2873,8 @@ function setView(name) {
   if (name === 'kb') openKnowledgeBase();
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
-  if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
+  if (name === 'calendar') loadCalendar();
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -7114,11 +7130,148 @@ function setupDrinks() {
   document.querySelector('#drink-form')?.addEventListener('submit', submitDrinkForm);
 }
 
+/* --- Панель управления: навигация по модулям и вкл/выкл ------------------- */
+
+function controlIsNarrow() {
+  return window.innerWidth < 900;
+}
+
+/* Подсвечивает активный пункт списка и обновляет бейджи «Вкл»/«Выкл». */
+function renderControlNav() {
+  const list = document.querySelector('#control-nav');
+  if (!list) return;
+  const items = list.querySelectorAll('[data-control-open]');
+  const count = document.querySelector('#control-count');
+  if (count) count.textContent = String(items.length);
+  items.forEach((item) => {
+    const module = modulesState[item.dataset.controlOpen];
+    if (module) {
+      item.classList.toggle('is-disabled', !module.enabled);
+      const badge = item.querySelector('[data-control-badge]');
+      if (badge) badge.textContent = module.enabled ? 'Вкл' : 'Выкл';
+    }
+    item.classList.toggle('is-active', item.dataset.controlOpen === controlState.current);
+  });
+}
+
+function controlSetTreeOpen(open) {
+  controlState.treeOpen = open;
+  document.querySelector('#control-tree-fold')?.classList.toggle('is-open', open);
+  const button = document.querySelector('#control-tree-toggle');
+  if (button) {
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    button.setAttribute('aria-label', open ? 'Свернуть список модулей' : 'Развернуть список модулей');
+  }
+  controlUpdateFab();
+}
+
+/* Плавающая кнопка «Модули»: только на узком экране, когда список свёрнут и
+   его шапка ушла вверх при прокрутке — как «Оглавление» в базе знаний. */
+function controlUpdateFab() {
+  const fab = document.querySelector('#control-tree-fab');
+  if (!fab) return;
+  const view = document.querySelector('#control-view');
+  const inView = Boolean(view) && !view.hidden;
+  const panel = document.querySelector('.control-nav-panel');
+  const headerOut = panel ? panel.getBoundingClientRect().bottom <= 0 : false;
+  fab.classList.toggle('is-visible', inView && controlIsNarrow() && !controlState.treeOpen && headerOut);
+}
+
+/* Показывает блоки выбранного модуля и подсвечивает пункт списка. */
+function selectControlModule(code) {
+  controlState.current = code;
+  document.querySelectorAll('[data-control-module]').forEach((block) => { block.hidden = block.dataset.controlModule !== code; });
+  renderControlNav();
+}
+
+function ensureControlSelection() {
+  if (!controlState.current || !document.querySelector(`#control-nav [data-control-open="${controlState.current}"]`)) {
+    const first = document.querySelector('#control-nav [data-control-open]');
+    controlState.current = first ? first.dataset.controlOpen : null;
+  }
+  if (controlState.current) selectControlModule(controlState.current);
+}
+
+function setupControlPanel() {
+  const nav = document.querySelector('#control-nav');
+  if (!nav) return;
+  nav.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-control-open]');
+    if (item) selectControlModule(item.dataset.controlOpen);
+  });
+  document.querySelectorAll('[data-module-toggle]').forEach((input) => {
+    if (input.dataset.bound) return;
+    input.dataset.bound = '1';
+    input.addEventListener('change', async (event) => {
+      const box = event.currentTarget;
+      const code = box.dataset.moduleToggle;
+      box.disabled = true;
+      try {
+        await api(`/api/modules/${code}`, { method: 'PATCH', body: JSON.stringify({ enabled: box.checked }) });
+        // Включение возвращает раздел в навигацию, выключение — убирает его.
+        // Сервер рендерит навигацию по флагам модулей, поэтому перезагружаем
+        // страницу, оставаясь в панели управления (якорь #control).
+        location.hash = 'control';
+        window.location.reload();
+      } catch (error) {
+        box.checked = !box.checked;
+        box.disabled = false;
+        showToast(error.message);
+      }
+    });
+  });
+  document.querySelector('#control-tree-toggle')?.addEventListener('click', () => controlSetTreeOpen(!controlState.treeOpen));
+  const fab = document.querySelector('#control-tree-fab');
+  if (fab && !fab.dataset.bound) {
+    fab.dataset.bound = '1';
+    fab.addEventListener('click', () => {
+      controlSetTreeOpen(true);
+      document.querySelector('.control-nav-panel')?.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'start' });
+    });
+  }
+  const panel = document.querySelector('.control-nav-panel');
+  if (panel && !panel.dataset.fabObserved && 'IntersectionObserver' in window) {
+    panel.dataset.fabObserved = '1';
+    new IntersectionObserver(() => controlUpdateFab(), { threshold: 0 }).observe(panel);
+  }
+  if (!document.body.dataset.controlFabResize) {
+    document.body.dataset.controlFabResize = '1';
+    window.addEventListener('resize', controlUpdateFab);
+  }
+  // Настройки модуля (бывшие константы): один submit на форму модуля.
+  document.querySelectorAll('[data-module-settings]').forEach((form) => {
+    if (form.dataset.bound) return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const code = form.dataset.moduleSettings;
+      const error = form.querySelector('.template-form-error');
+      if (error) error.hidden = true;
+      const payload = {};
+      form.querySelectorAll('input[name]').forEach((input) => {
+        payload[input.name] = input.type === 'number' ? Number(input.value) : input.value;
+      });
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        await api(`/api/modules/${code}/settings`, { method: 'PATCH', body: JSON.stringify(payload) });
+        showToast('Настройки сохранены');
+      } catch (err) {
+        if (error) { error.textContent = err.message; error.hidden = false; }
+        else showToast(err.message);
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+  });
+}
+
 function setupDashboard() {
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
   setupAppearance();
   setupDrawer();
   setupProfile();
+  setupControlPanel();
   setupWorkloadForm();
   setupAnalytics();
   setupAnnouncements();
@@ -7455,23 +7608,6 @@ function setupDashboard() {
     } catch { document.querySelector('#feed-status').textContent = event.currentTarget.dataset.url; }
   });
 
-  for (const [id, key] of [['calendar-module-toggle', 'calendar_enabled']]) {
-    document.querySelector(`#${id}`)?.addEventListener('change', async (event) => {
-      const previous = modulePreferences[key];
-      modulePreferences[key] = event.currentTarget.checked;
-      applyModuleVisibility();
-      try {
-        modulePreferences = await api('/api/preferences', { method: 'PATCH', body: JSON.stringify({ [key]: modulePreferences[key] }) });
-        if (key === 'calendar_enabled' && modulePreferences.calendar_enabled) loadCalendar();
-        showToast('Настройка сохранена');
-      } catch (error) {
-        modulePreferences[key] = previous;
-        event.currentTarget.checked = previous;
-        applyModuleVisibility();
-        showToast(error.message);
-      }
-    });
-  }
   document.querySelector('#barista-preview-toggle')?.addEventListener('change', async (event) => {
     const box = event.currentTarget;
     try {
@@ -7488,8 +7624,10 @@ function setupDashboard() {
   document.querySelectorAll('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
 
   updateEditControls();
-  loadPreferences().then(() => {
-    if (modulePreferences.calendar_enabled) loadCalendar();
+  loadPreferences();
+  loadModules().then(() => {
+    if (!modulesState.calendar || modulesState.calendar.enabled) loadCalendar();
+    if (managerRole && location.hash === '#control') setView('control');
   });
   loadShiftTemplates();
   if (managerRole) {

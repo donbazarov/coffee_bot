@@ -42,6 +42,7 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
+from bot.web import modules
 from bot.web.deps import require_manager_csrf, require_user
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +66,18 @@ MAX_TEXT = 20000
 # чтобы чипсы в интерфейсе не разрастались и поиск оставался осмысленным.
 MAX_TAG = 40
 MAX_TAGS = 12
+
+# Значения по умолчанию для панели управления (редактируются в интерфейсе).
+modules.register_defaults("kb", {
+    "MAX_TITLE": MAX_TITLE, "MAX_SLUG": MAX_SLUG, "MAX_TEXT": MAX_TEXT,
+    "MAX_TAG": MAX_TAG, "MAX_TAGS": MAX_TAGS,
+    "BEAN_ROAST_TYPES": BEAN_ROAST_TYPES, "DRINK_CATEGORIES": DRINK_CATEGORIES,
+})
+
+
+def _cfg(key: str) -> Any:
+    """Редактируемая настройка модуля «База знаний» (панель управления)."""
+    return modules.setting("kb", key)
 
 # Каталог фото подач напитков (не в git) — как аватары, чат и фото оценок.
 _KB_PHOTOS_DIR: Path | None = None
@@ -173,7 +186,7 @@ def _translit(value: Any) -> str:
 
 def _clean_slug(value: Any) -> str:
     base = re.sub(r"[^a-z0-9-]+", "-", str(value or "").lower()).strip("-")
-    return base[:MAX_SLUG]
+    return base[:_cfg("MAX_SLUG")]
 
 
 def _slugify(value: Any) -> str:
@@ -191,7 +204,7 @@ def _unique_slug(engine: Engine, base: str, exclude_id: int | None = None) -> st
             ).first()
             if row is None or (exclude_id is not None and int(row[0]) == exclude_id):
                 return slug
-            slug = f"{base[: MAX_SLUG - 6]}-{index}"
+            slug = f"{base[: _cfg('MAX_SLUG') - 6]}-{index}"
             index += 1
 
 
@@ -199,8 +212,8 @@ def _clean(value: Any, limit: int) -> str:
     return str(value).strip()[:limit] if value is not None else ""
 
 
-def _clean_text(value: Any, limit: int = MAX_TEXT) -> str | None:
-    text_value = _clean(value, limit)
+def _clean_text(value: Any, limit: int | None = None) -> str | None:
+    text_value = _clean(value, limit if limit is not None else _cfg("MAX_TEXT"))
     return text_value or None
 
 
@@ -217,9 +230,10 @@ def _normalize_roast_types(value: Any) -> str:
     else:
         raw = [part.strip() for part in str(value).split(",")]
     values = [item for item in raw if item]
+    roast_types = _cfg("BEAN_ROAST_TYPES")
     for item in values:
-        if item not in BEAN_ROAST_TYPES:
-            raise ValueError("Тип обжарки: " + ", ".join(BEAN_ROAST_TYPES))
+        if item not in roast_types:
+            raise ValueError("Тип обжарки: " + ", ".join(roast_types))
     return ",".join(dict.fromkeys(values))
 
 
@@ -273,7 +287,7 @@ def _dump_content(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
-        return value[:MAX_TEXT] or None
+        return value[:_cfg("MAX_TEXT")] or None
     try:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError) as error:
@@ -295,16 +309,17 @@ def _normalize_tags(value: Any) -> str | None:
         raw = [str(item) for item in value]
     else:
         raise ValueError("Теги должны быть списком или строкой")
+    max_tag, max_tags = _cfg("MAX_TAG"), _cfg("MAX_TAGS")
     tags: list[str] = []
     seen: set[str] = set()
     for item in raw:
-        tag = " ".join(str(item).split())[:MAX_TAG].strip()
+        tag = " ".join(str(item).split())[:max_tag].strip()
         key = tag.lower()
         if not tag or key in seen:
             continue
         seen.add(key)
         tags.append(tag)
-        if len(tags) >= MAX_TAGS:
+        if len(tags) >= max_tags:
             break
     return json.dumps(tags, ensure_ascii=False) if tags else None
 
@@ -349,7 +364,7 @@ def _upsert_bean(connection: Any, page_id: int, default_name: str, payload: dict
         text("SELECT * FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id}
     ).mappings().first()
 
-    name = _clean(source.get("name"), MAX_TITLE) or (current["name"] if current else default_name)
+    name = _clean(source.get("name"), _cfg("MAX_TITLE")) or (current["name"] if current else default_name)
     if not name:
         raise ValueError("Название зерна обязательно")
     roast_type = _normalize_roast_types(source.get("roast_type")) \
@@ -390,12 +405,13 @@ def _upsert_drink(connection: Any, page_id: int, default_title: str, payload: di
         text("SELECT * FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id}
     ).mappings().first()
 
-    title = _clean(source.get("title"), MAX_TITLE) or (current["title"] if current else default_title)
+    title = _clean(source.get("title"), _cfg("MAX_TITLE")) or (current["title"] if current else default_title)
     if not title:
         raise ValueError("Название напитка обязательно")
     category = _clean(source.get("category"), 60) or (current["category"] if current else "")
-    if category not in DRINK_CATEGORIES:
-        raise ValueError("Категория напитка: " + ", ".join(DRINK_CATEGORIES))
+    drink_categories = _cfg("DRINK_CATEGORIES")
+    if category not in drink_categories:
+        raise ValueError("Категория напитка: " + ", ".join(drink_categories))
 
     def pick(field: str) -> str | None:
         if source.get(field) is not None or current is None:
@@ -538,7 +554,7 @@ def create_page(engine: Engine, author_id: int, payload: dict[str, Any]) -> int:
     category = _clean(payload.get("category"), 32)
     if category not in CATEGORY_KEYS:
         raise ValueError("Раздел: " + ", ".join(CATEGORY_KEYS))
-    title = _clean(payload.get("title"), MAX_TITLE)
+    title = _clean(payload.get("title"), _cfg("MAX_TITLE"))
     if not title:
         raise ValueError("Заголовок обязателен")
     content = _dump_content(payload.get("content_json"))
@@ -580,7 +596,7 @@ def update_page(engine: Engine, page_id: int, payload: dict[str, Any]) -> bool:
         category = _clean(payload.get("category"), 32)
         if category not in CATEGORY_KEYS:
             raise ValueError("Раздел: " + ", ".join(CATEGORY_KEYS))
-    title = _clean(payload.get("title"), MAX_TITLE) or current["title"]
+    title = _clean(payload.get("title"), _cfg("MAX_TITLE")) or current["title"]
 
     if payload.get("slug"):
         slug = _unique_slug(engine, _clean_slug(payload["slug"]) or _slugify(title), exclude_id=page_id)
