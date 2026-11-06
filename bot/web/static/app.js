@@ -4846,12 +4846,14 @@ function kbPageLinkTitle(value) {
   return title || 'Страница';
 }
 
-/* Маркеры → ссылки. На вход — уже экранированный текст: HTML не пере-экранируем. */
+/* Маркеры → ссылки. На вход — уже экранированный текст: HTML не пере-экранируем.
+   `@` из маркера на экран не выводим: читателю достаточно иконки статьи и
+   подписи, а символ `@` выглядел как упоминание сотрудника. */
 function kbLinkify(text) {
   const value = String(text == null ? '' : text);
   if (!value.includes('@[')) return value;
   return value.replace(KB_PAGE_LINK_RE, (match, title, id) =>
-    `<a class="neft-page-link" href="${kbPageHref(id)}" data-kb-page="${Number(id)}"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>@${title}</a>`);
+    `<a class="neft-page-link" href="${kbPageHref(id)}" data-kb-page="${Number(id)}"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>${title}</a>`);
 }
 
 function kbInlineFormat(text) {

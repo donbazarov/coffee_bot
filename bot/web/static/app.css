@@ -2600,7 +2600,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 
 .neft-page-link:hover { border-bottom-style: solid; }
 .neft-page-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.neft-page-link .icon { width: 1em; height: 1em; margin-right: 2px; vertical-align: -.12em; }
+.neft-page-link .icon { width: 1em; height: 1em; margin-right: 4px; vertical-align: -.12em; }
 
 /* Подсказка `@`. Живёт в контейнере поля: в диалоге — абсолютно (top layer и
    стекло задают containing block), в чате — фиксированно над панелью ввода. */
