@@ -3649,8 +3649,70 @@ function startSlideshow() {
 
 function shiftSlide(step) {
   if (!slideshow.items.length) return;
-  slideshow.index = (slideshow.index + step + slideshow.items.length) % slideshow.items.length;
-  renderAnnouncementsPreview();
+  slideshowGoTo(slideshow.index + step);
+  startSlideshow();
+}
+
+/* Узел трека слайд-шоу. */
+function slideshowTrack() {
+  return document.querySelector('#announcements-preview-list .slideshow-track');
+}
+
+/* Сдвигаем трек на нужную карточку. При drag (animate=false) карточка следует
+   за пальцем без transition — иначе была бы вязкая «резинка». */
+function moveTrack(offset, animate) {
+  const track = slideshowTrack();
+  if (!track) return;
+  track.classList.toggle('is-dragging', !animate);
+  const width = track.offsetWidth || 0;
+  track.style.transform = `translateX(${offset - slideshow.index * width}px)`;
+}
+
+/* Высота вьюпорта = высота активной карточки: соседние панели плавно
+   выезжают наверх/вниз (transition: height в CSS). */
+function syncPreviewHeight() {
+  const preview = document.querySelector('#announcements-preview-list');
+  const viewport = preview && preview.querySelector('.slideshow-viewport');
+  const track = preview && preview.querySelector('.slideshow-track');
+  if (!viewport || !track) return;
+  const active = track.children[slideshow.index];
+  const card = active && active.firstElementChild;
+  if (!card) return;
+  const apply = () => { viewport.style.height = card.offsetHeight + 'px'; };
+  apply();
+  requestAnimationFrame(apply);   // и ещё раз после догрузки картинок/перерисовки
+}
+
+/* Переключение слайдов только классами — без перерисовки DOM, иначе анимация
+   cover-scale не успевала бы проиграться. */
+function updateSlides() {
+  const track = slideshowTrack();
+  if (!track) return;
+  const slides = [...track.children];
+  const total = slides.length;
+  slides.forEach((slide, index) => {
+    const active = index === slideshow.index;
+    slide.classList.toggle('is-active', active);
+    slide.classList.toggle('is-prev', index < slideshow.index);
+    slide.classList.toggle('is-next', index > slideshow.index);
+    slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+  });
+  const count = document.querySelector('#announcements-preview-list [data-slide-count]');
+  if (count) count.textContent = `${slideshow.index + 1} / ${total}`;
+  document.querySelectorAll('#announcements-preview-list .slideshow-dot').forEach((dot, index) => {
+    const active = index === slideshow.index;
+    dot.classList.toggle('is-active', active);
+    dot.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+  moveTrack(0, true);
+  syncPreviewHeight();
+}
+
+/* Перейти к слайду по индексу (с зацикливанием) без перерисовки DOM. */
+function slideshowGoTo(index) {
+  const total = slideshow.items.length || 1;
+  slideshow.index = ((index % total) + total) % total;
+  updateSlides();
 }
 
 function renderAnnouncementsPreview() {
@@ -3664,10 +3726,14 @@ function renderAnnouncementsPreview() {
   }
   if (slideshow.index >= slideshow.items.length) slideshow.index = 0;
   const total = slideshow.items.length;
+  const slides = slideshow.items
+    .map((item) => `<article class="announcement-slide">${announcementMarkup(item)}</article>`)
+    .join('');
   const nav = total > 1
-    ? `<div class="slideshow-nav"><button class="icon-button" type="button" data-slide-step="-1" aria-label="Предыдущий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><span class="slideshow-count">${slideshow.index + 1} / ${total}</span><button class="icon-button" type="button" data-slide-step="1" aria-label="Следующий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>${'<div class="slideshow-dots">' + slideshow.items.map((item, index) => `<button type="button" class="slideshow-dot ${index === slideshow.index ? 'is-active' : ''}" data-slide="${index}" aria-label="Анонс ${index + 1}"></button>`).join('') + '</div>'}`
+    ? `<div class="slideshow-nav"><button class="icon-button" type="button" data-slide-step="-1" aria-label="Предыдущий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><span class="slideshow-count" data-slide-count>${slideshow.index + 1} / ${total}</span><button class="icon-button" type="button" data-slide-step="1" aria-label="Следующий анонс"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>${'<div class="slideshow-dots">' + slideshow.items.map((item, index) => `<button type="button" class="slideshow-dot" data-slide="${index}" aria-label="Анонс ${index + 1}"></button>`).join('') + '</div>'}`
     : '';
-  node.innerHTML = `<div class="slideshow">${announcementMarkup(slideshow.items[slideshow.index])}${nav}</div>`;
+  node.innerHTML = `<div class="slideshow"><div class="slideshow-viewport"><div class="slideshow-track">${slides}</div></div>${nav}</div>`;
+  updateSlides();
   startSlideshow();
 }
 
@@ -3763,7 +3829,10 @@ async function openAnnouncementCard(id) {
   announcementsState.filter = 'all';
   setView('announcements');
   await openAnnouncements();
-  const target = document.querySelector(`[data-announcement-id="${id}"]`);
+  // Целимся сначала в полный список: в превью на «Обзоре» те же id, но
+  // карточка может быть на невидимом слайде, и подсветка была бы не видна.
+  const target = document.querySelector(`#announcements-list [data-announcement-id="${id}"]`)
+    || document.querySelector(`[data-announcement-id="${id}"]`);
   if (!target) return;
   target.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
   target.classList.add('is-highlighted');
@@ -4033,7 +4102,7 @@ function setupAnnouncements() {
     if (step) { shiftSlide(Number(step.dataset.slideStep) || 1); return; }
 
     const dot = event.target.closest('[data-slide]');
-    if (dot) { slideshow.index = Number(dot.dataset.slide) || 0; renderAnnouncementsPreview(); return; }
+    if (dot) { slideshowGoTo(Number(dot.dataset.slide) || 0); startSlideshow(); return; }
 
     const filter = event.target.closest('[data-ann-filter]');
     if (filter) {
@@ -4155,19 +4224,87 @@ function setupAnnouncements() {
   document.querySelectorAll('#announcement-category-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => categoryDialog?.close()));
   categoryDialog?.addEventListener('click', (event) => { if (event.target === categoryDialog) categoryDialog.close(); });
 
-  // Свайп по слайд-шоу и пауза, пока вкладка не на экране.
+  // Свайп по слайд-шоу (как в Instagram): карточка следует за пальцем, а на
+  // отпускании дощёлкивает к соседней. Пока тянем — автослайд на паузе.
   const preview = document.querySelector('#announcements-preview-list');
   if (preview) {
-    let startX = null;
-    preview.addEventListener('pointerdown', (event) => { startX = event.clientX; slideshow.paused = true; stopSlideshow(); });
-    preview.addEventListener('pointerup', (event) => {
-      if (startX !== null && Math.abs(event.clientX - startX) > 40) shiftSlide(event.clientX < startX ? 1 : -1);
-      startX = null;
-      slideshow.paused = false;
-      startSlideshow();
+    const DRAG_SLOP = 8;        // порог, после которого начинаем тянуть карточку
+    const SNAP_FRACTION = 0.25; // доля ширины, достаточная для перелистывания
+    const FLICK = 0.5;          // px/мс — быстрый флик листает без полного сдвига
+    let drag = null;
+    let suppressClick = false;  // свайп не должен превращаться в клик по карточке
+
+    const slideWidth = () => (slideshowTrack()?.offsetWidth || preview.clientWidth || 1);
+
+    preview.addEventListener('click', (event) => {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick = false;
+    }, { capture: true });
+
+    preview.addEventListener('pointerdown', (event) => {
+      if (event.button) { drag = null; return; }          // только основная кнопка/касание
+      if (!event.target.closest('.slideshow-viewport')) { drag = null; return; }
+      if (event.target.closest('a, button')) { drag = null; return; }
+      drag = { x: event.clientX, y: event.clientY, axis: null, lastX: event.clientX, lastT: performance.now() };
+      slideshow.paused = true;
+      stopSlideshow();
+      preview.setPointerCapture?.(event.pointerId);
     });
-    preview.addEventListener('pointercancel', () => { startX = null; slideshow.paused = false; startSlideshow(); });
+
+    preview.addEventListener('pointermove', (event) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.axis) {
+        if (Math.abs(dx) < DRAG_SLOP && Math.abs(dy) < DRAG_SLOP) return;
+        drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      }
+      if (drag.axis !== 'x') return;                      // вертикаль отдаём скроллу
+      event.preventDefault();
+      drag.lastX = event.clientX;
+      drag.lastT = performance.now();
+      moveTrack(dx, false);
+    });
+
+    const settle = (event) => {
+      if (!drag) return;
+      const state = drag;
+      drag = null;
+      slideshow.paused = false;
+      if (state.axis === 'x') {
+        const endX = event ? event.clientX : state.lastX;
+        const dx = endX - state.x;
+        const dt = Math.max(1, performance.now() - state.lastT);
+        const velocity = (endX - state.lastX) / dt;
+        const passed = Math.abs(dx) > slideWidth() * SNAP_FRACTION || Math.abs(velocity) > FLICK;
+        if (passed) {
+          const goNext = Math.abs(velocity) > FLICK ? velocity < 0 : dx < 0;
+          slideshowGoTo(slideshow.index + (goNext ? 1 : -1));
+        } else {
+          updateSlides();                                 // откат к текущей карточке
+        }
+        // Свайп не должен превращаться в клик по карточке.
+        if (Math.abs(dx) > DRAG_SLOP) {
+          suppressClick = true;
+          setTimeout(() => { suppressClick = false; }, 400);
+        }
+      } else {
+        updateSlides();
+      }
+      startSlideshow();
+    };
+
+    preview.addEventListener('pointerup', settle);
+    preview.addEventListener('pointercancel', () => settle(null));
   }
+  // При смене ширины карточка переливается — пересчитываем высоту вьюпорта.
+  let previewResizeRaf = 0;
+  window.addEventListener('resize', () => {
+    if (previewResizeRaf) return;
+    previewResizeRaf = requestAnimationFrame(() => { previewResizeRaf = 0; syncPreviewHeight(); });
+  });
   document.addEventListener('visibilitychange', () => {
     slideshow.paused = document.hidden;
     if (document.hidden) stopSlideshow(); else startSlideshow();

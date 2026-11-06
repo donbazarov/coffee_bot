@@ -789,9 +789,21 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
   .announcement-foot .announcement-actions { margin-top: 0; }
 }
 
-/* Слайд-шоу последних анонсов на главной: всегда один блок */
+/* Слайд-шоу последних анонсов на главной: одна карточка за раз.
+   Высота вьюпорта плавно подстраивается под активную карточку (её пишет JS),
+   поэтому панели под слайд-шоу выезжают с замедлением, а не прыгают. */
 .announcement-slideshow { min-height: 92px; }
 .slideshow { display: grid; gap: 10px; }
+.slideshow-viewport { position: relative; overflow: hidden; touch-action: pan-y; transition: height .45s cubic-bezier(.22,1,.36,1); }
+.slideshow-track { position: absolute; inset: 0; cursor: grab; transition: transform .5s cubic-bezier(.22,1,.36,1); will-change: transform; }
+.slideshow-track.is-dragging { transition: none; cursor: grabbing; }
+.slideshow-track.is-dragging .announcement { cursor: grabbing; }
+/* Card cover-scale: активная карточка в фокусе, соседние уменьшены и подсунуты
+   к краю — при перелистывании они «выезжают» из-под неё. */
+.announcement-slide { position: absolute; inset: 0; opacity: 0; visibility: hidden; transform: translateX(6%) scale(.94); transform-origin: center; transition: transform .5s cubic-bezier(.22,1,.36,1), opacity .5s cubic-bezier(.22,1,.36,1), visibility .5s; will-change: transform, opacity; }
+.announcement-slide.is-active { opacity: 1; visibility: visible; transform: translateX(0) scale(1); }
+.announcement-slide.is-prev { transform: translateX(-6%) scale(.94); }
+.announcement-slide.is-next { transform: translateX(6%) scale(.94); }
 .slideshow .announcement { cursor: grab; }
 .slideshow .announcement-title { display: block; -webkit-line-clamp: unset; }
 .slideshow .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
@@ -800,6 +812,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .slideshow-dots { display: flex; justify-content: center; gap: 6px; }
 .slideshow-dot { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: var(--line-strong); cursor: pointer; }
 .slideshow-dot.is-active { background: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  .slideshow-viewport, .slideshow-track, .announcement-slide { transition: none !important; }
+}
 
 /* Лента на главной — один блок; текст обрезаем, чтобы не распухало. */
 .announcement-list.is-compact { gap: 8px; }
@@ -1822,7 +1837,7 @@ body { transition: background-color .3s ease, color .3s ease; }
   --lg-r-dock: 22px;
 }
 [data-theme="light"] {
-  --lg-fill: rgba(255, 255, 255, .55);
+  --lg-fill: rgba(255, 255, 255, .65);
   --lg-border: rgba(255, 255, 255, .6);
   --lg-edge: rgba(255, 255, 255, .8);
   --lg-drop: 0 14px 38px rgba(30, 26, 18, .14);
