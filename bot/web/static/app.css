@@ -839,7 +839,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .slideshow-dot { width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%; background: var(--line-strong); cursor: pointer; }
 .slideshow-dot.is-active { background: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
-  .slideshow-viewport, .slideshow-track, .announcement-slide { transition: none !important; }
+  .slideshow-viewport, .slideshow-track, .announcement-slide, .drink-slide { transition: none !important; }
 }
 
 /* Лента на главной — один блок; текст обрезаем, чтобы не распухало. */
@@ -1391,6 +1391,25 @@ body { transition: background-color .3s ease, color .3s ease; }
 .kb-layout { display: grid; gap: 14px; }
 .kb-tree-panel { padding: 19px 21px; }
 .kb-page-panel { padding: 22px 24px 24px; }
+/* Листание страниц базы знаний свайпом/стрелками: страницы грузятся по одной,
+   поэтому анимируем смену содержимого — уезжающий слой и входящий контент.
+   Тот же «слайд», что у каруселей, только без общего трека. */
+.kb-page-stage { position: relative; overflow: hidden; }
+.kb-page { touch-action: pan-y; transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .32s cubic-bezier(.22,1,.36,1); }
+/* Внутри широких таблиц горизонтальный жест — это скролл таблицы, а не свайп. */
+.kb-page .kb-table-wrap { touch-action: auto; }
+.kb-page.kb-no-transition { transition: none; }
+.kb-page.is-enter-next { transform: translateX(8%); opacity: 0; }
+.kb-page.is-enter-prev { transform: translateX(-8%); opacity: 0; }
+.kb-page-outgoing { position: absolute; inset: 0; z-index: 1; overflow: hidden; pointer-events: none; transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .32s cubic-bezier(.22,1,.36,1); }
+.kb-page-outgoing.is-next.is-leaving { transform: translateX(-8%); opacity: 0; }
+.kb-page-outgoing.is-prev.is-leaving { transform: translateX(8%); opacity: 0; }
+.kb-page-nav { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.kb-page-nav[hidden] { display: none; }
+.kb-page-nav .icon-button:disabled { opacity: .35; cursor: default; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .kb-page, .kb-page-outgoing { transition: none !important; }
+}
 .kb-tree { display: flex; flex-direction: column; gap: 14px; }
 .kb-category { display: flex; flex-direction: column; gap: 6px; }
 .kb-category-title { display: flex; align-items: center; justify-content: space-between; margin: 0; color: var(--muted); font: 10px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
@@ -1584,6 +1603,15 @@ body { transition: background-color .3s ease, color .3s ease; }
 .drinks-feed { display: flex; flex-direction: column; gap: 14px; }
 .drinks-feed .empty-state { color: var(--muted); }
 .drinks-more { align-self: center; margin-top: 4px; }
+
+/* Карточки описаний листаются как слайд-шоу «Последних событий», но только
+   вручную (стрелки, точки, свайп) — автосмены нет. Слайды — flex-элементы во
+   всю ширину вьюпорта: трек сдвигается на -index * ширину активной карточки. */
+.drinks-feed .slideshow .drink-card { cursor: grab; }
+.drink-slide { flex: 0 0 100%; width: 100%; min-width: 0; opacity: 0; visibility: hidden; transform: translateX(6%) scale(.94); transform-origin: center; transition: transform .5s cubic-bezier(.22,1,.36,1), opacity .5s cubic-bezier(.22,1,.36,1), visibility .5s; will-change: transform, opacity; }
+.drink-slide.is-active { opacity: 1; visibility: visible; transform: translateX(0) scale(1); }
+.drink-slide.is-prev { transform: translateX(6%) scale(.94); }
+.drink-slide.is-next { transform: translateX(-6%) scale(.94); }
 
 .drink-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 16px 18px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface); }
 .drink-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }

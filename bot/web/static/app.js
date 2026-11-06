@@ -4433,6 +4433,11 @@ const kbState = {
   treeOpen: true,
 };
 
+/* Карусель страниц базы знаний: свайп/стрелки открывают соседнюю страницу из
+   оглавления со слайд-анимацией. Автосмены нет. `busy` — идёт переход и загрузка,
+   `pending` — направление для первого рендера после перехода. */
+const kbNav = { busy: false, pending: 0 };
+
 function kbCategoryLabel(key) {
   const found = KB_CATEGORIES.find((item) => item.key === key);
   return found ? found.label : key;
@@ -4650,6 +4655,7 @@ function renderKbTree() {
   if (count) count.textContent = String(visible.length);
   if (!visible.length) {
     node.innerHTML = `<p class="kb-empty kb-empty-tree">${query ? 'Ничего не найдено' : 'Пока нет страниц'}</p>`;
+    kbRenderPageNav();
     return;
   }
   const categories = kbState.filter === KB_CATEGORY_ALL ? kbState.categories : [kbState.filter];
@@ -4661,6 +4667,7 @@ function renderKbTree() {
     parts.push(`<section class="kb-category" data-kb-category="${key}"><button class="kb-category-head" type="button" data-kb-category-toggle="${key}" aria-expanded="${open ? 'true' : 'false'}"><span class="kb-category-title">${escapeHtml(kbCategoryLabel(key))}</span><span class="kb-category-count">${items.length}</span><svg class="icon kb-category-chevron" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button><div class="kb-fold${open ? ' is-open' : ''}"><div class="kb-fold-inner">${kbCategoryTree(items)}</div></div></section>`);
   }
   node.innerHTML = parts.join('');
+  kbRenderPageNav();
 }
 
 function kbTime(iso) {
@@ -4908,9 +4915,16 @@ function renderKbPage() {
   if (!node) return;
   const status = document.querySelector('#kb-tree-status');
   if (status) status.textContent = '';
+  // Навигация свайпом/стрелками: старый контент уводим отдельным слоем, новый
+  // выезжает сбоку — как слайд в карусели, только страницы грузятся поштучно.
+  const animate = kbNav.pending !== 0 && Boolean(node.firstElementChild) && !prefersReducedMotion();
+  const direction = kbNav.pending || 1;
+  kbNav.pending = 0;
+  if (!animate) node.classList.remove('kb-no-transition', 'is-enter-next', 'is-enter-prev');
   const page = kbState.current;
   if (!page) {
     node.innerHTML = '<p class="kb-empty">Выберите страницу слева, чтобы открыть её. Зерно — фирменные цвета Pantone, напитки — ТТК, состав и правила подачи.</p>';
+    kbRenderPageNav();
     return;
   }
   const meta = [`<span class="kb-chip">${escapeHtml(kbCategoryLabel(page.category))}</span>`];
@@ -4930,8 +4944,99 @@ function renderKbPage() {
       + '<div class="kb-recipe-history" id="kb-recipe-history"><p class="kb-empty">Загрузка истории…</p></div>';
   } else if (page.category === 'drinks') body = kbDrinkMarkup(page.drink);
   const content = kbBodyMarkup(page);
+  let outgoing = null;
+  if (animate) {
+    node.parentElement?.querySelector('.kb-page-outgoing')?.remove();
+    outgoing = document.createElement('div');
+    outgoing.className = `kb-page-outgoing ${direction > 0 ? 'is-next' : 'is-prev'}`;
+    while (node.firstChild) outgoing.appendChild(node.firstChild);
+    // Снимок не должен плодить дубли id (например, #kb-recipe-history).
+    outgoing.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    (node.parentElement || node).appendChild(outgoing);
+    node.classList.add('kb-no-transition', direction > 0 ? 'is-enter-next' : 'is-enter-prev');
+    void node.offsetWidth;   // фиксируем стартовое смещение без анимации
+    node.classList.remove('kb-no-transition');
+  }
   node.innerHTML = `<header class="kb-page-head"><div><p class="eyebrow">${escapeHtml(kbCategoryLabel(page.category))}</p><h3 class="kb-page-title">${escapeHtml(page.title)}</h3><div class="kb-meta-row">${meta.join('')}</div></div>${actions}</header><div class="kb-page-body">${body}${content}</div>`;
   if (page.category === 'beans') loadKbRecipes(page.id);
+  if (outgoing) {
+    requestAnimationFrame(() => {
+      outgoing.classList.add('is-leaving');
+      node.classList.remove('is-enter-next', 'is-enter-prev');
+    });
+    setTimeout(() => outgoing.remove(), 360);
+  }
+  kbRenderPageNav();
+}
+
+/* Порядок страниц так, как они показаны в оглавлении: по разделам, внутри —
+   корни и их потомки по алфавиту. Учитывает фильтр раздела и строку поиска. */
+function kbOrderedIds() {
+  const query = kbState.query.trim();
+  const base = kbState.filter === KB_CATEGORY_ALL ? kbState.items : kbState.items.filter((item) => item.category === kbState.filter);
+  const visible = query ? base.filter(kbMatchesQuery) : base;
+  const categories = kbState.filter === KB_CATEGORY_ALL ? kbState.categories : [kbState.filter];
+  const order = [];
+  for (const key of categories) {
+    const items = visible.filter((item) => item.category === key);
+    if (!items.length) continue;
+    const ids = new Set(items.map((item) => item.id));
+    const byParent = (parentId) => items
+      .filter((item) => item.parent_id === parentId)
+      .sort((a, b) => String(a.title).localeCompare(String(b.title), 'ru'));
+    const roots = items
+      .filter((item) => item.parent_id == null || !ids.has(item.parent_id))
+      .sort((a, b) => String(a.title).localeCompare(String(b.title), 'ru'));
+    const seen = new Set();
+    const walk = (item) => {
+      if (seen.has(item.id)) return;
+      seen.add(item.id);
+      order.push(item.id);
+      for (const child of byParent(item.id)) walk(child);
+    };
+    for (const root of roots) walk(root);
+  }
+  return order;
+}
+
+/* Стрелки-соседи и счётчик «N / всего» под статьёй. */
+function kbRenderPageNav() {
+  const nav = document.querySelector('#kb-page-nav');
+  if (!nav) return;
+  const order = kbOrderedIds();
+  const total = order.length;
+  const index = order.indexOf(kbState.selectedId);
+  if (total <= 1 || index === -1) { nav.hidden = true; nav.innerHTML = ''; return; }
+  const atStart = index <= 0;
+  const atEnd = index >= total - 1;
+  nav.hidden = false;
+  nav.innerHTML = `<div class="slideshow-nav"><button class="icon-button" type="button" data-kb-page-step="-1" aria-label="Предыдущая страница"${atStart ? ' disabled' : ''}><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><span class="slideshow-count">${index + 1} / ${total}</span><button class="icon-button" type="button" data-kb-page-step="1" aria-label="Следующая страница"${atEnd ? ' disabled' : ''}><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>`;
+}
+
+/* Перейти к соседней странице из оглавления (без зацикливания: на краях стоп). */
+function kbNavigatePage(step) {
+  const order = kbOrderedIds();
+  const total = order.length;
+  if (total <= 1) return;
+  const index = order.indexOf(kbState.selectedId);
+  const nextIndex = index === -1 ? (step > 0 ? 0 : total - 1) : index + step;
+  if (nextIndex < 0 || nextIndex >= total) return;
+  const targetId = order[nextIndex];
+  if (targetId === kbState.selectedId) return;
+  kbSwitchPage(targetId, step);
+}
+
+/* Запускает переход: направление запоминаем для первого рендера новой страницы. */
+async function kbSwitchPage(id, step) {
+  if (kbNav.busy) return;
+  kbNav.busy = true;
+  kbNav.pending = step > 0 ? 1 : -1;
+  try {
+    await openKbPage(id);
+  } finally {
+    kbNav.busy = false;
+    if (kbNav.pending) kbNav.pending = 0;
+  }
 }
 
 async function openKbPage(id) {
@@ -5733,6 +5838,73 @@ function setupKnowledgeBase() {
     const remove = event.target.closest('[data-kb-delete]');
     if (remove) deleteKbPage(Number(remove.dataset.kbDelete));
   });
+  document.querySelector('#kb-page-nav')?.addEventListener('click', (event) => {
+    const step = event.target.closest('[data-kb-page-step]');
+    if (step) kbNavigatePage(Number(step.dataset.kbPageStep) || 1);
+  });
+
+  // Свайп по статье: влево — следующая страница из оглавления, вправо — предыдущая.
+  const kbPage = document.querySelector('#kb-page');
+  if (kbPage && !kbPage.dataset.swipeBound) {
+    kbPage.dataset.swipeBound = '1';
+    const DRAG_SLOP = 10;       // порог, после которого считаем движение свайпом
+    const SNAP_FRACTION = 0.22; // доля ширины, достаточная для перелистывания
+    const FLICK = 0.45;         // px/мс — быстрый флик листает без полного сдвига
+    let drag = null;
+    let suppressClick = false;  // свайп не должен превращаться в клик по статье
+
+    const pageWidth = () => kbPage.clientWidth || 1;
+
+    kbPage.addEventListener('click', (event) => {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick = false;
+    }, { capture: true });
+
+    kbPage.addEventListener('pointerdown', (event) => {
+      if (event.button) { drag = null; return; }            // только основная кнопка/касание
+      if (event.target.closest('a, button, input, select, textarea, label, img, .kb-table-wrap')) { drag = null; return; }
+      drag = { x: event.clientX, y: event.clientY, axis: null, lastX: event.clientX, lastT: performance.now() };
+      kbPage.setPointerCapture?.(event.pointerId);
+    });
+
+    kbPage.addEventListener('pointermove', (event) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.axis) {
+        if (Math.abs(dx) < DRAG_SLOP && Math.abs(dy) < DRAG_SLOP) return;
+        drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      }
+      if (drag.axis !== 'x') return;                        // вертикаль отдаём скроллу
+      event.preventDefault();
+      drag.lastX = event.clientX;
+      drag.lastT = performance.now();
+    });
+
+    const settle = (event) => {
+      if (!drag) return;
+      const state = drag;
+      drag = null;
+      if (state.axis !== 'x') return;
+      const endX = event ? event.clientX : state.lastX;
+      const dx = endX - state.x;
+      const dt = Math.max(1, performance.now() - state.lastT);
+      const velocity = (endX - state.lastX) / dt;
+      const passed = Math.abs(dx) > pageWidth() * SNAP_FRACTION || Math.abs(velocity) > FLICK;
+      // Свайп не должен превращаться в клик по тегу/кнопке внутри статьи.
+      if (Math.abs(dx) > DRAG_SLOP) {
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 400);
+      }
+      if (!passed) return;
+      const goNext = Math.abs(velocity) > FLICK ? velocity < 0 : dx < 0;
+      kbNavigatePage(goNext ? 1 : -1);
+    };
+    kbPage.addEventListener('pointerup', settle);
+    kbPage.addEventListener('pointercancel', () => settle(null));
+  }
   const search = document.querySelector('#kb-search');
   if (search) {
     let searchTimer;
@@ -6202,6 +6374,10 @@ const drinkState = {
   memes: { items: [], authors: [], author: '', offset: 0, limit: 30, hasMore: false, loaded: false, locked: [], lockedCount: 0 },
 };
 
+/* Карусель карточек-описаний: индекс текущей карточки. Автосмены нет —
+   листаем только вручную (стрелки, точки, свайп). */
+const drinkCarousel = { index: 0 };
+
 function drinkPointLabel(point) {
   return DRINK_POINT_LABELS[point] || point || 'Другое';
 }
@@ -6244,6 +6420,9 @@ async function openDrinkCard(descriptionId, focusQuiz = false) {
     card = find();
   }
   if (!card) { showToast('Не удалось найти описание в ленте'); return; }
+  // Карточка могла оказаться на скрытом слайде — переводим карусель на неё.
+  const cardIndex = drinkState.items.findIndex((item) => item.id === target);
+  if (cardIndex >= 0) { drinkCarousel.index = cardIndex; drinkCarouselUpdate(); }
   if (focusQuiz) {
     const quiz = card.querySelector('[data-quiz-id]');
     if (quiz) {
@@ -6263,6 +6442,7 @@ async function loadDrinks(reset = false) {
   if (reset) {
     drinkState.offset = 0;
     drinkState.items = [];
+    drinkCarousel.index = 0;
     if (feed) feed.innerHTML = '<p class="empty-state">Загрузка…</p>';
   }
   try {
@@ -6318,10 +6498,89 @@ function renderDrinksFeed() {
   if (!feed) return;
   if (!drinkState.items.length) {
     feed.innerHTML = '<p class="empty-state">Пока нет описаний смен. Станьте первым!</p>';
-  } else {
-    feed.innerHTML = drinkState.items.map(drinkCardMarkup).join('');
+    drinkCarousel.index = 0;
+    if (more) more.hidden = !drinkState.hasMore;
+    return;
   }
+  if (drinkCarousel.index >= drinkState.items.length) drinkCarousel.index = 0;
+  const total = drinkState.items.length;
+  const slides = drinkState.items
+    .map((desc) => `<article class="drink-slide">${drinkCardMarkup(desc)}</article>`)
+    .join('');
+  // Точки показываем, пока их немного: на длинной ленте они превращаются в
+  // частокол, ориентиром остаются стрелки и счётчик «N / всего».
+  const dots = total > 1 && total <= 12
+    ? `<div class="slideshow-dots">${drinkState.items.map((desc, index) => `<button type="button" class="slideshow-dot" data-drink-slide="${index}" aria-label="Описание ${index + 1}"></button>`).join('')}</div>`
+    : '';
+  const nav = total > 1
+    ? `<div class="slideshow-nav"><button class="icon-button" type="button" data-drink-slide-step="-1" aria-label="Предыдущее описание"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><span class="slideshow-count" data-drink-slide-count>${drinkCarousel.index + 1} / ${total}</span><button class="icon-button" type="button" data-drink-slide-step="1" aria-label="Следующее описание"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>${dots}`
+    : '';
+  feed.innerHTML = `<div class="slideshow"><div class="slideshow-viewport"><div class="slideshow-track">${slides}</div></div>${nav}</div>`;
+  drinkCarouselUpdate();
   if (more) more.hidden = !drinkState.hasMore;
+}
+
+/* Узел трека карусели описаний. */
+function drinkCarouselTrack() {
+  return document.querySelector('#drinks-feed .slideshow-track');
+}
+
+/* Сдвиг трека: при drag (animate=false) карточка следует за пальцем без transition. */
+function drinkCarouselMove(offset, animate) {
+  const track = drinkCarouselTrack();
+  if (!track) return;
+  track.classList.toggle('is-dragging', !animate);
+  const width = track.offsetWidth || 0;
+  track.style.transform = `translateX(${offset - drinkCarousel.index * width}px)`;
+}
+
+/* Высота вьюпорта = высота активной карточки: соседние панели плавно
+   подъезжают (transition: height в CSS). */
+function drinkCarouselSyncHeight() {
+  const feed = document.querySelector('#drinks-feed');
+  const viewport = feed && feed.querySelector('.slideshow-viewport');
+  const track = feed && feed.querySelector('.slideshow-track');
+  if (!viewport || !track) return;
+  const active = track.children[drinkCarousel.index];
+  const card = active && active.firstElementChild;
+  if (!card) return;
+  const apply = () => { viewport.style.height = card.offsetHeight + 'px'; };
+  apply();
+  requestAnimationFrame(apply);   // и ещё раз после догрузки картинок/перерисовки
+}
+
+/* Переключение слайдов только классами — без перерисовки DOM, иначе анимация
+   cover-scale не успевала бы проиграться. */
+function drinkCarouselUpdate() {
+  const feed = document.querySelector('#drinks-feed');
+  const track = drinkCarouselTrack();
+  if (!feed || !track) return;
+  const slides = [...track.children];
+  const total = slides.length;
+  slides.forEach((slide, index) => {
+    const active = index === drinkCarousel.index;
+    slide.classList.toggle('is-active', active);
+    slide.classList.toggle('is-prev', index < drinkCarousel.index);
+    slide.classList.toggle('is-next', index > drinkCarousel.index);
+    slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+  });
+  const count = feed.querySelector('[data-drink-slide-count]');
+  if (count) count.textContent = `${drinkCarousel.index + 1} / ${total}`;
+  feed.querySelectorAll('.slideshow-dot').forEach((dot, index) =>
+    dot.classList.toggle('is-active', index === drinkCarousel.index));
+  drinkCarouselMove(0, true);
+  drinkCarouselSyncHeight();
+}
+
+/* Перейти к карточке по индексу (с зацикливанием) без перерисовки DOM. */
+function drinkCarouselGoTo(index) {
+  const total = drinkState.items.length || 1;
+  drinkCarousel.index = ((index % total) + total) % total;
+  drinkCarouselUpdate();
+}
+
+function shiftDrinkSlide(step) {
+  drinkCarouselGoTo(drinkCarousel.index + step);
 }
 
 function drinkItemView(item) {
@@ -7068,7 +7327,14 @@ function setupDrinks() {
     renderDrinkFilters();
     loadDrinks(true);
   });
-  document.querySelector('#drinks-feed')?.addEventListener('click', (event) => {
+  const drinksFeed = document.querySelector('#drinks-feed');
+  drinksFeed?.addEventListener('click', (event) => {
+    const step = event.target.closest('[data-drink-slide-step]');
+    if (step) { shiftDrinkSlide(Number(step.dataset.drinkSlideStep) || 1); return; }
+
+    const dot = event.target.closest('[data-drink-slide]');
+    if (dot) { drinkCarouselGoTo(Number(dot.dataset.drinkSlide) || 0); return; }
+
     const jump = event.target.closest('[data-drink-vote-jump]');
     if (jump) {
       jump.closest('[data-drink-id]')?.querySelector('[data-quiz-id]')
@@ -7079,6 +7345,88 @@ function setupDrinks() {
     const card = button ? button.closest('[data-drink-id]') : null;
     if (!button || !card || button.disabled) return;
     voteDrinkQuiz(Number(card.dataset.drinkId), Number(button.dataset.drinkVote), Number(button.dataset.option));
+  });
+
+  // Свайп по карусели описаний: карточка следует за пальцем, а на отпускании
+  // дощёлкивает к соседней. Автосмены нет — только ручное листание.
+  if (drinksFeed) {
+    const DRAG_SLOP = 8;        // порог, после которого начинаем тянуть карточку
+    const SNAP_FRACTION = 0.25; // доля ширины, достаточная для перелистывания
+    const FLICK = 0.5;          // px/мс — быстрый флик листает без полного сдвига
+    let drag = null;
+    let suppressClick = false;  // свайп не должен превращаться в клик по карточке
+
+    const slideWidth = () => (drinkCarouselTrack()?.offsetWidth || drinksFeed.clientWidth || 1);
+
+    drinksFeed.addEventListener('click', (event) => {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick = false;
+    }, { capture: true });
+
+    drinksFeed.addEventListener('pointerdown', (event) => {
+      if (event.button) { drag = null; return; }          // только основная кнопка/касание
+      if (!event.target.closest('.slideshow-viewport')) { drag = null; return; }
+      if (event.target.closest('a, button')) { drag = null; return; }
+      drag = { x: event.clientX, y: event.clientY, axis: null, lastX: event.clientX, lastT: performance.now() };
+      drinksFeed.setPointerCapture?.(event.pointerId);
+    });
+
+    drinksFeed.addEventListener('pointermove', (event) => {
+      if (!drag) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (!drag.axis) {
+        if (Math.abs(dx) < DRAG_SLOP && Math.abs(dy) < DRAG_SLOP) return;
+        drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      }
+      if (drag.axis !== 'x') return;                      // вертикаль отдаём скроллу
+      event.preventDefault();
+      drag.lastX = event.clientX;
+      drag.lastT = performance.now();
+      drinkCarouselMove(dx, false);
+    });
+
+    const settle = (event) => {
+      if (!drag) return;
+      const state = drag;
+      drag = null;
+      if (state.axis === 'x') {
+        const endX = event ? event.clientX : state.lastX;
+        const dx = endX - state.x;
+        const dt = Math.max(1, performance.now() - state.lastT);
+        const velocity = (endX - state.lastX) / dt;
+        const passed = Math.abs(dx) > slideWidth() * SNAP_FRACTION || Math.abs(velocity) > FLICK;
+        if (passed) {
+          const goNext = Math.abs(velocity) > FLICK ? velocity < 0 : dx < 0;
+          drinkCarouselGoTo(drinkCarousel.index + (goNext ? 1 : -1));
+        } else {
+          drinkCarouselUpdate();                          // откат к текущей карточке
+        }
+        // Свайп не должен превращаться в клик по карточке.
+        if (Math.abs(dx) > DRAG_SLOP) {
+          suppressClick = true;
+          setTimeout(() => { suppressClick = false; }, 400);
+        }
+      } else {
+        drinkCarouselUpdate();
+      }
+    };
+    drinksFeed.addEventListener('pointerup', settle);
+    drinksFeed.addEventListener('pointercancel', () => settle(null));
+
+    // Картинки внутри карточки догружаются позже — пересчитываем высоту вьюпорта,
+    // чтобы соседние панели не «прыгали».
+    drinksFeed.addEventListener('load', (event) => {
+      if (event.target.tagName === 'IMG') drinkCarouselSyncHeight();
+    }, true);
+  }
+
+  let drinksResizeRaf = 0;
+  window.addEventListener('resize', () => {
+    if (drinksResizeRaf) return;
+    drinksResizeRaf = requestAnimationFrame(() => { drinksResizeRaf = 0; drinkCarouselSyncHeight(); });
   });
   const dialog = document.querySelector('#drink-dialog');
   if (!dialog) return;

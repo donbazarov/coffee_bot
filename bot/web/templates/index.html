@@ -350,9 +350,12 @@
             </div></div>
           </aside>
           <article class="panel settings-panel kb-page-panel">
-            <div class="kb-page" id="kb-page" aria-live="polite">
-              <p class="kb-empty">Выберите страницу слева, чтобы открыть её. Зерно — фирменные цвета Pantone, напитки — ТТК, состав и правила подачи.</p>
+            <div class="kb-page-stage" id="kb-page-stage">
+              <div class="kb-page" id="kb-page" aria-live="polite">
+                <p class="kb-empty">Выберите страницу слева, чтобы открыть её. Зерно — фирменные цвета Pantone, напитки — ТТК, состав и правила подачи.</p>
+              </div>
             </div>
+            <div class="kb-page-nav" id="kb-page-nav" hidden></div>
           </article>
         </div>
       </section>{% endif %}
