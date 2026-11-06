@@ -45,6 +45,15 @@ const SHELL = [
   // в офлайне осталась бы с пустым местом вместо медали.
   `/static/vendor/model-viewer.min.js?v=${VERSION}`,
   `/static/models/medal_base.glb?v=${VERSION}`,
+  // Блок-редактор базы знаний (Editor.js + плагины): вендорим локально и
+  // прекешируем, чтобы редактор открывался и в офлайне (управляющие роли).
+  `/static/vendor/editorjs/editorjs.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/header.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/editorjs-list.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/checklist.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/table.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/quote.umd.js?v=${VERSION}`,
+  `/static/vendor/editorjs/delimiter.umd.js?v=${VERSION}`,
   '/static/icons/favicon.ico',
   '/static/icons/favicon-96x96.png',
   '/static/icons/apple-touch-icon.png',

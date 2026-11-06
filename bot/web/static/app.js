@@ -2855,6 +2855,7 @@ function setView(name) {
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
   if (name === 'kb') openKnowledgeBase();
+  else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar' && modulePreferences.calendar_enabled) loadCalendar();
   if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); }
@@ -4394,6 +4395,12 @@ const KB_PANTONE = [
   { value: 'Pantone 423 C', hex: '#92938d' },
 ];
 const KB_PANTONE_OTHER = 'другое';
+// Оглавление: раскрытые разделы/узлы запоминаем в localStorage, максимум тегов
+// и длина одной метки совпадают с лимитами бэкенда (`MAX_TAGS`/`MAX_TAG`).
+const KB_EXPANDED_KEY = 'neft-kb-expanded';
+const KB_TREE_OPEN_KEY = 'neft-kb-tree-open';
+const KB_MAX_TAGS = 12;
+const KB_MAX_TAG_LEN = 40;
 
 const kbState = {
   items: [],
@@ -4405,6 +4412,10 @@ const kbState = {
   recipesPageId: null,
   ready: false,
   canEdit: managerRole,
+  expanded: new Set(),
+  openCategories: new Set(),
+  expandedLoaded: false,
+  treeOpen: true,
 };
 
 function kbCategoryLabel(key) {
@@ -4442,8 +4453,149 @@ function kbFilterChips() {
   node.innerHTML = chips.join('');
 }
 
+/* Подсветка совпадений поиска: экранируем текст и оборачиваем вхождения
+   в <mark>. Пустой запрос — просто экранированный текст. */
+function kbHighlight(value, query) {
+  const text = String(value == null ? '' : value);
+  const term = String(query || '').trim();
+  if (!term) return escapeHtml(text);
+  const lower = text.toLowerCase();
+  const needle = term.toLowerCase();
+  let result = '';
+  let cursor = 0;
+  let index = lower.indexOf(needle);
+  while (index !== -1) {
+    result += escapeHtml(text.slice(cursor, index));
+    result += `<mark class="kb-mark">${escapeHtml(text.slice(index, index + needle.length))}</mark>`;
+    cursor = index + needle.length;
+    index = lower.indexOf(needle, cursor);
+  }
+  return result + escapeHtml(text.slice(cursor));
+}
+
+/* --- Оглавление: раскрытие разделов и узлов (fold down) ------------------- */
+
+function kbLoadExpanded() {
+  if (kbState.expandedLoaded) return;
+  kbState.expandedLoaded = true;
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(KB_EXPANDED_KEY) || 'null'); } catch (error) { stored = null; }
+  if (stored && typeof stored === 'object') {
+    if (Array.isArray(stored.nodes)) kbState.expanded = new Set(stored.nodes.map(Number));
+    if (Array.isArray(stored.categories)) kbState.openCategories = new Set(stored.categories.map(String));
+  } else {
+    // Первый вход: разворачиваем все разделы, чтобы оглавление не казалось пустым.
+    kbState.openCategories = new Set(kbState.categories);
+  }
+}
+
+function kbSaveExpanded() {
+  try {
+    localStorage.setItem(KB_EXPANDED_KEY, JSON.stringify({
+      nodes: [...kbState.expanded],
+      categories: [...kbState.openCategories],
+    }));
+  } catch (error) { /* приватный режим — просто не запоминаем */ }
+}
+
+function kbToggleNode(id) {
+  const open = !kbState.expanded.has(id);
+  if (open) kbState.expanded.add(id); else kbState.expanded.delete(id);
+  kbSaveExpanded();
+  // Класс переключаем на уже существующем узле, а не перерисовываем дерево:
+  // при перерисовке элемент рождается сразу с нужным классом и CSS-переход
+  // `grid-template-rows` не запускается (нет анимации).
+  const toggle = document.querySelector(`[data-kb-toggle="${id}"]`);
+  const fold = toggle && toggle.closest('.kb-leaf') ? toggle.closest('.kb-leaf').querySelector(':scope > .kb-fold') : null;
+  if (toggle) { toggle.classList.toggle('is-open', open); toggle.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+  if (fold) fold.classList.toggle('is-open', open);
+}
+
+function kbToggleCategory(key) {
+  const open = !kbState.openCategories.has(key);
+  if (open) kbState.openCategories.add(key); else kbState.openCategories.delete(key);
+  kbSaveExpanded();
+  const head = document.querySelector(`.kb-category-head[data-kb-category-toggle="${key}"]`);
+  const fold = head && head.closest('.kb-category') ? head.closest('.kb-category').querySelector('.kb-fold') : null;
+  if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (fold) fold.classList.toggle('is-open', open);
+}
+
+/* --- Панель оглавления: сворачивание целиком + плавающая кнопка ----------- */
+
+/* Узкий экран — там, где оглавление и статья стоят друг под другом. */
+function kbIsNarrow() {
+  return window.innerWidth < 900;
+}
+
+function kbLoadTreeOpen() {
+  let stored = null;
+  try { stored = localStorage.getItem(KB_TREE_OPEN_KEY); } catch (error) { stored = null; }
+  kbState.treeOpen = stored === null ? true : stored === '1';
+}
+
+/* Сворачивает/разворачивает всю панель оглавления (анимирует grid-rows). */
+function kbSetTreeOpen(open, persist = true) {
+  kbState.treeOpen = open;
+  if (persist) { try { localStorage.setItem(KB_TREE_OPEN_KEY, open ? '1' : '0'); } catch (error) { /* приватный режим */ } }
+  const fold = document.querySelector('#kb-tree-fold');
+  if (fold) fold.classList.toggle('is-open', open);
+  const button = document.querySelector('#kb-tree-toggle');
+  if (button) {
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    button.setAttribute('aria-label', open ? 'Свернуть оглавление' : 'Развернуть оглавление');
+  }
+  kbUpdateTreeFab();
+}
+
+/* Плавающая кнопка «Оглавление»: только на узком экране, только в разделе «База
+   знаний», когда панель свёрнута и её шапка ушла вверх при прокрутке. */
+function kbUpdateTreeFab() {
+  const fab = document.querySelector('#kb-tree-fab');
+  if (!fab) return;
+  const view = document.querySelector('#kb-view');
+  const inView = Boolean(view) && !view.hidden;
+  const panel = document.querySelector('.kb-tree-panel');
+  const headerOut = panel ? panel.getBoundingClientRect().bottom <= 0 : false;
+  fab.classList.toggle('is-visible', inView && kbIsNarrow() && !kbState.treeOpen && headerOut);
+}
+
+function setupKbTreeFab() {
+  const fab = document.querySelector('#kb-tree-fab');
+  if (fab && !fab.dataset.bound) {
+    fab.dataset.bound = '1';
+    fab.addEventListener('click', () => {
+      kbSetTreeOpen(true);
+      document.querySelector('.kb-tree-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+  const panel = document.querySelector('.kb-tree-panel');
+  if (panel && !panel.dataset.fabObserved && 'IntersectionObserver' in window) {
+    panel.dataset.fabObserved = '1';
+    new IntersectionObserver(() => kbUpdateTreeFab(), { threshold: 0 }).observe(panel);
+  }
+  if (!document.body.dataset.kbFabResize) {
+    document.body.dataset.kbFabResize = '1';
+    window.addEventListener('resize', kbUpdateTreeFab);
+  }
+}
+
+/* Разворачивает путь к странице, чтобы выбранный узел был виден в дереве. */
+function kbExpandPath(id) {
+  const byId = new Map(kbState.items.map((item) => [item.id, item]));
+  let node = byId.get(Number(id));
+  const guard = new Set();
+  while (node && node.parent_id != null && byId.has(node.parent_id) && !guard.has(node.id)) {
+    guard.add(node.id);
+    kbState.expanded.add(node.parent_id);
+    kbState.openCategories.add(node.category);
+    node = byId.get(node.parent_id);
+  }
+  if (node) kbState.openCategories.add(node.category);
+}
+
 /* Дерево одной категории: корни — страницы без родителя (или с родителем вне
-   выборки), дети — по parent_id. */
+   выборки), дети — по parent_id. Узлы с детьми сворачиваются (fold down). */
 function kbCategoryTree(items) {
   const ids = new Set(items.map((item) => item.id));
   const byParent = (parentId) => items
@@ -4452,7 +4604,10 @@ function kbCategoryTree(items) {
   const build = (list, depth) => `<ul class="kb-group">${list.map((item) => {
     const active = item.id === kbState.selectedId;
     const children = byParent(item.id);
-    return `<li class="kb-leaf"><button class="kb-node${active ? ' is-active' : ''}" type="button"${active ? ' aria-current="true"' : ''} data-kb-open="${item.id}" style="--kb-depth:${depth}"><span class="kb-node-label">${escapeHtml(item.title)}</span>${kbReferenceBadge(item.reference)}</button>${children.length ? build(children, depth + 1) : ''}</li>`;
+    const hasChildren = children.length > 0;
+    const open = hasChildren && (kbState.expanded.has(item.id) || Boolean(kbState.query));
+    const toggle = `<button class="kb-node-toggle${open ? ' is-open' : ''}${hasChildren ? '' : ' kb-node-toggle-empty'}" type="button"${hasChildren ? ` data-kb-toggle="${item.id}"` : ''} aria-expanded="${open ? 'true' : 'false'}" aria-label="${open ? 'Свернуть' : 'Развернуть'}"${hasChildren ? '' : ' tabindex="-1" aria-hidden="true"'}><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button>`;
+    return `<li class="kb-leaf"><div class="kb-node-row"><button class="kb-node${active ? ' is-active' : ''}" type="button"${active ? ' aria-current="true"' : ''} data-kb-open="${item.id}" style="--kb-depth:${depth}"><span class="kb-node-label">${kbHighlight(item.title, kbState.query)}</span>${kbReferenceBadge(item.reference)}</button>${toggle}</div>${hasChildren ? `<div class="kb-fold${open ? ' is-open' : ''}"><div class="kb-fold-inner">${build(children, depth + 1)}</div></div>` : ''}</li>`;
   }).join('')}</ul>`;
   const roots = items
     .filter((item) => item.parent_id == null || !ids.has(item.parent_id))
@@ -4460,11 +4615,12 @@ function kbCategoryTree(items) {
   return build(roots, 0);
 }
 
-/* Страница попадает в поиск по названию или по имени связанного справочника. */
+/* Страница попадает в поиск по названию, тегам или имени связанного справочника. */
 function kbMatchesQuery(item) {
   const query = kbState.query.trim().toLowerCase();
   if (!query) return true;
   if (String(item.title || '').toLowerCase().includes(query)) return true;
+  if (Array.isArray(item.tags) && item.tags.some((tag) => String(tag).toLowerCase().includes(query))) return true;
   const reference = item.reference;
   return Boolean(reference && reference.name && String(reference.name).toLowerCase().includes(query));
 }
@@ -4486,7 +4642,8 @@ function renderKbTree() {
   for (const key of categories) {
     const items = visible.filter((item) => item.category === key);
     if (!items.length) continue;
-    parts.push(`<section class="kb-category" data-kb-category="${key}"><p class="kb-category-title">${escapeHtml(kbCategoryLabel(key))}<span class="kb-category-count">${items.length}</span></p>${kbCategoryTree(items)}</section>`);
+    const open = Boolean(query) || kbState.openCategories.has(key);
+    parts.push(`<section class="kb-category" data-kb-category="${key}"><button class="kb-category-head" type="button" data-kb-category-toggle="${key}" aria-expanded="${open ? 'true' : 'false'}"><span class="kb-category-title">${escapeHtml(kbCategoryLabel(key))}</span><span class="kb-category-count">${items.length}</span><svg class="icon kb-category-chevron" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button><div class="kb-fold${open ? ' is-open' : ''}"><div class="kb-fold-inner">${kbCategoryTree(items)}</div></div></section>`);
   }
   node.innerHTML = parts.join('');
 }
@@ -4640,19 +4797,93 @@ function kbContentToHtml(text) {
   return parts.join('');
 }
 
-/* Тело страницы (wiki/standards) может лежать как обычный текст или как JSON —
-   рендерим читаемо в обоих случаях. */
+/* Безопасный инлайн-рендер содержимого блока: сначала экранируем ВСЁ, затем
+   возвращаем только простые теги, которые ставит Editor.js и его тулбар. */
+function kbSanitizeInline(value) {
+  const escaped = escapeHtml(String(value == null ? '' : value));
+  return escaped
+    .replace(/&lt;(\/?)(b|strong|i|em|u|s|code|mark|br|sub|sup)(\s*\/?)&gt;/gi, '<$1$2$3>')
+    .replace(/&lt;a href=&quot;(https?:\/\/[^"&]+)&quot;&gt;/gi, '<a href="$1" target="_blank" rel="noopener noreferrer">')
+    .replace(/&lt;\/a&gt;/gi, '</a>');
+}
+
+/* Картинку из блока принимаем только с нашего фото-эндпоинта (или data:image) —
+   произвольные URL и инъекции в src не пропускаем. */
+function kbSafeMediaUrl(value) {
+  const url = String(value == null ? '' : value).trim();
+  if (/^\/api\/kb\/photos\/[0-9a-f]{32}\.webp$/.test(url)) return url;
+  if (/^data:image\/(png|jpe?g|webp|gif);base64,[a-z0-9+/=]+$/i.test(url)) return url;
+  return '';
+}
+
+/* Режим чтения: JSON-блоки Editor.js → безопасный HTML для бариста и стажёров
+   (управляющие роли видят те же блоки, но в интерактивном редакторе). */
+function kbBlocksToHtml(blocks) {
+  if (!Array.isArray(blocks)) return '';
+  const parts = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== 'object') continue;
+    const data = block.data || {};
+    const type = block.type;
+    if (type === 'header') {
+      const level = Math.min(4, Math.max(2, Number(data.level) || 2));
+      parts.push(`<h${level}>${kbSanitizeInline(data.text)}</h${level}>`);
+    } else if (type === 'paragraph') {
+      parts.push(`<p>${kbSanitizeInline(data.text)}</p>`);
+    } else if (type === 'list') {
+      const tag = data.style === 'ordered' ? 'ol' : 'ul';
+      const items = Array.isArray(data.items) ? data.items : [];
+      const rows = items.map((item) => `<li>${kbSanitizeInline(typeof item === 'string' ? item : (item && item.content) || '')}</li>`).join('');
+      parts.push(`<${tag}>${rows}</${tag}>`);
+    } else if (type === 'checklist') {
+      const items = Array.isArray(data.items) ? data.items : [];
+      const rows = items.map((item) => {
+        const checked = item && item.checked ? ' is-checked' : '';
+        return `<li class="kb-check${checked}"><span class="kb-check-box" aria-hidden="true"></span>${kbSanitizeInline((item && item.text) || '')}</li>`;
+      }).join('');
+      parts.push(`<ul class="kb-checklist">${rows}</ul>`);
+    } else if (type === 'table') {
+      const rows = Array.isArray(data.content) ? data.content : [];
+      const withHeadings = Boolean(data.withHeadings);
+      const body = rows.map((row, index) => {
+        const cell = withHeadings && index === 0 ? 'th' : 'td';
+        const cells = (Array.isArray(row) ? row : []).map((value) => `<${cell}>${kbSanitizeInline(value)}</${cell}>`).join('');
+        return `<tr>${cells}</tr>`;
+      }).join('');
+      parts.push(`<div class="kb-table-wrap"><table>${body}</table></div>`);
+    } else if (type === 'quote') {
+      const caption = data.caption ? `<cite>${escapeHtml(String(data.caption))}</cite>` : '';
+      parts.push(`<blockquote>${kbSanitizeInline(data.text)}${caption}</blockquote>`);
+    } else if (type === 'delimiter') {
+      parts.push('<div class="kb-delimiter" role="presentation">***</div>');
+    } else if (type === 'image') {
+      const url = kbSafeMediaUrl(data.url);
+      if (url) {
+        const caption = data.caption ? `<figcaption>${escapeHtml(String(data.caption))}</figcaption>` : '';
+        parts.push(`<figure class="kb-image"><img src="${escapeHtml(url)}" alt="${escapeHtml(String(data.caption || ''))}" loading="lazy" data-media-url="${escapeHtml(url)}">${caption}</figure>`);
+      }
+    }
+  }
+  return parts.join('');
+}
+
+/* Тело страницы (wiki/standards): новый формат — блоки Editor.js, легаси —
+   Markdown-строка или JSON с полем text. Рендерим читаемо в обоих случаях. */
 function kbBodyMarkup(page) {
   const raw = page.content_json;
   if (!raw) return '';
-  let text = raw;
-  try {
-    const parsed = JSON.parse(raw);
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (error) { parsed = null; }
+  let html;
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.blocks)) {
+    html = kbBlocksToHtml(parsed.blocks);
+  } else {
+    let text = raw;
     if (typeof parsed === 'string') text = parsed;
     else if (parsed && typeof parsed === 'object' && typeof parsed.text === 'string') text = parsed.text;
-    else text = JSON.stringify(parsed, null, 2);
-  } catch (error) { /* не JSON — выводим как есть */ }
-  const html = kbContentToHtml(text);
+    else if (parsed && typeof parsed === 'object') text = JSON.stringify(parsed, null, 2);
+    html = kbContentToHtml(text);
+  }
   if (!html) return '';
   return `<div class="kb-field"><p class="kb-field-label">Содержимое</p><div class="kb-field-value kb-content">${html}</div></div>`;
 }
@@ -4668,6 +4899,11 @@ function renderKbPage() {
     return;
   }
   const meta = [`<span class="kb-chip">${escapeHtml(kbCategoryLabel(page.category))}</span>`];
+  if (Array.isArray(page.tags) && page.tags.length) {
+    for (const tag of page.tags) {
+      meta.push(`<button class="kb-tag" type="button" data-kb-tag="${escapeHtml(tag)}" title="Показать страницы с тегом">${kbHighlight(tag, kbState.query)}</button>`);
+    }
+  }
   if (page.author_name) meta.push(`<span class="kb-meta">${escapeHtml(page.author_name)}</span>`);
   if (page.updated_at) meta.push(`<span class="kb-meta">обновлено ${escapeHtml(kbTime(page.updated_at))}</span>`);
   const actions = kbState.canEdit
@@ -4686,7 +4922,11 @@ function renderKbPage() {
 async function openKbPage(id) {
   const numeric = Number(id);
   kbState.selectedId = numeric;
+  kbExpandPath(numeric);
   renderKbTree();
+  // На телефоне при открытии статьи сворачиваем оглавление до шапки, чтобы
+  // текст сразу был перед глазами (развернуть можно кнопкой или через FAB).
+  if (kbIsNarrow()) kbSetTreeOpen(false);
   const status = document.querySelector('#kb-tree-status');
   if (status) status.textContent = 'Загрузка страницы…';
   const cached = readCache(`${CACHE_KEY_KB_PAGE}:${numeric}`);
@@ -4714,6 +4954,7 @@ async function loadKnowledgeBase() {
     kbState.items = cached.items;
     if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
     kbFilterChips();
+    kbRenderTagSuggestions();
     renderKbTree();
   }
   try {
@@ -4723,6 +4964,7 @@ async function loadKnowledgeBase() {
     writeCache(CACHE_KEY_KB_LIST, { items: kbState.items, categories: kbState.categories });
     writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     kbFilterChips();
+    kbRenderTagSuggestions();
     renderKbTree();
     return true;
   } catch (error) {
@@ -4739,9 +4981,14 @@ async function loadKnowledgeBase() {
 /* Открытие раздела: первая загрузка рисует каркас, а пустой раздел сразу
    открывает первую доступную страницу, чтобы не было пустого экрана. */
 async function openKnowledgeBase() {
+  kbLoadExpanded();
+  kbLoadTreeOpen();
   if (!kbState.ready) { kbFilterChips(); renderKbTree(); kbState.ready = true; }
+  setupKbTreeFab();
+  kbSetTreeOpen(kbState.treeOpen, false);
   const ok = await loadKnowledgeBase();
   if (ok && !kbState.current && kbState.items.length) openKbPage(kbState.items[0].id);
+  kbUpdateTreeFab();
 }
 
 /* Рисует палитру Pantone свотчами + кнопку «Другое» (единый источник — KB_PANTONE). */
@@ -4847,6 +5094,7 @@ function openKbDialog(page) {
   const errorNode = document.querySelector('#kb-form-error');
   if (errorNode) errorNode.hidden = true;
   form.dataset.pageId = page ? String(page.id) : '';
+  kbSetDialogTags(page && Array.isArray(page.tags) ? page.tags : []);
   document.querySelector('#kb-dialog-kicker').textContent = page ? 'ПРАВКА СТРАНИЦЫ' : 'НОВАЯ СТРАНИЦА';
   document.querySelector('#kb-dialog-title').textContent = page ? 'Изменить страницу' : 'Страница';
   document.querySelector('#kb-form-submit').textContent = page ? 'Сохранить' : 'Создать';
@@ -4905,8 +5153,11 @@ function openKbDialog(page) {
     kbSetDrinkPhoto('serve_here', (draft.fields || {}).serve_here_photo || '');
     kbSetDrinkPhoto('serve_takeaway', (draft.fields || {}).serve_takeaway_photo || '');
     kbSyncFields();
+    // Теги черновика лежат в скрытом поле строкой JSON — вернём их в чипсы.
+    try { kbSetDialogTags(JSON.parse(form.elements.tags.value || '[]')); } catch (error) { kbSetDialogTags([]); }
   }
   dialog.showModal();
+  kbSyncEditorForCategory();
   if (draft) {
     renderDraftNotice(form, 'kb', () => { form.reset(); kbResetDrinkPhotos(); kbSyncFields(); });
   }
@@ -4923,6 +5174,7 @@ async function submitKbForm(event) {
   const payload = { title, category };
   const parentId = form.elements.parent_id.value;
   payload.parent_id = parentId ? Number(parentId) : null;
+  payload.tags = kbDialogTags.slice();
   if (category === 'beans') {
     let pantone = form.elements.pantone_select.value;
     if (pantone === KB_PANTONE_OTHER) {
@@ -4950,7 +5202,7 @@ async function submitKbForm(event) {
       is_active: form.elements.is_active.checked,
     };
   } else {
-    payload.content_json = form.elements.content_json.value.trim() || null;
+    payload.content_json = await kbCollectContent();
   }
   const pageId = form.dataset.pageId;
   const submit = document.querySelector('#kb-form-submit');
@@ -4997,6 +5249,10 @@ async function deleteKbPage(id) {
 
 let kbEditorBound = false;
 let kbPhotosBound = false;
+let kbTagsBound = false;
+// Теги текущего диалога (строки) и инстанс блочного редактора Editor.js.
+let kbDialogTags = [];
+let kbEditorInstance = null;
 
 /* Обновляет индикаторы цвета на кнопках тулбара под текущие значения пикеров. */
 function syncKbToolChips() {
@@ -5095,6 +5351,279 @@ function setupKbEditor() {
   syncKbToolChips();
 }
 
+/* --- Блок-редактор страниц (Editor.js, локальный вендоринг) ---------------
+   Интерактивный редактор поднимаем только для wiki/standards и только когда
+   библиотека загрузилась (управляющие роли). Иначе остаётся прежняя textarea. */
+
+/* Кастомный Image Tool: грузит фото на штатный `POST /api/kb/photos`
+   (raw body + CSRF) и вставляет блок с нашим URL — без multipart. */
+class KbImageTool {
+  constructor({ data }) {
+    this.data = { url: (data && data.url) || '', caption: (data && data.caption) || '' };
+  }
+
+  static get toolbox() {
+    return {
+      title: 'Фото',
+      icon: '<svg width="17" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
+    };
+  }
+
+  render() {
+    const wrap = document.createElement('div');
+    wrap.className = 'kb-image-tool';
+    if (this.data.url) wrap.appendChild(this._figure());
+    const label = document.createElement('label');
+    label.className = 'kb-photo-pick';
+    label.textContent = this.data.url ? 'Заменить фото' : 'Загрузить фото';
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    label.appendChild(input);
+    const status = document.createElement('p');
+    status.className = 'kb-image-tool-status';
+    input.addEventListener('change', () => this._upload(input.files && input.files[0], wrap));
+    wrap.appendChild(label);
+    wrap.appendChild(status);
+    return wrap;
+  }
+
+  _figure() {
+    const figure = document.createElement('figure');
+    figure.className = 'kb-image';
+    const image = document.createElement('img');
+    image.src = this.data.url;
+    image.alt = this.data.caption || '';
+    image.loading = 'lazy';
+    image.setAttribute('data-media-url', this.data.url);
+    figure.appendChild(image);
+    if (this.data.caption) {
+      const caption = document.createElement('figcaption');
+      caption.textContent = this.data.caption;
+      figure.appendChild(caption);
+    }
+    return figure;
+  }
+
+  async _upload(file, wrap) {
+    if (!file) return;
+    const status = wrap.querySelector('.kb-image-tool-status');
+    if (status) status.textContent = 'Загрузка…';
+    try {
+      const response = await fetch('/api/kb/photos', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+        credentials: 'same-origin',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || 'Не удалось загрузить фото');
+      this.data.url = data.url;
+      const label = wrap.querySelector('.kb-photo-pick');
+      wrap.querySelector('figure.kb-image')?.remove();
+      wrap.insertBefore(this._figure(), label || wrap.firstChild);
+      if (label) label.firstChild.nodeValue = 'Заменить фото';
+      if (status) status.textContent = '';
+    } catch (error) {
+      if (status) status.textContent = error.message;
+    }
+  }
+
+  save() { return { url: this.data.url, caption: this.data.caption }; }
+}
+
+/* Инструменты Editor.js: базовые плагины + кастомная картинка. */
+function kbEditorTools() {
+  return {
+    header: { class: window.Header, inlineToolbar: true, config: { levels: [2, 3, 4], defaultLevel: 2 } },
+    list: { class: window.EditorjsList, inlineToolbar: true, config: { defaultStyle: 'unordered' } },
+    checklist: { class: window.Checklist, inlineToolbar: true },
+    table: { class: window.Table, inlineToolbar: true },
+    quote: { class: window.Quote, inlineToolbar: true },
+    delimiter: { class: window.Delimiter },
+    image: { class: KbImageTool },
+  };
+}
+
+/* Читает текущее содержимое в блоки Editor.js: новый JSON — как есть, легаси
+   текст/Markdown — одним параграфом, чтобы ничего не потерять. */
+function kbParseContentToBlocks() {
+  const textarea = document.querySelector('#kb-page-form textarea[name="content_json"]');
+  const raw = textarea ? textarea.value.trim() : '';
+  if (!raw) return [];
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (error) { parsed = null; }
+  if (parsed && typeof parsed === 'object' && Array.isArray(parsed.blocks)) {
+    return parsed.blocks.filter((block) => block && typeof block.type === 'string');
+  }
+  return [{ type: 'paragraph', data: { text: escapeHtml(raw).replace(/\n/g, '<br>') } }];
+}
+
+/* Доступны ли ядро Editor.js и нужные плагины (иначе — фолбэк-textarea). */
+function kbEditorAvailable() {
+  return typeof window.EditorJS === 'function'
+    && typeof window.Header === 'function'
+    && typeof window.EditorjsList === 'function'
+    && typeof window.Checklist === 'function'
+    && typeof window.Table === 'function'
+    && typeof window.Quote === 'function'
+    && typeof window.Delimiter === 'function';
+}
+
+function kbEnsureEditor() {
+  if (kbEditorInstance || !kbEditorAvailable()) return;
+  const mount = document.querySelector('#kb-editor');
+  if (!mount) return;
+  try {
+    kbEditorInstance = new window.EditorJS({
+      holder: mount,
+      data: { blocks: kbParseContentToBlocks() },
+      placeholder: 'Начните писать или нажмите «+» слева…',
+      minHeight: 120,
+      tools: kbEditorTools(),
+    });
+  } catch (error) {
+    kbEditorInstance = null;
+    showToast('Не удалось открыть редактор — используется простой режим');
+  }
+}
+
+function kbDestroyEditor() {
+  if (kbEditorInstance) {
+    try { kbEditorInstance.destroy(); } catch (error) { /* Editor.js мог не успеть */ }
+    kbEditorInstance = null;
+  }
+  const mount = document.querySelector('#kb-editor');
+  if (mount) mount.innerHTML = '';
+}
+
+/* Переключает редактор/фолбэк под категорию и доступность библиотеки. */
+function kbSyncEditorForCategory() {
+  const form = document.querySelector('#kb-page-form');
+  if (!form) return;
+  const category = form.elements.category.value;
+  const usesEditor = category === 'wiki' || category === 'standards';
+  const canUseEditor = kbEditorAvailable();
+  const fallback = document.querySelector('#kb-editor-fallback');
+  const mount = document.querySelector('#kb-editor');
+  if (usesEditor && canUseEditor) {
+    if (fallback) fallback.hidden = true;
+    if (mount) mount.hidden = false;
+    kbEnsureEditor();
+    // Не поднялся (сбой инициализации) — возвращаем текстовый фолбэк.
+    if (!kbEditorInstance) {
+      if (fallback) fallback.hidden = false;
+      if (mount) mount.hidden = true;
+    }
+  } else {
+    kbDestroyEditor();
+    if (fallback) fallback.hidden = false;
+    if (mount) mount.hidden = true;
+  }
+}
+
+/* Собирает содержимое для сохранения: блоки Editor.js в JSON либо текст из
+   фолбэк-textarea. */
+async function kbCollectContent() {
+  const textarea = document.querySelector('#kb-page-form textarea[name="content_json"]');
+  if (kbEditorInstance) {
+    try {
+      const data = await kbEditorInstance.save();
+      const blocks = (data && data.blocks) || [];
+      if (blocks.length) return JSON.stringify({ time: Date.now(), blocks, version: '2.31.7' });
+      return null;
+    } catch (error) { /* редактор не готов — падаем на textarea */ }
+  }
+  return textarea ? (textarea.value.trim() || null) : null;
+}
+
+/* --- Теги страницы: чипсы в диалоге --------------------------------------- */
+
+function kbNormalizeTag(value) {
+  return String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, KB_MAX_TAG_LEN);
+}
+
+function kbSetDialogTags(tags) {
+  const seen = new Set();
+  const list = [];
+  for (const item of (Array.isArray(tags) ? tags : [])) {
+    const tag = kbNormalizeTag(item);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    list.push(tag);
+    if (list.length >= KB_MAX_TAGS) break;
+  }
+  kbDialogTags = list;
+  kbRenderTagChips();
+}
+
+function kbRenderTagChips() {
+  const holder = document.querySelector('#kb-tag-chips');
+  if (holder) {
+    holder.innerHTML = kbDialogTags.map((tag) => `<span class="kb-tag-chip">${escapeHtml(tag)}<button class="kb-tag-remove" type="button" data-kb-tag-remove="${escapeHtml(tag)}" aria-label="Убрать тег ${escapeHtml(tag)}"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></span>`).join('');
+  }
+  const form = document.querySelector('#kb-page-form');
+  const hidden = form ? form.elements.tags : null;
+  if (hidden) hidden.value = JSON.stringify(kbDialogTags);
+}
+
+function kbAddDialogTag(value) {
+  const tag = kbNormalizeTag(value);
+  if (!tag) return;
+  const key = tag.toLowerCase();
+  if (kbDialogTags.some((item) => item.toLowerCase() === key)) return;
+  if (kbDialogTags.length >= KB_MAX_TAGS) { showToast(`Не больше ${KB_MAX_TAGS} тегов`); return; }
+  kbDialogTags.push(tag);
+  kbRenderTagChips();
+}
+
+function kbRemoveDialogTag(tag) {
+  const key = kbNormalizeTag(tag).toLowerCase();
+  kbDialogTags = kbDialogTags.filter((item) => item.toLowerCase() !== key);
+  kbRenderTagChips();
+}
+
+/* Подсказки тегов: уникальные метки из всех загруженных страниц. */
+function kbRenderTagSuggestions() {
+  const list = document.querySelector('#kb-tag-suggestions');
+  if (!list) return;
+  const seen = new Set();
+  const tags = [];
+  for (const item of kbState.items) {
+    for (const tag of (Array.isArray(item.tags) ? item.tags : [])) {
+      const key = String(tag).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tags.push(String(tag));
+    }
+  }
+  tags.sort((a, b) => a.localeCompare(b, 'ru'));
+  list.innerHTML = tags.map((tag) => `<option value="${escapeHtml(tag)}"></option>`).join('');
+}
+
+function setupKbTags() {
+  const input = document.querySelector('#kb-tag-input');
+  if (!input || kbTagsBound) return;
+  kbTagsBound = true;
+  input.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ',') {
+      event.preventDefault();
+      kbAddDialogTag(input.value);
+      input.value = '';
+    } else if (event.key === 'Backspace' && !input.value && kbDialogTags.length) {
+      kbRemoveDialogTag(kbDialogTags[kbDialogTags.length - 1]);
+    }
+  });
+  input.addEventListener('blur', () => { if (input.value.trim()) { kbAddDialogTag(input.value); input.value = ''; } });
+  document.querySelector('#kb-tag-chips')?.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-kb-tag-remove]');
+    if (button) kbRemoveDialogTag(button.dataset.kbTagRemove);
+  });
+  const hidden = document.querySelector('#kb-page-form input[name="tags"]');
+  if (hidden) hidden.value = '[]';
+}
+
 /* --- Фото подач напитка (raw body + CSRF, как у фото оценок) --------------- */
 
 async function kbUploadDrinkPhoto(field, file) {
@@ -5165,11 +5694,23 @@ function setupKnowledgeBase() {
     renderKbTree();
   });
   document.querySelector('#kb-tree')?.addEventListener('click', (event) => {
+    const toggle = event.target.closest('[data-kb-toggle]');
+    if (toggle) { kbToggleNode(Number(toggle.dataset.kbToggle)); return; }
+    const category = event.target.closest('[data-kb-category-toggle]');
+    if (category) { kbToggleCategory(category.dataset.kbCategoryToggle); return; }
     const node = event.target.closest('[data-kb-open]');
     if (node) openKbPage(Number(node.dataset.kbOpen));
   });
   document.querySelector('#kb-add-page')?.addEventListener('click', () => openKbDialog(null));
   document.querySelector('#kb-page')?.addEventListener('click', (event) => {
+    const tag = event.target.closest('[data-kb-tag]');
+    if (tag) {
+      const root = document.querySelector('#kb-search');
+      kbState.query = tag.dataset.kbTag;
+      if (root) root.value = kbState.query;
+      renderKbTree();
+      return;
+    }
     const recipe = event.target.closest('[data-kb-recipe]');
     if (recipe) { openDrinkCard(Number(recipe.dataset.kbRecipe)); return; }
     const edit = event.target.closest('[data-kb-edit]');
@@ -5195,11 +5736,16 @@ function setupKnowledgeBase() {
   });
   setupKbEditor();
   setupKbDrinkPhotos();
+  setupKbTags();
+  document.querySelector('#kb-tree-toggle')?.addEventListener('click', () => kbSetTreeOpen(!kbState.treeOpen));
+  setupKbTreeFab();
   const form = document.querySelector('#kb-page-form');
   if (form) {
-    form.elements.category.addEventListener('change', kbSyncFields);
+    form.elements.category.addEventListener('change', () => { kbSyncFields(); kbSyncEditorForCategory(); });
     form.addEventListener('submit', submitKbForm);
   }
+  // Закрыли диалог — гасим Editor.js, чтобы не держать DOM и слушатели.
+  document.querySelector('#kb-page-dialog')?.addEventListener('close', kbDestroyEditor);
 }
 
 /* --- Черновики форм (localStorage) ---------------------------------------

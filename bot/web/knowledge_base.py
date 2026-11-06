@@ -61,6 +61,10 @@ DRINK_CATEGORIES = ("черный кофе", "кофе с молоком", "ча
 MAX_TITLE = 200
 MAX_SLUG = 120
 MAX_TEXT = 20000
+# Теги страницы (Notion-lite): ограничиваем длину одного тега и их количество,
+# чтобы чипсы в интерфейсе не разрастались и поиск оставался осмысленным.
+MAX_TAG = 40
+MAX_TAGS = 12
 
 # Каталог фото подач напитков (не в git) — как аватары, чат и фото оценок.
 _KB_PHOTOS_DIR: Path | None = None
@@ -154,6 +158,9 @@ def initialize_schema(engine: Engine) -> None:
         # уже заполненные данные.
         for column in ("serve_here", "serve_takeaway", "serve_here_photo", "serve_takeaway_photo"):
             _add_column_if_missing(connection, "menu_drinks", column, "TEXT")
+        # Теги страниц (Notion-lite): колонку добавляем идемпотентно к базам,
+        # созданным до её появления. Значение — JSON-массив строк.
+        _add_column_if_missing(connection, "kb_pages", "tags", "TEXT")
         connection.execute(text("""
             UPDATE menu_drinks SET serve_here = serve_rules
             WHERE serve_here IS NULL AND serve_rules IS NOT NULL
@@ -271,6 +278,50 @@ def _dump_content(value: Any) -> str | None:
         return json.dumps(value, ensure_ascii=False)
     except (TypeError, ValueError) as error:
         raise ValueError("content_json должен быть строкой или JSON-объектом") from error
+
+
+def _normalize_tags(value: Any) -> str | None:
+    """Теги страницы храним JSON-массивом строк.
+
+    Принимаем список или строку через запятую/перенос строки; каждую метку
+    чистим по краям, ограничиваем длиной (`MAX_TAG`), убираем дубли без учёта
+    регистра и обрезаем до `MAX_TAGS`. Пустой набор сохраняем как `None`.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = re.split(r"[,\n]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        raw = [str(item) for item in value]
+    else:
+        raise ValueError("Теги должны быть списком или строкой")
+    tags: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        tag = " ".join(str(item).split())[:MAX_TAG].strip()
+        key = tag.lower()
+        if not tag or key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= MAX_TAGS:
+            break
+    return json.dumps(tags, ensure_ascii=False) if tags else None
+
+
+def _tags_list(value: Any) -> list[str]:
+    """Разбирает сохранённое значение тегов (`TEXT`) в список строк."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError):
+            parsed = [part.strip() for part in value.split(",")]
+        value = parsed
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item).strip()]
+    return []
 
 
 def _flag(value: Any, default: int = 1) -> int:
@@ -400,15 +451,36 @@ def _page_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row["id"], "parent_id": row["parent_id"], "title": row["title"],
         "slug": row["slug"], "category": row["category"], "author_id": row["author_id"],
-        "author_name": row["author_name"], "updated_at": row["updated_at"], "reference": reference,
+        "author_name": row["author_name"], "updated_at": row["updated_at"],
+        "tags": _tags_list(row.get("tags")), "reference": reference,
     }
 
 
-def list_pages(engine: Engine, category: str | None = None) -> list[dict[str, Any]]:
-    """Список страниц с фильтрацией по разделу и краткой сводкой справочника."""
+def _page_matches_query(item: dict[str, Any], needle: str) -> bool:
+    """Совпадение страницы с поисковым запросом (заголовок, теги, справочник).
+
+    Дублирует клиентский `kbMatchesQuery` и делаем это в Python, а не в SQL:
+    SQLite `LOWER()` не понижает регистр кириллицы, поэтому `LIKE` ломался бы
+    на русских названиях.
+    """
+    if needle in str(item.get("title") or "").lower():
+        return True
+    if any(needle in str(tag).lower() for tag in item.get("tags") or []):
+        return True
+    reference = item.get("reference") or {}
+    return needle in str(reference.get("name") or "").lower()
+
+
+def list_pages(engine: Engine, category: str | None = None, query: str | None = None) -> list[dict[str, Any]]:
+    """Список страниц с фильтрацией по разделу и краткой сводкой справочника.
+
+    Необязательный `query` фильтрует по заголовку, тегам и имени справочника —
+    серверный дубль мгновенного поиска на клиенте (см. `kbMatchesQuery`).
+    """
+    needle = (query or "").strip().lower()
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT p.id, p.parent_id, p.title, p.slug, p.category, p.author_id, p.updated_at,
+            SELECT p.id, p.parent_id, p.title, p.slug, p.category, p.tags, p.author_id, p.updated_at,
                    u.display_name AS author_name,
                    b.name AS bean_name, b.roast_type, b.pantone_color, b.is_active AS bean_active,
                    d.category AS drink_category, d.is_active AS drink_active
@@ -419,7 +491,10 @@ def list_pages(engine: Engine, category: str | None = None) -> list[dict[str, An
             WHERE (:category IS NULL OR p.category = :category)
             ORDER BY p.category ASC, p.title COLLATE NOCASE ASC
         """), {"category": category}).mappings().all()
-    return [_page_summary(dict(row)) for row in rows]
+    items = [_page_summary(dict(row)) for row in rows]
+    if needle:
+        items = [item for item in items if _page_matches_query(item, needle)]
+    return items
 
 
 def get_page(engine: Engine, page_id: int) -> dict[str, Any] | None:
@@ -452,6 +527,7 @@ def get_page(engine: Engine, page_id: int) -> dict[str, Any] | None:
         page["children"] = int(connection.execute(
             text("SELECT COUNT(*) FROM kb_pages WHERE parent_id = :id"), {"id": page_id}
         ).scalar_one())
+    page["tags"] = _tags_list(page.get("tags"))
     return page
 
 
@@ -466,6 +542,7 @@ def create_page(engine: Engine, author_id: int, payload: dict[str, Any]) -> int:
     if not title:
         raise ValueError("Заголовок обязателен")
     content = _dump_content(payload.get("content_json"))
+    tags = _normalize_tags(payload.get("tags"))
     parent_id = _clean_int(payload.get("parent_id"))
     slug = _unique_slug(engine, _clean_slug(payload.get("slug")) or _slugify(title))
 
@@ -473,11 +550,11 @@ def create_page(engine: Engine, author_id: int, payload: dict[str, Any]) -> int:
         if parent_id is not None and not _page_exists(connection, parent_id):
             raise ValueError("Родительская страница не найдена")
         result = connection.execute(text("""
-            INSERT INTO kb_pages (parent_id, title, slug, category, content_json, author_id)
-            VALUES (:parent_id, :title, :slug, :category, :content_json, :author_id)
+            INSERT INTO kb_pages (parent_id, title, slug, category, content_json, tags, author_id)
+            VALUES (:parent_id, :title, :slug, :category, :content_json, :tags, :author_id)
         """), {
             "parent_id": parent_id, "title": title, "slug": slug,
-            "category": category, "content_json": content, "author_id": author_id,
+            "category": category, "content_json": content, "tags": tags, "author_id": author_id,
         })
         page_id = int(result.lastrowid or 0)
         if category == "beans":
@@ -512,6 +589,8 @@ def update_page(engine: Engine, page_id: int, payload: dict[str, Any]) -> bool:
 
     content = _dump_content(payload["content_json"]) if "content_json" in payload else current["content_json"]
 
+    tags = _normalize_tags(payload["tags"]) if "tags" in payload else current.get("tags")
+
     parent_id = current["parent_id"]
     if "parent_id" in payload:
         parent_id = _clean_int(payload.get("parent_id"))
@@ -523,11 +602,11 @@ def update_page(engine: Engine, page_id: int, payload: dict[str, Any]) -> bool:
         connection.execute(text("""
             UPDATE kb_pages
             SET parent_id = :parent_id, title = :title, slug = :slug, category = :category,
-                content_json = :content_json, updated_at = CURRENT_TIMESTAMP
+                content_json = :content_json, tags = :tags, updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
         """), {
             "parent_id": parent_id, "title": title, "slug": slug,
-            "category": category, "content_json": content, "id": page_id,
+            "category": category, "content_json": content, "tags": tags, "id": page_id,
         })
 
         # Синхронизация справочника под (возможно, новую) категорию.
@@ -575,11 +654,12 @@ async def _json_object(request: Request) -> dict[str, Any]:
 
 
 @kb_router.get("/pages")
-def kb_list_pages(category: str | None = None, _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Список страниц. Необязательный фильтр `?category=beans|drinks|wiki|standards`."""
+def kb_list_pages(category: str | None = None, q: str | None = None,
+                  _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Список страниц. Фильтры: `?category=beans|drinks|wiki|standards` и `?q=<поиск>`."""
     if category is not None and category not in CATEGORY_KEYS:
         raise HTTPException(status_code=422, detail="Неизвестный раздел")
-    return {"items": list_pages(engine, category), "categories": list(CATEGORY_KEYS)}
+    return {"items": list_pages(engine, category, q), "categories": list(CATEGORY_KEYS)}
 
 
 @kb_router.get("/pages/{page_id}")

@@ -1774,6 +1774,133 @@ body { transition: background-color .3s ease, color .3s ease; }
   .kb-seg-button, .pantone-swatch, .kb-dialog .kb-tool { transition: none; }
 }
 
+/* --- Оглавление (fold down) и теги ---------------------------------------- */
+
+/* Сворачивание разделов и подразделов: анимируем grid-template-rows 0fr→1fr —
+   быстро и без замеров высоты (современный аналог max-height). */
+.kb-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
+.kb-fold.is-open { grid-template-rows: 1fr; }
+.kb-fold-inner { overflow: hidden; min-height: 0; }
+
+.kb-category-head { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; font: 10px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.kb-category-head:hover { color: var(--text-soft); }
+.kb-category-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.kb-category-head .kb-category-title { flex: 1 1 auto; }
+.kb-category-chevron { width: 14px; height: 14px; flex: 0 0 auto; transition: transform .24s ease; }
+.kb-category-head[aria-expanded="true"] .kb-category-chevron { transform: rotate(90deg); }
+
+.kb-node-row { display: flex; align-items: center; gap: 2px; }
+.kb-node-row .kb-node { flex: 1 1 auto; }
+.kb-node-toggle { display: grid; width: 34px; height: 44px; flex: 0 0 auto; place-items: center; border: 0; background: transparent; color: var(--muted); cursor: pointer; border-radius: 8px; transition: background-color .2s, color .2s; }
+.kb-node-toggle:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--text); }
+.kb-node-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.kb-node-toggle .icon { width: 14px; height: 14px; transition: transform .24s ease; }
+.kb-node-toggle.is-open .icon { transform: rotate(90deg); }
+.kb-node-toggle-empty { visibility: hidden; pointer-events: none; }
+
+/* Подсветка совпадений поиска (по заголовку и тегам). */
+.kb-mark { padding: 0 2px; border-radius: 3px; background: var(--accent-soft); color: var(--text); }
+
+/* Теги страницы: чипсы на карточке (клик — фильтр поиска). */
+.kb-tag { display: inline-flex; align-items: center; gap: 5px; padding: 3px 11px; border: 1px solid var(--line-strong); background: var(--surface-sunken); color: var(--text-soft); font: 11px var(--mono); border-radius: 999px; cursor: pointer; transition: border-color .2s, color .2s, background-color .2s; }
+.kb-tag::before { content: "#"; color: var(--dim); }
+.kb-tag:hover { border-color: var(--accent-line); color: var(--text); background: var(--accent-soft); }
+
+/* Редактор тегов в диалоге. */
+.kb-tags-editor { margin: 15px 0; }
+.kb-tag-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.kb-tag-chips:empty { display: none; }
+.kb-tag-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px; border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--text); font: 11px var(--mono); border-radius: 999px; }
+.kb-tag-chip::before { content: "#"; color: var(--muted); }
+.kb-tag-remove { display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--muted); cursor: pointer; transition: background-color .18s, color .18s; }
+.kb-tag-remove:hover { background: rgba(var(--hl), .1); color: var(--text); }
+.kb-tag-remove .icon { width: 12px; height: 12px; }
+.kb-tags-editor .kb-tag-input { width: 100%; }
+
+/* --- Блок-редактор Editor.js и блоки в режиме чтения ---------------------- */
+
+/* Холдер Editor.js: тёмная/светлая тема на переменных проекта, рамка как у поля. */
+.kb-editor-mount { border: 1px solid var(--line); background: var(--field-bg); padding: 11px 12px; min-height: 160px; }
+.kb-editor-mount[hidden] { display: none; }
+.kb-editor-mount .cdx-input { border: 1px solid var(--line-strong); }
+.kb-editor-mount .codex-editor__redactor { padding-bottom: 40px !important; }
+.kb-editor-mount .ce-block__content, .kb-editor-mount .ce-toolbar__content { max-width: none; }
+.kb-editor-mount .ce-toolbar__plus, .kb-editor-mount .ce-toolbar__settings-btn { color: var(--text-soft); }
+.kb-editor-mount .ce-toolbar__plus:hover, .kb-editor-mount .ce-toolbar__settings-btn:hover { background: rgba(var(--hl), .08); color: var(--surface-raised); }
+/* Кнопка «+»: у Editor.js фон #fff и светлая рамка прописаны жёстко. */
+.kb-editor-mount .ce-toolbar__plus { background-color: var(--surface-raised); border-color: var(--line-strong); box-shadow: none; }
+/* Иконки пунктов тулбокса: по умолчанию берут --color-text-primary (black). */
+.kb-editor-mount .ce-popover-item__icon { color: var(--dim); }
+.kb-editor-mount .ce-popover-item__icon svg { color: inherit; }
+.kb-editor-mount .cdx-block, .kb-editor-mount .ce-paragraph { color: var(--text); }
+.kb-editor-mount .ce-paragraph[data-placeholder]:empty::before { color: var(--dim); }
+.kb-editor-mount .cdx-search-field, .kb-editor-mount .ce-popover, .kb-editor-mount .ce-popover__container { background: var(--surface-raised); color: var(--text); border-color: var(--line-strong); }
+.kb-editor-mount .ce-popover-item__title { color: var(--text); }
+.kb-editor-mount .ce-inline-toolbar { background: var(--surface-raised); border-color: var(--line-strong); }
+.kb-editor-mount .ce-inline-tool { color: var(--text-soft); }
+.kb-editor-mount .cdx-input { background: var(--field-bg); color: var(--text); border-color: var(--line-strong); }
+.kb-editor-mount .tc-table { color: var(--text); }
+.kb-editor-mount .tc-table, .kb-editor-mount .tc-row, .kb-editor-mount .tc-cell { border-color: var(--line); }
+
+/* Кастомный Image Tool. */
+.kb-image-tool { display: flex; flex-direction: column; gap: 8px; }
+.kb-image-tool .kb-photo-pick { display: grid; min-height: 44px; place-items: center; border: 1px dashed var(--line-strong); color: var(--muted); font-size: 12px; cursor: pointer; }
+.kb-image-tool .kb-photo-pick:hover { border-color: var(--accent-line); color: var(--text); }
+.kb-image-tool .kb-photo-pick input { display: none; }
+.kb-image-tool-status { margin: 0; min-height: 1em; color: var(--muted); font-size: 12px; }
+
+/* Отрендеренные блоки в режиме чтения (бариста/стажёр). */
+.kb-image { margin: 0 0 10px; }
+.kb-image img { display: block; width: 100%; max-width: 520px; border: 1px solid var(--line); border-radius: 10px; }
+.kb-image figcaption { margin-top: 6px; color: var(--muted); font-size: 12px; }
+.kb-checklist { margin: 0 0 8px; padding: 0; list-style: none; }
+.kb-check { display: flex; align-items: flex-start; gap: 8px; margin: 3px 0; }
+.kb-check-box { width: 16px; height: 16px; margin-top: 3px; flex: 0 0 auto; border: 1px solid var(--line-strong); border-radius: 4px; }
+.kb-check.is-checked .kb-check-box { border-color: var(--accent); background: var(--accent); }
+.kb-check.is-checked { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.kb-table-wrap { margin: 0 0 10px; overflow-x: auto; }
+.kb-content table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.kb-content th, .kb-content td { padding: 7px 10px; border: 1px solid var(--line); text-align: left; }
+.kb-content th { background: var(--surface-sunken); font-weight: 600; }
+.kb-content a { color: var(--accent); }
+.kb-delimiter { margin: 6px 0 12px; text-align: center; color: var(--dim); letter-spacing: .3em; }
+.kb-content cite { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-style: normal; }
+
+@media (max-width: 760px) {
+  .kb-node-toggle { width: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-fold, .kb-category-chevron, .kb-node-toggle .icon { transition: none; }
+}
+
+/* --- Панель оглавления: сворачивание и плавающая кнопка ------------------- */
+
+/* Шапка панели: счётчик страниц + кнопка сворачивания всей панели. */
+.kb-tree-actions { display: flex; align-items: center; gap: 8px; }
+.kb-tree-heading { align-items: center; }
+.kb-tree-toggle .icon { width: 15px; height: 15px; transition: transform .24s ease; }
+.kb-tree-toggle[aria-expanded="true"] .icon { transform: rotate(90deg); }
+
+/* Сворачивание панели оглавления целиком (тем же приёмом grid-rows). */
+.kb-tree-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .28s ease; }
+.kb-tree-fold.is-open { grid-template-rows: 1fr; }
+.kb-tree-fold-inner { overflow: hidden; min-height: 0; }
+.kb-tree-fold.is-open .kb-tree-fold-inner { padding-top: 4px; }
+
+/* Плавающая кнопка «Оглавление»: появляется на узких экранах, когда шапка
+   панели ушла вверх при прокрутке. Стоит над нижним доком (--dock-h). */
+.kb-tree-fab { position: fixed; z-index: 35; right: 16px; bottom: calc(var(--dock-h, 16px) + 14px); display: inline-flex; align-items: center; gap: 8px; min-height: 46px; padding: 0 16px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--surface-raised); color: var(--text); font: 600 13px var(--sans); box-shadow: var(--shadow-1); cursor: pointer; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .22s ease, transform .22s ease; }
+.kb-tree-fab.is-visible { opacity: 1; transform: none; pointer-events: auto; }
+.kb-tree-fab .icon { width: 16px; height: 16px; }
+.kb-tree-fab:hover { border-color: var(--accent); }
+
+@media (max-width: 760px) {
+  .kb-tree-toggle { min-width: 44px; min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-tree-fold, .kb-tree-toggle .icon, .kb-tree-fab { transition: none; }
+}
+
 /* --- Контроль качества: вкладки, тип, чипы, сессии ---------------------- */
 .development-tabs { margin-bottom: 16px; }
 .quality-type { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }

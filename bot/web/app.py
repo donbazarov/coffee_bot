@@ -120,6 +120,13 @@ def _static_version() -> str:
         # меняются при обновлении, а /static/**?v= кешируется на год — версия
         # должна расти, иначе браузер останется со старой моделью.
         "vendor/model-viewer.min.js", "models/medal_base.glb",
+        # Блок-редактор базы знаний (Editor.js + плагины), вендоренный локально:
+        # имена файлов неизменны, поэтому без учёта в отпечатке правка редактора
+        # не сбросит кеш браузера.
+        "vendor/editorjs/editorjs.umd.js", "vendor/editorjs/header.umd.js",
+        "vendor/editorjs/editorjs-list.umd.js", "vendor/editorjs/checklist.umd.js",
+        "vendor/editorjs/table.umd.js", "vendor/editorjs/quote.umd.js",
+        "vendor/editorjs/delimiter.umd.js",
     ):
         try:
             stat = (BASE_DIR / "static" / name).stat()
