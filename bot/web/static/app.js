@@ -3560,6 +3560,14 @@ function announcementTime(iso) {
   return date.toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
+/* Текст анонса: экранируем, затем подставляем ссылки на статьи БЗ и обычные
+   URL. `white-space: pre-line` на карточке сохраняет переводы строк как есть. */
+function announcementBodyMarkup(text) {
+  if (!text) return '';
+  return kbLinkify(escapeHtml(text))
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
 function announcementMarkup(item, options = {}) {
   const category = announcementCategory(item.category);
   const color = (category && category.color) || '#7b8794';
@@ -3586,7 +3594,7 @@ function announcementMarkup(item, options = {}) {
              style="--announcement-color: ${escapeHtml(color)}"
              data-announcement-id="${item.id}" data-category="${escapeHtml(item.category)}">
       <header class="announcement-top">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><h4 class="announcement-title">${escapeHtml(item.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
-      ${item.body ? `<p class="announcement-body">${escapeHtml(item.body)}</p>` : ''}
+      ${item.body ? `<p class="announcement-body">${announcementBodyMarkup(item.body)}</p>` : ''}
       ${gallery}
       <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span>${actions}</footer>
     </article>`;
@@ -4076,6 +4084,7 @@ function applyDeepLink(url) {
   try {
     const params = new URL(url, window.location.origin).searchParams;
     const announcement = params.get('announcement');
+    const page = params.get('page');
     const view = params.get('view');
     const share = params.get('share');
     const shareError = params.get('share_error');
@@ -4092,6 +4101,7 @@ function applyDeepLink(url) {
       };
     }
     if (announcement) openAnnouncementCard(Number(announcement));
+    else if (page) openKbPageFromLink(Number(page));
     else if (view) setView(view);
     else if (!share && !shareError) return;
     // Убираем служебные параметры из адреса, чтобы они не тянулись за навигацией.
@@ -4218,6 +4228,9 @@ function setupAnnouncements() {
   // Закрытие — только кнопками .dialog-close: клик по краю окна не должен
   // закрывать форму (на десктопе это сплошные случайные промахи).
   document.querySelectorAll('#announcement-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
+  // Ссылки на статьи: `@` в тексте анонса ищет страницу базы знаний.
+  attachPageLinkSuggest(document.querySelector('#announcement-form textarea[name="body"]'), 'textarea');
+  dialog?.addEventListener('close', pageLinkClose);
 
   const categoryDialog = document.querySelector('#announcement-category-dialog');
   const categoryForm = document.querySelector('#announcement-category-form');
@@ -4433,6 +4446,9 @@ const kbState = {
   query: '',
   selectedId: null,
   current: null,
+  // Страница, которую нужно открыть сразу после загрузки оглавления (переход по
+  // ссылке `@[Заголовок](kb:12)` из анонса или чата).
+  pendingId: null,
   recipesPageId: null,
   ready: false,
   canEdit: managerRole,
@@ -4805,13 +4821,44 @@ function kbDrinkMarkup(drink) {
 const KB_INLINE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
 const KB_BLOCK_PREFIX = /^(\s*)(?:#{1,3}\s+|[*-]\s+|\d+\.\s+|>\s?)/;
 
+/* Ссылка на другую статью. В тексте живёт маркер `@[Заголовок](kb:12)` — его
+   вставляет подсказка по `@`; на экране это ссылка в раздел «База знаний».
+   Формат единый для статей, анонсов и чата, поэтому и рендер один — `kbLinkify`.
+   Маркер текстовый намеренно: он переживает и Markdown-строку, и блоки
+   Editor.js, и обычный `TEXT` в базе без правок санитайзера. */
+const KB_PAGE_LINK_RE = /@\[([^\]\n]{1,200})\]\(kb:(\d{1,12})\)/g;
+
+function kbPageHref(id) {
+  return `/?view=kb&page=${Number(id)}`;
+}
+
+/* Заголовок для маркера: без скобок и HTML-спецсимволов, иначе разбор ломается,
+   а в блоках Editor.js появляется двойное экранирование (`&amp;lt;`). */
+function kbPageLinkTitle(value) {
+  const title = String(value == null ? '' : value)
+    .replace(/[\[\]()<>&\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+  return title || 'Страница';
+}
+
+/* Маркеры → ссылки. На вход — уже экранированный текст: HTML не пере-экранируем. */
+function kbLinkify(text) {
+  const value = String(text == null ? '' : text);
+  if (!value.includes('@[')) return value;
+  return value.replace(KB_PAGE_LINK_RE, (match, title, id) =>
+    `<a class="neft-page-link" href="${kbPageHref(id)}" data-kb-page="${Number(id)}"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>@${title}</a>`);
+}
+
 function kbInlineFormat(text) {
-  return text
+  const html = text
     .replace(/\[color:(#[0-9a-fA-F]{3,8})\]([\s\S]*?)\[\/color\]/g, (match, hex, inner) => (KB_INLINE_HEX.test(hex) ? `<span style="color:${hex}">${inner}</span>` : inner))
     .replace(/\[bg:(#[0-9a-fA-F]{3,8})\]([\s\S]*?)\[\/bg\]/g, (match, hex, inner) => (KB_INLINE_HEX.test(hex) ? `<span style="background:${hex}">${inner}</span>` : inner))
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  return kbLinkify(html);
 }
 
 function kbContentToHtml(text) {
@@ -4860,10 +4907,11 @@ function kbContentToHtml(text) {
    возвращаем только простые теги, которые ставит Editor.js и его тулбар. */
 function kbSanitizeInline(value) {
   const escaped = escapeHtml(String(value == null ? '' : value));
-  return escaped
+  const html = escaped
     .replace(/&lt;(\/?)(b|strong|i|em|u|s|code|mark|br|sub|sup)(\s*\/?)&gt;/gi, '<$1$2$3>')
     .replace(/&lt;a href=&quot;(https?:\/\/[^"&]+)&quot;&gt;/gi, '<a href="$1" target="_blank" rel="noopener noreferrer">')
     .replace(/&lt;\/a&gt;/gi, '</a>');
+  return kbLinkify(html);
 }
 
 /* Картинку из блока принимаем только с нашего фото-эндпоинта (или data:image) —
@@ -5140,16 +5188,67 @@ async function loadKnowledgeBase() {
 
 /* Открытие раздела: первая загрузка рисует каркас, а пустой раздел сразу
    открывает первую доступную страницу, чтобы не было пустого экрана. */
+let kbOpenTask = null;
+
 async function openKnowledgeBase() {
-  kbLoadExpanded();
-  kbLoadTreeOpen();
-  if (!kbState.ready) { kbFilterChips(); renderKbTree(); kbState.ready = true; }
-  setupKbTreeFab();
-  kbSetTreeOpen(kbState.treeOpen, false);
-  const ok = await loadKnowledgeBase();
-  if (ok && !kbState.current && kbState.items.length) openKbPage(kbState.items[0].id);
-  kbUpdateTreeFab();
+  // Переход по ссылке вызывает раздел и «сам себя» — ждём один и тот же прогон,
+  // иначе оглавление грузится дважды и страницы перебивают друг друга.
+  if (kbOpenTask) return kbOpenTask;
+  kbOpenTask = (async () => {
+    kbLoadExpanded();
+    kbLoadTreeOpen();
+    if (!kbState.ready) { kbFilterChips(); renderKbTree(); kbState.ready = true; }
+    setupKbTreeFab();
+    kbSetTreeOpen(kbState.treeOpen, false);
+    const ok = await loadKnowledgeBase();
+    // `pendingId` — цель перехода по ссылке; иначе показываем первую статью.
+    const target = kbState.pendingId || (ok && !kbState.current && kbState.items.length ? kbState.items[0].id : null);
+    kbState.pendingId = null;
+    if (target) await openKbPage(target);
+    kbUpdateTreeFab();
+  })();
+  try {
+    return await kbOpenTask;
+  } finally {
+    kbOpenTask = null;
+  }
 }
+
+/* Переход по ссылке `@[Заголовок](kb:12)` из любого модуля: открываем раздел,
+   снимаем фильтр (иначе страница не видна в оглавлении) и показываем статью. */
+async function openKbPageFromLink(id) {
+  const numeric = Number(id);
+  if (!numeric) return;
+  kbState.pendingId = numeric;
+  // Фильтр раздела мог скрыть страницу в оглавлении — возвращаем «Все» заранее,
+  // чтобы оглавление, счётчик «N / всего» и переходы строились по полному списку.
+  kbState.filter = KB_CATEGORY_ALL;
+  setView('kb');                 // запускает `openKnowledgeBase` — он прочтёт pendingId
+  await openKnowledgeBase();
+  kbState.pendingId = null;
+  kbFilterChips();
+  renderKbTree();
+  // Модуль мог быть выключен (тогда раздел не открылся) — доводим вручную.
+  if (Number(kbState.current?.id) !== numeric) await openKbPage(numeric);
+  // Адрес оставляем «перезагружаемым»: та же ссылка работает в новой вкладке.
+  try {
+    window.history.replaceState({}, '', kbPageHref(numeric));
+  } catch (error) { /* file:// и приватный режим — просто не пишем адрес */ }
+}
+
+/* Делегированный клик: ссылки на статьи живут в статьях, анонсах и чате.
+   Ctrl/Cmd/Shift не перехватываем — браузер откроет ссылку в новой вкладке. */
+document.addEventListener('click', (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const link = target && target.closest('[data-kb-page]');
+  if (!link || event.defaultPrevented) return;
+  if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  // Ссылка на статью — это переход, а не клик по карточке анонса или сообщению:
+  // обработчик карточки подписан на document позже, гасим его для этого клика.
+  event.stopImmediatePropagation();
+  openKbPageFromLink(link.dataset.kbPage);
+});
 
 /* Рисует палитру Pantone свотчами + кнопку «Другое» (единый источник — KB_PANTONE). */
 function kbRenderPantone() {
@@ -5514,6 +5613,9 @@ function setupKbEditor() {
   textColor?.addEventListener('change', () => { kbApplyFormat(textarea, 'color', textColor.value); syncKbToolChips(); });
   bgColor?.addEventListener('change', () => { kbApplyFormat(textarea, 'bg', bgColor.value); syncKbToolChips(); });
   syncKbToolChips();
+  // Ссылки через `@`: в системных разделах («Зерно»/«Напитки») статья пишется
+  // в этом textarea, поэтому подсказка нужна именно здесь.
+  attachPageLinkSuggest(textarea, 'textarea');
 }
 
 /* --- Блок-редактор страниц (Editor.js, локальный вендоринг) ---------------
@@ -5720,6 +5822,9 @@ function kbEnsureEditor() {
       i18n: { messages: kbEditorMessages() },
       tools: kbEditorTools(),
     });
+    // `@` внутри блоков: подписка на контейнер, потому что блоки создаются и
+    // удаляются динамически, а их события всплывают до redactor.
+    attachPageLinkSuggest(mount.querySelector('.codex-editor__redactor') || mount, 'editable');
   } catch (error) {
     kbEditorInstance = null;
     showToast('Не удалось открыть редактор — используется простой режим');
@@ -5731,6 +5836,7 @@ function kbDestroyEditor() {
     try { kbEditorInstance.destroy(); } catch (error) { /* Editor.js мог не успеть */ }
     kbEditorInstance = null;
   }
+  pageLinkClose();
   const mount = document.querySelector('#kb-editor');
   if (mount) mount.innerHTML = '';
 }
@@ -5773,6 +5879,266 @@ async function kbCollectContent() {
     } catch (error) { /* редактор не готов — падаем на textarea */ }
   }
   return textarea ? (textarea.value.trim() || null) : null;
+}
+
+/* --- Ссылки на статьи через `@` -------------------------------------------
+   Один компонент на все поля: редактор статьи (textarea и блоки Editor.js),
+   текст анонса и (в chat.js) панель ввода чата. Печатаете `@` — ищем страницу
+   по заголовку и вставляем маркер `@[Заголовок](kb:12)`, который `kbLinkify`
+   превращает в ссылку. Поиск — `/api/kb/link-targets`; без сети берём
+   оглавление из кэша, который пишет `loadKnowledgeBase`. */
+
+const KB_LINK_LIMIT = 6;
+const kbLinkCache = new Map();
+
+async function kbSearchPages(query) {
+  const key = String(query == null ? '' : query).trim().toLowerCase();
+  if (kbLinkCache.has(key)) return kbLinkCache.get(key);
+  let items;
+  try {
+    const data = await api(`/api/kb/link-targets?q=${encodeURIComponent(key)}&limit=${KB_LINK_LIMIT}`);
+    items = (data.items || []).map((item) => ({
+      id: Number(item.id),
+      title: String(item.title || ''),
+      category: item.category,
+      category_label: item.category_label || kbCategoryLabel(item.category),
+    }));
+  } catch (error) {
+    items = kbLocalLinkTargets(key);
+  }
+  if (kbLinkCache.size > 40) kbLinkCache.clear();
+  kbLinkCache.set(key, items);
+  return items;
+}
+
+/* Офлайн-фолбэк: та же копия оглавления, что показывает сам раздел. */
+function kbLocalLinkTargets(key) {
+  const cached = readCache(CACHE_KEY_KB_LIST);
+  const items = cached && Array.isArray(cached.items) ? cached.items : kbState.items;
+  return (items || [])
+    .filter((item) => !key || String(item.title || '').toLowerCase().includes(key))
+    .slice(0, KB_LINK_LIMIT)
+    .map((item) => ({
+      id: Number(item.id),
+      title: String(item.title || ''),
+      category: item.category,
+      category_label: kbCategoryLabel(item.category),
+    }));
+}
+
+const pageLinkPicker = { owner: null, mode: 'textarea', items: [], index: 0, context: null, anchor: null, seq: 0, timer: null };
+let pageLinkPopup = null;
+
+/* Подсказка живёт в том же контейнере, что и поле: диалог — top layer, а стекло
+   задаёт ему containing block, поэтому координаты считаем от хозяина. */
+function pageLinkPopupNode(owner) {
+  const host = owner && owner.closest ? (owner.closest('dialog') || document.body) : document.body;
+  if (!pageLinkPopup) {
+    pageLinkPopup = document.createElement('div');
+    pageLinkPopup.className = 'page-link-popup';
+    pageLinkPopup.setAttribute('role', 'listbox');
+    pageLinkPopup.setAttribute('aria-label', 'Ссылка на статью базы знаний');
+    pageLinkPopup.hidden = true;
+    pageLinkPopup.addEventListener('pointerdown', (event) => {
+      const button = event.target.closest('[data-page-link-index]');
+      if (!button) return;
+      event.preventDefault();          // не уводим фокус с поля ввода
+      pageLinkApply(Number(button.dataset.pageLinkIndex));
+    });
+  }
+  if (pageLinkPopup.parentElement !== host) host.appendChild(pageLinkPopup);
+  pageLinkPopup.classList.toggle('is-fixed', host === document.body);
+  return pageLinkPopup;
+}
+
+function positionPageLinkPopup(node, anchor) {
+  const host = node.parentElement || document.body;
+  const fixed = node.classList.contains('is-fixed');
+  const box = fixed
+    ? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
+    : host.getBoundingClientRect();
+  const width = Math.max(200, Math.min(360, anchor.right - anchor.left));
+  const spaceAbove = anchor.top - box.top - 8;
+  const spaceBelow = box.bottom - anchor.bottom - 8;
+  // Над полем места мало — раскрываемся вниз (в диалоге поле бывает у шапки).
+  const below = spaceAbove < 180 && spaceBelow > spaceAbove;
+  const offsetTop = fixed ? 0 : host.scrollTop;
+  const offsetLeft = fixed ? 0 : host.scrollLeft;
+  node.style.width = `${width}px`;
+  node.style.maxHeight = `${Math.max(120, Math.min(280, below ? spaceBelow : spaceAbove))}px`;
+  node.style.left = `${Math.min(Math.max(box.left + 8, anchor.left), Math.max(box.left + 8, box.right - width - 8)) - box.left + offsetLeft}px`;
+  node.style.top = `${(below ? anchor.bottom + 6 : anchor.top - 6) - box.top + offsetTop}px`;
+  node.style.transform = below ? 'none' : 'translateY(-100%)';
+}
+
+function pageLinkRender() {
+  const node = pageLinkPopupNode(pageLinkPicker.owner);
+  const items = pageLinkPicker.items;
+  if (!items.length) { pageLinkClose(); return; }
+  const active = pageLinkPicker.index;
+  node.innerHTML = '<p class="page-link-group">База знаний</p>' + items.map((item, index) => `
+    <button class="page-link-item${index === active ? ' is-active' : ''}" type="button" role="option" aria-selected="${index === active}" data-page-link-index="${index}">
+      <svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>
+      <span class="page-link-name">${escapeHtml(item.title)}</span>
+      <span class="page-link-section">${escapeHtml(item.category_label || '')}</span>
+    </button>`).join('');
+  node.hidden = false;
+  positionPageLinkPopup(node, pageLinkPicker.anchor);
+  // Подсветку держим в поле зрения вручную: `scrollIntoView` проскроллил бы
+  // ещё и диалог-родитель, а это выглядит как «прыжок» формы.
+  const focused = node.querySelector('.page-link-item.is-active');
+  if (focused) node.scrollTop = Math.max(0, focused.offsetTop - node.clientHeight / 2);
+}
+
+/* Токен `@…` перед каретой. Пробелы внутри разрешены: заголовки у статей
+   многословные, поэтому поиск идёт по набранной фразе целиком. */
+const KB_LINK_TOKEN_RE = /(?:^|\s)@([^@\n\]()]{0,40})$/;
+
+function textareaLinkContext(node) {
+  const value = node.value || '';
+  const caret = node.selectionStart == null ? value.length : node.selectionStart;
+  const match = KB_LINK_TOKEN_RE.exec(value.slice(0, caret));
+  if (!match) return null;
+  return { query: match[1].trim(), start: caret - match[1].length - 1, caret };
+}
+
+function editableRange(node) {
+  const selection = window.getSelection();
+  if (!selection || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  return node.contains(range.startContainer) ? range : null;
+}
+
+function editableLinkContext(node) {
+  const range = editableRange(node);
+  if (!range || !range.collapsed || range.startContainer.nodeType !== 3) return null;
+  const before = range.startContainer.nodeValue.slice(0, range.startOffset);
+  const match = KB_LINK_TOKEN_RE.exec(before);
+  if (!match) return null;
+  return {
+    query: match[1].trim(),
+    startNode: range.startContainer,
+    startOffset: range.startOffset - match[1].length - 1,
+    endNode: range.startContainer,
+    endOffset: range.startOffset,
+    range,
+  };
+}
+
+function fieldAnchor(node) {
+  const rect = node && node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+  if (!rect) return { left: 8, right: 208, top: window.innerHeight / 2, bottom: window.innerHeight / 2 };
+  return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+}
+
+/* Каретка внутри contenteditable: у свёрнутого range в части браузеров нет
+   клиентских прямоугольников, поэтому падаем на блок, в котором стоит каретка. */
+function caretAnchor(node) {
+  const range = editableRange(node);
+  const rect = range && range.getClientRects()[0];
+  if (rect) return { left: rect.left, right: rect.left + 1, top: rect.top, bottom: rect.bottom };
+  const holder = range && range.startContainer.parentElement
+    ? (range.startContainer.parentElement.closest('.ce-block') || range.startContainer.parentElement)
+    : node;
+  return fieldAnchor(holder);
+}
+
+function pageLinkUpdate(node, mode) {
+  const context = mode === 'editable' ? editableLinkContext(node) : textareaLinkContext(node);
+  if (!context) {
+    if (pageLinkPicker.owner === node) pageLinkClose();
+    return;
+  }
+  pageLinkPicker.owner = node;
+  pageLinkPicker.mode = mode;
+  pageLinkPicker.context = context;
+  pageLinkPicker.anchor = mode === 'editable' ? caretAnchor(node) : fieldAnchor(node);
+  const seq = ++pageLinkPicker.seq;
+  clearTimeout(pageLinkPicker.timer);
+  pageLinkPicker.timer = setTimeout(async () => {
+    const items = await kbSearchPages(context.query);
+    // Пока искали, могли набрать ещё символ или выбрать другое поле — тогда молчим.
+    if (seq !== pageLinkPicker.seq || pageLinkPicker.owner !== node) return;
+    pageLinkPicker.items = items;
+    pageLinkPicker.index = 0;
+    pageLinkRender();
+  }, 150);
+}
+
+function pageLinkClose() {
+  pageLinkPicker.owner = null;
+  pageLinkPicker.items = [];
+  pageLinkPicker.index = 0;
+  pageLinkPicker.context = null;
+  pageLinkPicker.seq += 1;            // ответы «в полёте» больше не применяем
+  clearTimeout(pageLinkPicker.timer);
+  if (pageLinkPopup) { pageLinkPopup.hidden = true; pageLinkPopup.innerHTML = ''; }
+}
+
+function pageLinkApply(index) {
+  const item = pageLinkPicker.items[index];
+  const node = pageLinkPicker.owner;
+  const context = pageLinkPicker.context;
+  if (!item || !node || !context) { pageLinkClose(); return; }
+  const marker = `@[${kbPageLinkTitle(item.title)}](kb:${Number(item.id)}) `;
+  if (pageLinkPicker.mode === 'editable') {
+    try {
+      context.range.setStart(context.startNode, context.startOffset);
+      context.range.setEnd(context.endNode, context.endOffset);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(context.range);
+      // Вставка «как с клавиатуры»: Editor.js получает input и сохраняет текст.
+      document.execCommand('insertText', false, marker);
+    } catch (error) { /* браузер без execCommand — поле остаётся как было */ }
+    // Фокус не трогаем: он уже в блоке, а `focus()` на контейнере сбросил бы каретку.
+  } else {
+    const value = node.value || '';
+    node.value = value.slice(0, context.start) + marker + value.slice(context.caret);
+    const caret = context.start + marker.length;
+    try { node.setSelectionRange(caret, caret); } catch (error) { /* не поддерживается */ }
+    node.focus();
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  pageLinkClose();
+}
+
+/* Слушатель один на документ: подсказка реагирует только на своё поле, а
+   capture нужен, чтобы Enter/Escape не улетели в диалог или Editor.js первыми. */
+document.addEventListener('keydown', (event) => {
+  const owner = pageLinkPicker.owner;
+  if (!owner || !pageLinkPicker.items.length) return;
+  if (event.target !== owner && !(owner.contains && owner.contains(event.target))) return;
+  const count = pageLinkPicker.items.length;
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    pageLinkPicker.index = (pageLinkPicker.index + 1) % count;
+    pageLinkRender();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    pageLinkPicker.index = (pageLinkPicker.index - 1 + count) % count;
+    pageLinkRender();
+  } else if (event.key === 'Enter' || event.key === 'Tab') {
+    event.preventDefault();
+    pageLinkApply(pageLinkPicker.index);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    pageLinkClose();
+  }
+}, true);
+
+/* Подключает подсказку: `textarea` — обычный ввод, `editable` — контейнер
+   Editor.js (каретка живёт внутри contenteditable, а события всплывают). */
+function attachPageLinkSuggest(node, mode = 'textarea') {
+  if (!node || node.dataset.pageLinks === '1') return;
+  node.dataset.pageLinks = '1';
+  node.addEventListener('input', () => pageLinkUpdate(node, mode));
+  node.addEventListener('focusout', (event) => {
+    if (pageLinkPicker.owner !== node) return;
+    const next = event.relatedTarget;
+    if (next && node.contains(next)) return;
+    pageLinkClose();
+  });
 }
 
 /* --- Теги страницы: чипсы в диалоге --------------------------------------- */
@@ -8153,6 +8519,11 @@ window.Neft = {
   setView,
   closeDrawer,
   openMediaViewer,
+  // Ссылки на статьи базы знаний: рендер маркеров и подсказка `@` (chat.js).
+  kbLinkify,
+  kbPageLinkTitle,
+  kbSearchPages,
+  openKbPage: openKbPageFromLink,
   get user() {
     return {
       id: Number(document.body.dataset.userId || 0),

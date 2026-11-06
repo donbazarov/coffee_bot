@@ -43,7 +43,7 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import modules
+from bot.web import modules, page_links
 from bot.web.deps import require_manager_csrf, require_user
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -124,6 +124,14 @@ def kb_sections() -> list[dict[str, Any]]:
 def section_keys() -> tuple[str, ...]:
     """Допустимые значения `kb_pages.category` (кастомные + системные разделы)."""
     return tuple(section["key"] for section in kb_sections())
+
+
+def _section_label(key: str) -> str:
+    """Подпись раздела по его ключу (для подсказок ссылок `@`)."""
+    for section in kb_sections():
+        if section["key"] == key:
+            return str(section["label"])
+    return key
 
 
 def _section_labels() -> str:
@@ -333,14 +341,26 @@ def _clean_int(value: Any) -> int | None:
         raise ValueError("Некорректный идентификатор") from error
 
 
+def _prepare_content(raw: str, limit: int) -> str | None:
+    """Готовит текст к сохранению.
+
+    Ссылки на другие страницы (`@[Заголовок](kb:12)`) приводим к актуальным
+    заголовкам, а обрезку по `MAX_TEXT` делаем так, чтобы не разорвать маркер.
+    """
+    value = page_links.truncate_safe(raw, limit)
+    value = page_links.refresh_titles(engine, value)
+    return page_links.truncate_safe(value, limit) or None
+
+
 def _dump_content(value: Any) -> str | None:
     """content_json принимаем как готовую строку или как JSON-объект."""
+    limit = _cfg("MAX_TEXT")
     if value is None:
         return None
     if isinstance(value, str):
-        return value[:_cfg("MAX_TEXT")] or None
+        return _prepare_content(value, limit)
     try:
-        return json.dumps(value, ensure_ascii=False)
+        return _prepare_content(json.dumps(value, ensure_ascii=False), limit)
     except (TypeError, ValueError) as error:
         raise ValueError("content_json должен быть строкой или JSON-объектом") from error
 
@@ -735,6 +755,29 @@ def kb_list_pages(category: str | None = None, q: str | None = None,
         "items": list_pages(engine, category, q),
         "sections": kb_sections(),
         "categories": list(section_keys()),
+    }
+
+
+@kb_router.get("/link-targets")
+def kb_link_targets(q: str | None = None, limit: int = 8,
+                    _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Подсказки для ссылок через `@` в статьях, анонсах и чате.
+
+    Отдаём только то, что нужно выпадающему списку: id, заголовок и раздел.
+    Поиск — тот же, что у оглавления (`list_pages`), поэтому подсказки
+    совпадают с тем, что сотрудник видит в разделе «База знаний».
+    """
+    limit = max(1, min(int(limit), 20))
+    return {
+        "items": [
+            {
+                "id": item["id"],
+                "title": item["title"],
+                "category": item["category"],
+                "category_label": _section_label(item["category"]),
+            }
+            for item in list_pages(engine, None, q)[:limit]
+        ],
     }
 
 

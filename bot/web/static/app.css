@@ -2586,3 +2586,75 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* Фон переезжает на <html>, тело прозрачное — иначе оно перекрыло бы canvas. */
 [data-glass="on"] body { background-color: transparent; }
 
+/* --- Ссылки на статьи базы знаний (`@[Заголовок](kb:12)`) ------------------ */
+
+/* Читаемая ссылка-чип: иконка книги и акцентный цвет вместо браузерного синего. */
+.neft-page-link {
+  display: inline;
+  overflow-wrap: anywhere;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.neft-page-link:hover { border-bottom-style: solid; }
+.neft-page-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.neft-page-link .icon { width: 1em; height: 1em; margin-right: 2px; vertical-align: -.12em; }
+
+/* Подсказка `@`. Живёт в контейнере поля: в диалоге — абсолютно (top layer и
+   стекло задают containing block), в чате — фиксированно над панелью ввода. */
+.page-link-popup {
+  position: absolute;
+  z-index: 60;
+  display: flex;
+  min-width: 200px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.page-link-popup.is-fixed { position: fixed; }
+.page-link-popup[hidden] { display: none; }
+
+/* Заголовок группы — общий для подсказки БЗ и подсказки чата. */
+.page-link-group,
+.chat-mention-group {
+  margin: 2px 0 4px;
+  padding: 0 9px;
+  color: var(--muted);
+  font: 11px var(--mono);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+/* 44px по высоте: на планшете и телефоне по подсказке попадают пальцем. */
+.page-link-item {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.page-link-item.is-active,
+.page-link-item:hover { background: var(--accent-soft); }
+.page-link-item .icon { width: 16px; height: 16px; flex: 0 0 auto; color: var(--muted); }
+.page-link-name { min-width: 0; flex: 1 1 auto; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.page-link-section { flex: 0 0 auto; color: var(--muted); font: 11px var(--mono); }
+
+/* Иконка статьи в подсказке чата — того же размера, что и аватар сотрудника. */
+.chat-mention-icon { display: grid; width: 24px; height: 24px; flex: 0 0 auto; place-items: center; color: var(--muted); }
+.chat-mention-icon .icon { width: 16px; height: 16px; }
+

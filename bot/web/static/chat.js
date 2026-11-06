@@ -16,7 +16,7 @@
   const view = document.getElementById('chat-view');
   if (!view || !window.Neft) return; // страница входа/гость — чата нет
 
-  const { api, escapeHtml, avatarMarkup, showToast, setView } = window.Neft;
+  const { api, escapeHtml, avatarMarkup, showToast, setView, kbSearchPages, kbPageLinkTitle } = window.Neft;
   const ME = window.Neft.user.id;
   const MANAGER = Boolean(window.Neft.user.manager);
   const PAGE = 30;
@@ -86,6 +86,9 @@
     touchAt: 0,
     mentionItems: [],
     mentionIndex: 0,
+    pageItems: [],       // страницы базы знаний для подсказки `@`
+    pageQuery: null,     // запрос, под который получены pageItems
+    pageSeq: 0,          // защита от «опоздавших» ответов поиска
     roomVisibility: 'all',
     attachMenuOpen: false,
     share: null,          // заявка «Поделиться» -> {token, files, text}
@@ -149,9 +152,12 @@
   }
 
   function linkify(text) {
-    return escapeHtml(text)
-      .replace(/(@[\p{L}\p{N}_.-]{1,64})/gu, '<span class="chat-mention">$1</span>')
-      .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    // Ссылки на статьи (`@[Заголовок](kb:12)`) подставляем после упоминаний
+    // людей: маркер начинается с `@[`, под регулярку персон не попадает, а уже
+    // готовую ссылку второй проход не трогает.
+    return window.Neft.kbLinkify(
+      escapeHtml(text).replace(/(@[\p{L}\p{N}_.-]{1,64})/gu, '<span class="chat-mention">$1</span>'),
+    ).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
   }
 
   function plural(count, one, few, many) {
@@ -290,12 +296,17 @@
 
   /* --- Упоминания через @ ------------------------------------------------- */
 
+  /* `@` — единый символ и для сотрудников, и для статей базы знаний. Пробелы в
+     токене разрешены: заголовки статей многословные. */
+  const MENTION_TOKEN_RE = /(?:^|\s)@([^@\n\]()]{0,40})$/u;
+  let pageSearchTimer = null;
+
   function mentionQuery() {
     const value = el.input.value;
     const caret = el.input.selectionStart == null ? value.length : el.input.selectionStart;
-    const match = /(?:^|\s)@([\p{L}\p{N}_.-]*)$/u.exec(value.slice(0, caret));
+    const match = MENTION_TOKEN_RE.exec(value.slice(0, caret));
     if (!match) return null;
-    return { query: match[1], start: caret - match[1].length - 1, caret };
+    return { query: match[1].trim(), start: caret - match[1].length - 1, caret };
   }
 
   function mentionHandle(person) {
@@ -309,9 +320,28 @@
   function closeMentions() {
     state.mentionItems = [];
     state.mentionIndex = 0;
+    state.pageItems = [];
+    state.pageQuery = null;
+    state.pageSeq += 1;              // «опоздавшие» ответы поиска уже не нужны
+    clearTimeout(pageSearchTimer);
     if (!el.mentions) return;
     el.mentions.hidden = true;
     el.mentions.innerHTML = '';
+  }
+
+  /* Поиск статей асинхронный: пока он идёт, показываем только сотрудников, а
+     результат подмешиваем, если попап всё ещё открыт с тем же токеном. */
+  function requestPageTargets(needle) {
+    state.pageQuery = needle;
+    state.pageItems = [];
+    const seq = ++state.pageSeq;
+    clearTimeout(pageSearchTimer);
+    pageSearchTimer = setTimeout(async () => {
+      const items = await kbSearchPages(needle);
+      if (seq !== state.pageSeq) return;
+      state.pageItems = Array.isArray(items) ? items : [];
+      if (mentionQuery()) renderMentions();
+    }, 150);
   }
 
   function renderMentions() {
@@ -319,8 +349,13 @@
     const context = mentionQuery();
     if (!context) { closeMentions(); return; }
     const needle = context.query.toLowerCase();
+    // Статьи ищем на сервере (с дебаунсом), людей — в памяти: контактов немного.
+    if (state.pageQuery !== needle) requestPageTargets(needle);
+    const pages = state.pageQuery === needle
+      ? state.pageItems.filter((page) => !needle || String(page.title || '').toLowerCase().includes(needle))
+      : [];
     // Сначала те, чьё имя или @-handle начинается с набранного, потом остальные.
-    const items = state.contacts
+    const people = state.contacts
       .map((person) => ({
         person,
         handle: mentionHandle(person),
@@ -334,24 +369,60 @@
           || entry.name.toLowerCase().startsWith(needle) ? 0 : 1);
         return rank(a) - rank(b) || a.name.localeCompare(b.name, 'ru');
       })
-      .slice(0, 6)
-      .map((entry) => entry.person);
+      .slice(0, 6);
+    const items = [
+      ...pages.slice(0, 4).map((page) => ({ kind: 'page', key: `p${Number(page.id)}`, page })),
+      ...people.map((entry) => ({ kind: 'user', key: `u${Number(entry.person.id)}`, person: entry.person, handle: entry.handle })),
+    ];
     if (!items.length) { closeMentions(); return; }
+    // Страницы приезжают позже людей: держим подсветку на том же пункте, чтобы
+    // Enter не срабатывал по внезапно подменившемуся элементу.
+    const previousKey = (state.mentionItems[state.mentionIndex] || {}).key || '';
     state.mentionItems = items;
-    if (state.mentionIndex >= items.length) state.mentionIndex = 0;
-    el.mentions.innerHTML = items.map((person, index) => `<button class="chat-mention-item${index === state.mentionIndex ? ' is-active' : ''}" type="button" role="option" aria-selected="${index === state.mentionIndex}" data-mention-index="${index}">
+    const keptIndex = previousKey ? items.findIndex((item) => item.key === previousKey) : -1;
+    state.mentionIndex = keptIndex >= 0
+      ? keptIndex
+      : Math.min(state.mentionIndex, items.length - 1);
+
+    let group = null;
+    const rows = [];
+    items.forEach((item, index) => {
+      if (!el.mentions) return;
+      if (item.kind !== group) {
+        group = item.kind;
+        rows.push(`<p class="chat-mention-group">${item.kind === 'page' ? 'База знаний' : 'Сотрудники'}</p>`);
+      }
+      const active = index === state.mentionIndex;
+      const cls = `chat-mention-item${active ? ' is-active' : ''}`;
+      const aria = `type="button" role="option" aria-selected="${active}" data-mention-index="${index}"`;
+      if (item.kind === 'page') {
+        rows.push(`<button class="${cls}" ${aria}>
+      <span class="chat-mention-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg></span>
+      <span class="chat-mention-name">${escapeHtml(item.page.title)}</span>
+      <span class="chat-mention-handle">${escapeHtml(item.page.category_label || '')}</span>
+    </button>`);
+      } else {
+        const person = item.person;
+        rows.push(`<button class="${cls}" ${aria}>
       <span class="chat-avatar">${avatarMarkup(person.id, person.avatar_rev, person.display_name || person.name)}</span>
       <span class="chat-mention-name">${escapeHtml(person.display_name || person.name)}</span>
-      <span class="chat-mention-handle">@${escapeHtml(mentionHandle(person))}</span>
-    </button>`).join('');
+      <span class="chat-mention-handle">@${escapeHtml(item.handle)}</span>
+    </button>`);
+      }
+    });
+    el.mentions.innerHTML = rows.join('');
     el.mentions.hidden = false;
   }
 
+  /* Вставка зависит от выбора: сотрудник — `@Имя`, статья — маркер
+     `@[Заголовок](kb:12)`, который `kbLinkify` рисует ссылкой. */
   function applyMention(index) {
-    const person = state.mentionItems[index];
+    const item = state.mentionItems[index];
     const context = mentionQuery();
-    if (!person || !context) { closeMentions(); return; }
-    const inserted = `@${mentionHandle(person)} `;
+    if (!item || !context) { closeMentions(); return; }
+    const inserted = item.kind === 'page'
+      ? `@[${kbPageLinkTitle(item.page.title)}](kb:${Number(item.page.id)}) `
+      : `@${item.handle} `;
     const value = el.input.value;
     el.input.value = value.slice(0, context.start) + inserted + value.slice(context.caret);
     const caret = context.start + inserted.length;

@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules
+from bot.web import modules, page_links
 from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.announcements")
@@ -492,7 +492,7 @@ def build_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
             f"DTEND:{end_utc}",
             f"SUMMARY:{_ics_escape(row['title'])}",
             f"CATEGORIES:{_ics_escape(labels.get(row['category'], row['category']))}",
-            f"DESCRIPTION:{_ics_escape(row['body'])}",
+            f"DESCRIPTION:{_ics_escape(page_links.plain_text(row['body']))}",
             "END:VEVENT",
         ])
     lines.append("END:VCALENDAR")

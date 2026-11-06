@@ -30,6 +30,8 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import page_links
+
 logger = logging.getLogger("bot.web.push")
 
 DEFAULT_SUBJECT = "mailto:support@neftcoffee.shop"
@@ -240,8 +242,13 @@ def _deliver(engine: Engine, row: dict[str, Any], payload: dict[str, Any]) -> st
 
 
 def notification_payload(announcement: dict[str, Any]) -> dict[str, Any]:
-    """Текст уведомления и ссылка, по которой его откроет клиент."""
-    body = " ".join(str(announcement.get("body") or "").split())
+    """Текст уведомления и ссылка, по которой его откроет клиент.
+
+    Ссылки на статьи (`@[Заголовок](kb:12)`) в уведомлении превращаются в
+    обычный текст: переходить по ним из системного пуша браузера всё равно
+    нельзя, а служебная разметка в шторке выглядела бы мусором.
+    """
+    body = " ".join(page_links.plain_text(announcement.get("body")).split())
     if len(body) > MAX_BODY:
         body = body[: MAX_BODY - 1].rstrip() + "…"
     return {
