@@ -1,4 +1,4 @@
-"""Локальный запуск веб-сервиса для отладки с телефона (LAN).
+r"""Локальный запуск веб-сервиса для отладки с телефона (LAN).
 
 Отличается от штатного `run.py` двумя вещами:
 
@@ -21,7 +21,7 @@
 
 Остановить: Ctrl+C в этом окне либо скриптом (он найдёт процесс по порту):
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File .\\stop_local.ps1
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\stop_local.ps1
 
 То же самое есть кнопками в VS Code: Terminal → Run Task → «Остановить
 локальный сервер» (и «Локальный сервер (LAN, порт 8000)» — для запуска).
