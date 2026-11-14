@@ -88,15 +88,42 @@ function setNetworkStatus(isOnline, timestamp = null) {
     : 'ОФЛАЙН';
 }
 
-const CACHE_KEY_ANNOUNCEMENTS = 'neft-cache:announcements';
-const CACHE_KEY_CALENDAR = 'neft-cache:calendar';
-const CACHE_KEY_LAST_SYNC = 'neft-cache:last-sync';
+/* Версия схемы кэша входит в имя ключа: структура данных модулей менялась, и
+   старые записи открывались как «офлайн» с пустыми блоками. Ключи прошлых
+   версий больше не читаются, а разово подчищаются при старте (purgeLegacyCache). */
+const CACHE_NAMESPACE = 'neft-cache';
+const CACHE_VERSION = 'v2';
+const CACHE_PREFIX = `${CACHE_NAMESPACE}:${CACHE_VERSION}:`;
+
+/* Имена кэшей, которые приложение писало до v2 — их ключи удаляем один раз. */
+const LEGACY_CACHE_NAMES = [
+  'announcements', 'calendar', 'last-sync', 'kb-list', 'kb-page',
+  'analytics-team', 'analytics-drinks', 'analytics-shifts',
+];
+
+/* Ключ кэша с версионным префиксом: `neft-cache:v2:<name>`. */
+function cacheKeyFor(name) {
+  return `${CACHE_PREFIX}${name}`;
+}
+
+const CACHE_KEY_ANNOUNCEMENTS = cacheKeyFor('announcements');
+const CACHE_KEY_CALENDAR = cacheKeyFor('calendar');
+const CACHE_KEY_LAST_SYNC = cacheKeyFor('last-sync');
 
 function readCache(key) {
+  let raw = null;
   try {
-    const raw = localStorage.getItem(key);
-    return raw == null ? null : JSON.parse(raw);
+    raw = localStorage.getItem(key);
   } catch (error) {
+    return null; // localStorage недоступен (приватный режим) — кеша просто нет.
+  }
+  if (raw == null) return null;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    // Битая структура JSON: держать её нельзя, иначе модуль останется пустым.
+    console.warn(`[cache] Кэш ${key} не читается как JSON — удаляю`, error);
+    removeCache(key);
     return null;
   }
 }
@@ -107,6 +134,40 @@ function writeCache(key, value) {
   } catch (error) {
     /* localStorage может быть недоступен (приватный режим) — кеш пропускаем. */
   }
+}
+
+function removeCache(key) {
+  try { localStorage.removeItem(key); } catch (error) { /* приватный режим */ }
+}
+
+/* Битая структура кэша (старая версия схемы, ручная правка, ошибка рендера) не
+   должна оставлять модуль «офлайн с пустыми блоками»: предупреждаем в консоль,
+   удаляем ключ и продолжаем загрузку из сети за актуальными данными. */
+function dropCorruptCache(cacheKey, error) {
+  console.warn(`[cache] Кэш ${cacheKey} повреждён — удаляю и запрашиваю заново`, error);
+  removeCache(cacheKey);
+}
+
+/* Успешный ответ сервера: кэш перезаписывается актуальным JSON, а индикатор
+   связи возвращается в активный режим (setNetworkStatus(true)). */
+function syncCache(cacheKey, data) {
+  writeCache(cacheKey, data);
+  writeCache(CACHE_KEY_LAST_SYNC, Date.now());
+  setNetworkStatus(true);
+}
+
+/* Разовая уборка ключей прошлых версий: несовместимые структуры больше не
+   читаются, но занимают квоту хранилища и путаются при отладке. */
+function purgeLegacyCache() {
+  try {
+    const stale = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(`${CACHE_NAMESPACE}:`) || key.startsWith(CACHE_PREFIX)) continue;
+      if (LEGACY_CACHE_NAMES.some((name) => key === `${CACHE_NAMESPACE}:${name}` || key.startsWith(`${CACHE_NAMESPACE}:${name}:`))) stale.push(key);
+    }
+    stale.forEach((key) => localStorage.removeItem(key));
+  } catch (error) { /* приватный режим: localStorage недоступен — чистить нечего */ }
 }
 
 function lastSyncTimestamp() {
@@ -681,9 +742,9 @@ function renderEvaluationAnalytics(data) {
    по напиткам и чистоте, выработка часов по точкам. Без сторонних графических
    библиотек — только таблицы, чипы и CSS-прогресс-бары. */
 
-const CACHE_KEY_ANALYTICS_TEAM = 'neft-cache:analytics-team';
-const CACHE_KEY_ANALYTICS_DRINKS = 'neft-cache:analytics-drinks';
-const CACHE_KEY_ANALYTICS_SHIFTS = 'neft-cache:analytics-shifts';
+const CACHE_KEY_ANALYTICS_TEAM = cacheKeyFor('analytics-team');
+const CACHE_KEY_ANALYTICS_DRINKS = cacheKeyFor('analytics-drinks');
+const CACHE_KEY_ANALYTICS_SHIFTS = cacheKeyFor('analytics-shifts');
 
 const analyticsState = {
   days: 30,
@@ -731,17 +792,22 @@ async function loadTeamOverview() {
   const container = document.querySelector('#analytics-team');
   if (!container) return;
   const cacheKey = `${CACHE_KEY_ANALYTICS_TEAM}:${analyticsState.days}`;
-  const cached = readCache(cacheKey);
-  if (cached) {
-    analyticsState.team = cached;
-    renderTeamOverview();
+  try {
+    const cached = readCache(cacheKey);
+    if (cached) {
+      analyticsState.team = cached;
+      renderTeamOverview();
+    }
+  } catch (error) {
+    dropCorruptCache(cacheKey, error);
+    analyticsState.team = null;
   }
   try {
     const data = await api(`/api/analytics/team-overview?days=${analyticsState.days}`);
     analyticsState.team = data;
-    writeCache(cacheKey, data);
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     renderTeamOverview();
+    // Кэш пишем после успешного рендера: битые данные в него не попадут.
+    syncCache(cacheKey, data);
   } catch (error) {
     if (!analyticsState.team) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
     if (!error.isOffline) showToast(error.message);
@@ -752,17 +818,21 @@ async function loadDrinksQuality() {
   const container = document.querySelector('#analytics-drinks');
   if (!container) return;
   const cacheKey = `${CACHE_KEY_ANALYTICS_DRINKS}:${analyticsState.days}`;
-  const cached = readCache(cacheKey);
-  if (cached) {
-    analyticsState.drinks = cached;
-    renderDrinksQuality();
+  try {
+    const cached = readCache(cacheKey);
+    if (cached) {
+      analyticsState.drinks = cached;
+      renderDrinksQuality();
+    }
+  } catch (error) {
+    dropCorruptCache(cacheKey, error);
+    analyticsState.drinks = null;
   }
   try {
     const data = await api(`/api/analytics/drinks-quality?days=${analyticsState.days}`);
     analyticsState.drinks = data;
-    writeCache(cacheKey, data);
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     renderDrinksQuality();
+    syncCache(cacheKey, data);
   } catch (error) {
     if (!analyticsState.drinks) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
     if (!error.isOffline) showToast(error.message);
@@ -773,17 +843,21 @@ async function loadShiftsReport() {
   const container = document.querySelector('#analytics-shifts');
   if (!container) return;
   const cacheKey = `${CACHE_KEY_ANALYTICS_SHIFTS}:${analyticsState.year}-${analyticsState.month}`;
-  const cached = readCache(cacheKey);
-  if (cached) {
-    analyticsState.shifts = cached;
-    renderShiftsReport();
+  try {
+    const cached = readCache(cacheKey);
+    if (cached) {
+      analyticsState.shifts = cached;
+      renderShiftsReport();
+    }
+  } catch (error) {
+    dropCorruptCache(cacheKey, error);
+    analyticsState.shifts = null;
   }
   try {
     const data = await api(`/api/analytics/shifts-report?year=${analyticsState.year}&month=${analyticsState.month}`);
     analyticsState.shifts = data;
-    writeCache(cacheKey, data);
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     renderShiftsReport();
+    syncCache(cacheKey, data);
   } catch (error) {
     if (!analyticsState.shifts) container.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
     if (!error.isOffline) showToast(error.message);
@@ -2826,25 +2900,32 @@ async function loadCalendar() {
   const cacheKey = `${CACHE_KEY_CALENDAR}:${year}-${month}`;
 
   // Офлайн-режим: сначала мгновенно показываем сохранённую копию графика.
-  const cached = readCache(cacheKey);
-  if (cached && cached.year === year && cached.month === month) {
-    calendarState = cached;
-    calendarAutoScroll = true;
-    renderCalendar(calendarState);
+  try {
+    const cached = readCache(cacheKey);
+    if (cached && cached.year === year && cached.month === month) {
+      calendarState = cached;
+      calendarAutoScroll = true;
+      renderCalendar(calendarState);
+    }
+  } catch (error) {
+    dropCorruptCache(cacheKey, error);
+    calendarState = null;
   }
 
   try {
     const data = await api(`/api/calendar?year=${year}&month=${month}`);
     calendarState = data;
-    writeCache(cacheKey, data);
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     calendarAutoScroll = true;
     renderCalendar(calendarState);
+    syncCache(cacheKey, data);
     await loadShiftHistory();
   } catch (error) {
     if (error.isOffline) {
       setNetworkStatus(false, lastSyncTimestamp());
-      showToast('Связь с сервером потеряна. Показана сохраненная копия');
+      // Копию могли только что удалить как битую — тогда не обещаем её показ.
+      showToast(calendarState
+        ? 'Связь с сервером потеряна. Показана сохраненная копия'
+        : 'Связь с сервером потеряна');
       return;
     }
     showToast(error.message);
@@ -3953,15 +4034,20 @@ async function openAnnouncementCard(id) {
 }
 
 async function loadAnnouncements() {
-  // Офлайн-режим: мгновенно показываем сохранённую копию анонсов.
-  const cached = readCache(CACHE_KEY_ANNOUNCEMENTS);
-  if (cached && Array.isArray(cached.items)) {
-    announcementsState.items = cached.items;
-    announcementsState.unread = cached.unread || announcementsState.unread;
-    announcementsState.categories = cached.categories || [];
-    announcementsState.canPublish = Boolean(cached.canPublish);
-    renderAnnouncements();
-    renderAnnouncementCategories();
+  // Офлайн-режим: мгновенно показываем сохранённую копию анонсов. Битая копия
+  // не должна оставлять раздел пустым — сбрасываем её и идём за данными в сеть.
+  try {
+    const cached = readCache(CACHE_KEY_ANNOUNCEMENTS);
+    if (cached && Array.isArray(cached.items)) {
+      announcementsState.items = cached.items;
+      announcementsState.unread = cached.unread || announcementsState.unread;
+      announcementsState.categories = cached.categories || [];
+      announcementsState.canPublish = Boolean(cached.canPublish);
+      renderAnnouncements();
+      renderAnnouncementCategories();
+    }
+  } catch (error) {
+    dropCorruptCache(CACHE_KEY_ANNOUNCEMENTS, error);
   }
 
   try {
@@ -3970,15 +4056,14 @@ async function loadAnnouncements() {
     announcementsState.unread = data.unread || announcementsState.unread;
     announcementsState.categories = data.categories || [];
     announcementsState.canPublish = Boolean(data.can_publish);
-    writeCache(CACHE_KEY_ANNOUNCEMENTS, {
+    renderAnnouncements();
+    renderAnnouncementCategories();
+    syncCache(CACHE_KEY_ANNOUNCEMENTS, {
       items: announcementsState.items,
       unread: announcementsState.unread,
       categories: announcementsState.categories,
       canPublish: announcementsState.canPublish,
     });
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
-    renderAnnouncements();
-    renderAnnouncementCategories();
     return true;
   } catch (error) {
     if (error.isOffline) {
@@ -4485,8 +4570,8 @@ function setupAnnouncements() {
    а правка — только senior/mentor (managerRole); запись повторно проверяет
    бэкенд. */
 
-const CACHE_KEY_KB_LIST = 'neft-cache:kb-list';
-const CACHE_KEY_KB_PAGE = 'neft-cache:kb-page';
+const CACHE_KEY_KB_LIST = cacheKeyFor('kb-list');
+const CACHE_KEY_KB_PAGE = cacheKeyFor('kb-page');
 
 // Системные ключи совпадают с серверными (SYSTEM_SECTIONS); кастомные разделы
 // подтянутся из `/api/kb/pages`. Здесь — запасной набор для первого (в т.ч.
@@ -5227,14 +5312,22 @@ async function openKbPage(id) {
   if (kbIsNarrow()) kbSetTreeOpen(false);
   const status = document.querySelector('#kb-tree-status');
   if (status) status.textContent = 'Загрузка страницы…';
-  const cached = readCache(`${CACHE_KEY_KB_PAGE}:${numeric}`);
-  if (cached) { kbState.current = cached; renderKbPage(); }
+  const pageCacheKey = `${CACHE_KEY_KB_PAGE}:${numeric}`;
+  let cached = null;
+  try {
+    cached = readCache(pageCacheKey);
+    if (cached) { kbState.current = cached; renderKbPage(); }
+  } catch (error) {
+    dropCorruptCache(pageCacheKey, error);
+    cached = null;
+    kbState.current = null;
+  }
   try {
     const page = await api(`/api/kb/pages/${numeric}`);
     kbState.current = page;
-    writeCache(`${CACHE_KEY_KB_PAGE}:${numeric}`, page);
-    if (status) status.textContent = '';
     renderKbPage();
+    if (status) status.textContent = '';
+    syncCache(pageCacheKey, page);
   } catch (error) {
     if (error.isOffline) {
       setNetworkStatus(false, lastSyncTimestamp());
@@ -5246,27 +5339,33 @@ async function openKbPage(id) {
 }
 
 async function loadKnowledgeBase() {
-  // Офлайн-режим: сразу показываем сохранённую структуру разделов.
-  const cached = readCache(CACHE_KEY_KB_LIST);
-  if (cached && Array.isArray(cached.items)) {
-    kbState.items = cached.items;
-    if (Array.isArray(cached.sections) && cached.sections.length) kbApplySections(cached.sections);
-    else if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
-    kbFilterChips();
-    kbRenderCategorySelect();
-    kbRenderTagSuggestions();
-    renderKbTree();
+  // Офлайн-режим: сразу показываем сохранённую структуру разделов. Битая копия
+  // не должна оставлять оглавление пустым — сбрасываем её и идём в сеть.
+  let cached = null;
+  try {
+    cached = readCache(CACHE_KEY_KB_LIST);
+    if (cached && Array.isArray(cached.items)) {
+      kbState.items = cached.items;
+      if (Array.isArray(cached.sections) && cached.sections.length) kbApplySections(cached.sections);
+      else if (Array.isArray(cached.categories) && cached.categories.length) kbState.categories = cached.categories;
+      kbFilterChips();
+      kbRenderCategorySelect();
+      kbRenderTagSuggestions();
+      renderKbTree();
+    }
+  } catch (error) {
+    dropCorruptCache(CACHE_KEY_KB_LIST, error);
+    cached = null;
   }
   try {
     const data = await api('/api/kb/pages');
     kbState.items = data.items || [];
     kbApplySections(data.sections);
-    writeCache(CACHE_KEY_KB_LIST, { items: kbState.items, sections: kbState.sections });
-    writeCache(CACHE_KEY_LAST_SYNC, Date.now());
     kbFilterChips();
     kbRenderCategorySelect();
     kbRenderTagSuggestions();
     renderKbTree();
+    syncCache(CACHE_KEY_KB_LIST, { items: kbState.items, sections: kbState.sections });
     return true;
   } catch (error) {
     if (error.isOffline) {
@@ -6006,8 +6105,13 @@ async function kbSearchPages(query) {
 
 /* Офлайн-фолбэк: та же копия оглавления, что показывает сам раздел. */
 function kbLocalLinkTargets(key) {
-  const cached = readCache(CACHE_KEY_KB_LIST);
-  const items = cached && Array.isArray(cached.items) ? cached.items : kbState.items;
+  let items = kbState.items;
+  try {
+    const cached = readCache(CACHE_KEY_KB_LIST);
+    if (cached && Array.isArray(cached.items)) items = cached.items;
+  } catch (error) {
+    dropCorruptCache(CACHE_KEY_KB_LIST, error);
+  }
   return (items || [])
     .filter((item) => !key || String(item.title || '').toLowerCase().includes(key))
     .slice(0, KB_LINK_LIMIT)
@@ -8193,6 +8297,8 @@ function setupControlPanel() {
 }
 
 function setupDashboard() {
+  // Ключи кэша прошлых версий несовместимы с текущей схемой — убираем до чтения.
+  purgeLegacyCache();
   document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
   setupAppearance();
   setupDrawer();
