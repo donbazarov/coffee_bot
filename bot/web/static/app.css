@@ -2747,7 +2747,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .task-tabs .task-tab[data-task-tab="in_progress"] b { color: var(--task-progress); }
 .task-tabs .task-tab[data-task-tab="done"] b { color: var(--task-done); }
 
-.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--task-r-board); background: var(--bg-deep); }
+.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--task-r-board); background: var(--lg-fill); }
 .task-column { display: flex; flex-direction: column; min-height: 380px; padding: 15px; border: 1px solid var(--line); border-radius: var(--task-r-col); background: linear-gradient(180deg, color-mix(in srgb, var(--hl) 3%, transparent), transparent 42%), var(--surface-sunken); transition: border-color .2s, background-color .2s; }
 /* Этапы кодируются цветом: янтарь — «В работе», зелень — «Готово». */
 .task-column[data-task-status="in_progress"] { border-color: color-mix(in srgb, var(--task-progress) 34%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--task-progress) 10%, transparent), transparent 46%), var(--surface-sunken); }
@@ -2762,6 +2762,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .task-stage-hint { color: color-mix(in srgb, var(--task-done) 60%, var(--muted)); font: 400 9.5px var(--mono); }
 .task-column-title h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
 .task-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--task-todo); }
+.task-column[data-task-status="todo"] .task-dot { background: var(--accent); box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 70%, transparent); }
 .task-column[data-task-status="in_progress"] .task-dot { background: var(--task-progress); box-shadow: 0 0 8px color-mix(in srgb, var(--task-progress) 70%, transparent); }
 .task-column[data-task-status="done"] .task-dot { background: var(--task-done); box-shadow: 0 0 8px color-mix(in srgb, var(--task-done) 70%, transparent); }
 .task-count { min-width: 26px; padding: 2px 7px; border: 1px solid var(--line); border-radius: var(--task-r-tile); background: var(--surface); color: var(--muted); font: 600 11px var(--mono); text-align: center; }
