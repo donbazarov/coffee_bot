@@ -8,7 +8,7 @@
     WEB_SESSION_SECRET            — подпись сессионных cookie
     WEB_HOST / WEB_PORT           — адрес и порт веб-сервиса
     DATABASE_URL                  — путь к SQLite-базе (по умолчанию в корне)
-    ENCRYPTION_KEY                — симметричный ключ шифрования текста чата (Fernet)
+    ENCRYPTION_KEY                — ключ шифрования текста чата (Fernet); пусто — генерируется в data/chat/encryption_key
 
 Секретов в коде нет: токен и остальные значения приходят только из `.env`
 или из переменных окружения.

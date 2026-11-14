@@ -449,28 +449,74 @@ def _utcnow_iso() -> str:
 
 # --- Шифрование текста сообщений -------------------------------------------- #
 
-# Ключ Fernet берётся из окружения (.env) один раз за процесс. Формат — url-safe
-# base64 (44 символа), сгенерировать можно так:
-#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Ключ Fernet ищется в таком порядке: переменная окружения ENCRYPTION_KEY →
+# файл ключа (по умолчанию data/chat/encryption_key, переопределяется
+# NEFT_CHAT_KEY_FILE) → генерируется и сохраняется в файл. Файл лежит в томе
+# data/ (вне базы, вне git) и попадает в резервные копии. Формат ключа —
+# url-safe base64 (44 символа).
 _cipher: Fernet | None = None
 _cipher_checked = False
 
 
+def _key_file() -> Path:
+    """Путь к файлу ключа шифрования."""
+    return Path(os.getenv("NEFT_CHAT_KEY_FILE") or (_REPO_ROOT / "data" / "chat" / "encryption_key"))
+
+
+def _read_key_file(path: Path) -> str | None:
+    """Читает ключ из файла. None — файла нет или он нечитаем."""
+    try:
+        raw = path.read_text(encoding="ascii").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as error:  # noqa: BLE001 — нечитаемый файл не должен ломать чат
+        logger.warning("Чат: файл ключа не прочитан (%s): %s", path, error)
+        return None
+    return raw or None
+
+
+def _write_key_file(path: Path, raw: str) -> bool:
+    """Сохраняет ключ в файл с правами 600. False — записать не удалось."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(raw + "\n", encoding="ascii")
+        try:
+            path.chmod(0o600)  # на Windows частично no-op — не критично
+        except OSError:
+            pass
+        return True
+    except OSError as error:  # noqa: BLE001 — отсутствие записи не должно ронять старт
+        logger.error("Чат: ключ не сохранён (%s): %s", path, error)
+        return False
+
+
 def _get_cipher() -> Fernet | None:
-    """Fernet-шифр из ENCRYPTION_KEY. None — ключа нет или он некорректен."""
+    """Fernet-шифр: ENCRYPTION_KEY → файл ключа → сгенерировать и сохранить в файл."""
     global _cipher, _cipher_checked
     if _cipher_checked:
         return _cipher
     _cipher_checked = True
+
     raw = (os.getenv("ENCRYPTION_KEY") or "").strip()
+    source = "ENCRYPTION_KEY"
+    path = _key_file()
     if not raw:
-        logger.warning("ENCRYPTION_KEY не задан — текст чата хранится без шифрования")
-        return None
+        raw = _read_key_file(path)
+        if raw:
+            source = "файл"
+    if not raw:
+        raw = Fernet.generate_key().decode("ascii")
+        if not _write_key_file(path, raw):
+            return None
+        source = "сгенерирован и сохранён в файл"
+
     try:
         _cipher = Fernet(raw.encode("ascii"))
     except (ValueError, TypeError):
-        logger.error("ENCRYPTION_KEY некорректен — ожидался url-safe base64 ключ Fernet")
+        logger.error("Чат: ключ шифрования некорректен — шифрование отключено")
         _cipher = None
+        return None
+    logger.info("Чат: ключ шифрования активен (источник: %s)", source)
     return _cipher
 
 
