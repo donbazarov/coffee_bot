@@ -877,7 +877,6 @@
     {% if modules['chat'].enabled %}<button class="dock-item" type="button" data-chat-open="dm"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg></span><span>Личные</span></button>
     <button class="dock-item" type="button" data-chat-open="room"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-hash"></use></svg></span><span>Общие</span></button>{% endif %}
     {% if modules['calendar'].enabled %}<button class="dock-item" type="button" data-view="calendar"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>Календарь</span></button>{% endif %}
-    {% if modules['tasks'].enabled %}<button class="dock-item" type="button" data-view="tasks"><span class="dock-icon"><svg class="icon" aria-hidden="true"><use href="#i-kanban"></use></svg></span><span>Задачи</span></button>{% endif %}
   </nav>
 
   {# Канбан: боковые зоны переноса, drop-zone удаления и Undo-тост.
