@@ -1433,8 +1433,10 @@ const DEFAULT_WORKLOAD_HOURS = { min_hours: 80, opt_hours: 130, max_hours: 170 }
 let workloadState = null;
 let workloadRequiredTotal = 0;
 let workloadCursor = { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
-// Доля дней с пересменом (ползунок «n% дней с пересменом») — отдельно для каждой точки.
-const workloadOverlap = { 'УЯ': 100, 'ДЕ': 100 };
+// Доля дней с пересменом (ползунок «n% дней с пересменом») — отдельно для каждой
+// точки. Стартовое положение приходит с сервера (настройка модуля «Команда»),
+// 0 — фолбэк, если ответ статистики ещё не получен.
+const workloadOverlap = { 'УЯ': 0, 'ДЕ': 0 };
 
 function setText(selector, value) {
   const node = document.querySelector(selector);
@@ -1505,6 +1507,7 @@ async function loadWorkload() {
   if (source) source.textContent = 'Загрузка…';
   try {
     workloadState = await api(`/api/team/workload-stats?year=${workloadCursor.year}&month=${workloadCursor.month}`);
+    applyWorkloadOverlapDefault(workloadState);
     renderWorkload();
     if (source) {
       source.textContent = workloadState.calendar.source === 'isdayoff'
@@ -1699,6 +1702,15 @@ function renderWorkloadTeam(employees) {
       <span class="workload-cell" title="Максимум часов в месяц">${employee.max_hours}</span>
     </div>`).join('');
   list.innerHTML = head + rows;
+}
+
+/* Ползунки точек стартуют с настройки «Пересмены: доля дней по умолчанию»
+   панели управления (`DEFAULT_OVERLAP_SHARE`); дальше двигаются локально.
+   Значение выравниваем по шагу ползунка (5 %) и держим в диапазоне 0–100. */
+function applyWorkloadOverlapDefault(state) {
+  const raw = Number(state?.overlap_share_default);
+  const share = Number.isFinite(raw) ? Math.min(100, Math.max(0, Math.round(raw / 5) * 5)) : 0;
+  WORKLOAD_POINTS.forEach((config) => { workloadOverlap[config.code] = share; });
 }
 
 function pointCard(point, config) {

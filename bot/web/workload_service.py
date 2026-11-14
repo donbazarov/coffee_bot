@@ -19,7 +19,8 @@
    (`web_shift_templates`) с флагами `is_morning` / `is_evening` /
    `is_overlap` / `is_weekend`. Результат — средние длительности смен по
    категориям; итоговые суммы пересчитывает клиент, чтобы ползунок «n%
-   пересменов» двигал цифры без обращения к серверу.
+   пересменов» двигал цифры без обращения к серверу. Стартовое положение
+   ползунков задаёт настройка `DEFAULT_OVERLAP_SHARE` панели управления.
 
 Сетевые запросы — только через стандартный `urllib` (как в
 `avatars.py`/`telegram_publish.py`): лишних зависимостей проект не тянет.
@@ -47,6 +48,9 @@ DEFAULT_MIN_HOURS = 80
 DEFAULT_OPT_HOURS = 130
 DEFAULT_MAX_HOURS = 170
 MAX_HOURS_LIMIT = 744  # 31 день × 24 часа — больше физически не проставить.
+# Пересмены: доля дней с пересменом по умолчанию (стартовое положение ползунков
+# точек в «Команда → Расчет часов»). 0 — пересмен считается выключенным.
+DEFAULT_OVERLAP_SHARE = 0
 
 # Индикатор насыщенности: доля от оптимальной планки.
 SATURATION_DEFICIT = 0.9
@@ -67,6 +71,7 @@ modules.register_defaults("team", {
     "DEFAULT_MAX_HOURS": DEFAULT_MAX_HOURS, "MAX_HOURS_LIMIT": MAX_HOURS_LIMIT,
     "SATURATION_DEFICIT": SATURATION_DEFICIT, "SATURATION_OVERLOAD": SATURATION_OVERLOAD,
     "ISDAYOFF_REGION": ISDAYOFF_REGION,
+    "DEFAULT_OVERLAP_SHARE": DEFAULT_OVERLAP_SHARE,
 })
 
 
@@ -557,6 +562,9 @@ def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = Fa
         "plan": plan,
         "saturation": _saturation(plan, totals),
         "points": {point: _point_means(templates, point) for point in POINTS},
+        # Стартовое положение ползунков «% дней с пересменом» — настройка
+        # панели управления (модуль «Команда»), а не константа клиента.
+        "overlap_share_default": int(_cfg("DEFAULT_OVERLAP_SHARE") or 0),
     }
 
 
