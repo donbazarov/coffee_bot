@@ -3050,6 +3050,7 @@ function setView(name) {
         name === 'control' ? 'Панель управления' :
         name === 'analytics' ? 'Аналитика команды' :
         name === 'announcements' ? 'Анонсы' :
+        name === 'tasks' ? 'Задачи' :
         name === 'kb' ? 'База знаний' :
         name === 'drinks' ? 'Описание напитков' :
         name === 'chat' ? 'Чат' :
@@ -3084,11 +3085,12 @@ function setView(name) {
   }
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
+  if (name === 'tasks') loadTasks();
   if (name === 'kb') openKnowledgeBase();
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar') loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); ensureControlSelection(); }
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); renderTaskCategories(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -8205,6 +8207,870 @@ function setupDrinks() {
   document.querySelector('#drink-form')?.addEventListener('submit', submitDrinkForm);
 }
 
+/* --- Задачи: канбан-доска, архив и категории ------------------------------
+   Дизайн извлечён из макета CrewDesk (Stitch «Kanban Board Page Layout»):
+   три этапа со счётчиками, карточки с бейджами и мета-подвалом, динамическая
+   drop-zone удаления и Undo-тост. Видимость считает сервер (общие + своя
+   должность + лично мне) — интерфейс лишь раскладывает результат по колонкам.
+   На телефоне колонки превращаются в табы этапов, а перевод статуса доступен
+   кнопками на карточке — без обязательного перетаскивания. */
+
+const CACHE_KEY_TASKS = cacheKeyFor('tasks');
+const TASK_STATUSES = ['todo', 'in_progress', 'done'];
+const TASK_STAGE = {
+  todo: { stage: 'ЭТАП 01', label: 'To Do', next: 'in_progress', prev: null },
+  in_progress: { stage: 'ЭТАП 02', label: 'В работе', next: 'done', prev: 'todo' },
+  done: { stage: 'ЭТАП 03', label: 'Готово', next: null, prev: 'in_progress' },
+};
+const TASK_PRIORITY_LABELS = { normal: 'Обычный', high: 'ВЫСОКИЙ', urgent: 'СРОЧНО' };
+const TASK_UNDO_MS = 5500;
+
+const tasksState = {
+  mode: 'board',        // board | archive
+  assignee: 'all',      // all | mine | shared
+  category: 'all',      // all | <код категории>
+  mobileStatus: 'todo', // какой этап открыт на узком экране
+  items: [], counts: null, categories: [], assignees: null,
+  canManage: false,
+};
+
+let taskUndo = null;      // { task, timer } — что можно вернуть кнопкой «Отменить»
+
+function taskStatusLabel(status) {
+  return (TASK_STAGE[status] || {}).label || status;
+}
+
+function taskStamp(value) {
+  try {
+    return new Date(value).toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    });
+  } catch (error) {
+    return '';
+  }
+}
+
+function taskBadgeMarkup(text, color) {
+  return `<span class="task-badge" style="--task-color: ${escapeHtml(color)}">${escapeHtml(text)}</span>`;
+}
+
+/* Карточка: бейджи (категория + приоритет), название, мета-подвал и быстрые
+   кнопки перевода статуса — на узком экране они видны всегда (см. app.css). */
+function taskCardMarkup(task) {
+  const stage = TASK_STAGE[task.status] || TASK_STAGE.todo;
+  const badges = [taskBadgeMarkup(`#${task.category_label}`, task.category_color)];
+  if (task.priority !== 'normal') {
+    badges.push(`<span class="task-badge is-priority-${escapeHtml(task.priority)}">${escapeHtml(TASK_PRIORITY_LABELS[task.priority] || '')}</span>`);
+  }
+  if (task.assignee.type === 'all') badges.push('<span class="task-badge is-shared">ДЛЯ ВСЕХ</span>');
+  const metas = (task.meta || []).slice(0, 2).map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('');
+  const who = task.assignee.type === 'role'
+    ? task.assignee.role_label
+    : (task.assignee.name || task.author_name || 'Общая');
+  const quick = [];
+  if (task.can_edit) {
+    if (stage.prev) {
+      quick.push(`<button class="task-quick" type="button" data-task-move="${stage.prev}" data-task-id="${task.id}" aria-label="Вернуть на «${escapeHtml(taskStatusLabel(stage.prev))}»"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button>`);
+    }
+    if (stage.next) {
+      quick.push(`<button class="task-quick is-done" type="button" data-task-move="${stage.next}" data-task-id="${task.id}"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>${stage.next === 'done' ? 'Готово' : 'В работу'}</button>`);
+    }
+    quick.push(`<button class="task-quick is-danger" type="button" data-task-delete="${task.id}" aria-label="Удалить задачу"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button>`);
+  }
+  return `<article class="task-card${task.can_edit ? '' : ' is-locked'}" data-task-id="${task.id}"${task.can_edit ? ' data-task-drag="1"' : ''} tabindex="0" role="button">
+    <header class="task-card-head">
+      <div class="task-card-badges">${badges.join('')}</div>
+      ${task.can_edit ? '<span class="task-grip" aria-hidden="true"><svg class="icon"><use href="#i-drag"></use></svg></span>' : ''}
+    </header>
+    <p class="task-card-title">${escapeHtml(task.title)}</p>
+    ${task.description ? `<p class="task-card-note">${escapeHtml(task.description.slice(0, 160))}</p>` : ''}
+    <footer class="task-card-foot">
+      <div class="task-card-meta">${metas || `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg>${escapeHtml(who)}</span>`}</div>
+      <div class="task-card-owner"><b class="task-avatar">${escapeHtml((who || '?').slice(0, 1).toUpperCase())}</b>${escapeHtml(who)}</div>
+    </footer>
+    ${quick.length ? `<div class="task-card-quick">${quick.join('')}</div>` : ''}
+  </article>`;
+}
+
+/* --- Рендер доски, чипов, табов и архива -------------------------------- */
+
+function renderTaskChips() {
+  const node = document.querySelector('#tasks-filters');
+  if (!node) return;
+  const counts = tasksState.counts || {};
+  const chips = [`<button class="chip ${tasksState.category === 'all' ? 'is-selected' : ''}" type="button" data-task-category="all">Все <b>${Number(counts.total || 0)}</b></button>`];
+  (tasksState.categories || []).forEach((item) => {
+    const value = Number((counts.by_category || {})[item.code] || 0);
+    chips.push(`<button class="chip ${tasksState.category === item.code ? 'is-selected' : ''}" type="button" data-task-category="${escapeHtml(item.code)}" style="--task-color: ${escapeHtml(item.color)}"><i class="task-pip"></i>#${escapeHtml(item.label)} <b>${value}</b></button>`);
+  });
+  node.innerHTML = chips.join('');
+}
+
+function renderTaskTabs() {
+  const node = document.querySelector('#tasks-tabs');
+  if (!node) return;
+  const counts = tasksState.counts || {};
+  node.innerHTML = TASK_STATUSES.map((status) => {
+    const value = Number((counts.by_status || {})[status] || 0);
+    return `<button class="task-tab${tasksState.mobileStatus === status ? ' is-selected' : ''}" type="button" data-task-tab="${status}"><i class="task-dot"></i>${escapeHtml(TASK_STAGE[status].label)} <b>${value}</b></button>`;
+  }).join('');
+}
+
+function renderTaskArchive() {
+  const node = document.querySelector('#tasks-archive');
+  if (!node) return;
+  if (tasksState.mode !== 'archive') {
+    node.innerHTML = '';
+    return;
+  }
+  node.innerHTML = tasksState.items.length
+    ? tasksState.items.map((task) => `
+      <article class="task-archive-card" data-task-open="${task.id}" tabindex="0" role="button">
+        <div class="task-archive-top">${taskBadgeMarkup('#' + task.category_label, task.category_color)}
+          <span class="task-archive-state ${task.status === 'archived_done' ? 'is-done' : 'is-cancelled'}">${task.status === 'archived_done' ? 'ВЫПОЛНЕНО' : 'ОТМЕНЕНО'}</span>
+        </div>
+        <p class="task-card-title">${escapeHtml(task.title)}</p>
+        <p class="task-archive-meta">${escapeHtml(task.completed_name || task.author_name || '')}${task.completed_at ? ` · ${escapeHtml(taskStamp(task.completed_at))}` : ''}</p>
+      </article>`).join('')
+    : '<p class="empty-state">В архиве пока пусто</p>';
+}
+
+function syncTaskModes() {
+  document.querySelectorAll('#tasks-mode [data-task-mode]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.taskMode === tasksState.mode);
+  });
+  document.querySelectorAll('#tasks-assignee [data-task-assignee]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.taskAssignee === tasksState.assignee);
+  });
+  // В архиве фильтр адресации не нужен: там уже всё, что доступно сотруднику.
+  const assignee = document.querySelector('#tasks-assignee');
+  if (assignee) assignee.hidden = tasksState.mode === 'archive';
+}
+
+function renderTasks() {
+  renderTaskChips();
+  renderTaskTabs();
+  const board = document.querySelector('#tasks-board');
+  const archive = document.querySelector('#tasks-archive');
+  if (board) board.hidden = tasksState.mode !== 'board';
+  if (archive) archive.hidden = tasksState.mode !== 'archive';
+  TASK_STATUSES.forEach((status) => {
+    const list = document.querySelector(`[data-task-drop="${status}"]`);
+    const counter = document.querySelector(`[data-task-count="${status}"]`);
+    const column = document.querySelector(`.task-column[data-task-status="${status}"]`);
+    if (column) column.classList.toggle('is-active', tasksState.mobileStatus === status);
+    if (!list) return;
+    const items = tasksState.items.filter((task) => task.status === status);
+    if (counter) counter.textContent = String(items.length);
+    list.innerHTML = items.length
+      ? items.map(taskCardMarkup).join('')
+      : '<p class="task-empty"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Нет активных задач<small>Перетащите задачу сюда</small></p>';
+  });
+  renderTaskArchive();
+  const status = document.querySelector('#tasks-status');
+  if (status) {
+    const counts = tasksState.counts || {};
+    status.textContent = tasksState.mode === 'board'
+      ? `На доске: ${Number(counts.total ?? tasksState.items.length)} · с учётом вашей должности`
+      : `В архиве: ${tasksState.items.length}`;
+  }
+  syncTaskModes();
+}
+
+/* --- Загрузка данных ---------------------------------------------------- */
+
+async function loadTaskAssignees() {
+  if (tasksState.assignees) return tasksState.assignees;
+  try {
+    tasksState.assignees = await api('/api/tasks/assignees');
+  } catch (error) {
+    showToast(error.message);
+  }
+  return tasksState.assignees;
+}
+
+function applyTaskPayload(data) {
+  tasksState.items = data.items || [];
+  tasksState.counts = data.counts || null;
+  tasksState.categories = data.categories || [];
+  tasksState.canManage = Boolean(data.can_manage_categories);
+}
+
+async function loadTasks() {
+  if (!document.querySelector('#tasks-view')) return false;
+  try {
+    const cached = readCache(CACHE_KEY_TASKS);
+    if (cached && Array.isArray(cached.items)) {
+      tasksState.items = cached.items;
+      tasksState.counts = cached.counts || null;
+      tasksState.categories = cached.categories || [];
+      renderTasks();
+    }
+  } catch (error) {
+    dropCorruptCache(CACHE_KEY_TASKS, error);
+  }
+  try {
+    const data = await api(`/api/tasks?assignee=${tasksState.assignee}&category=${tasksState.category}`);
+    applyTaskPayload(data);
+    renderTasks();
+    renderTaskCategories();
+    syncCache(CACHE_KEY_TASKS, {
+      items: tasksState.items, counts: tasksState.counts, categories: tasksState.categories,
+    });
+    return true;
+  } catch (error) {
+    if (error.isOffline) {
+      setNetworkStatus(false, lastSyncTimestamp());
+      showToast('Связь с сервером потеряна. Показана сохранённая копия');
+    } else {
+      showToast(error.message);
+    }
+    return false;
+  }
+}
+
+async function loadTaskArchive() {
+  try {
+    const data = await api(`/api/tasks/archive?assignee=${tasksState.assignee}&category=${tasksState.category}`);
+    applyTaskPayload(data);
+    renderTasks();
+    return true;
+  } catch (error) {
+    showToast(error.message);
+    return false;
+  }
+}
+
+function loadTasksForMode() {
+  return tasksState.mode === 'archive' ? loadTaskArchive() : loadTasks();
+}
+
+function taskById(id) {
+  return tasksState.items.find((task) => task.id === Number(id)) || null;
+}
+
+/* --- Перенос статуса, удаление с Undo, архив ----------------------------- */
+
+/* Оптимистичное перемещение: карточка уезжает сразу, сервер подтверждает
+   позицию следующим ответом. При ошибке список перезагружается с сервера. */
+function moveTaskLocally(task, status, beforeId) {
+  const rest = tasksState.items.filter((item) => item.id !== task.id);
+  const moved = { ...task, status };
+  let index = beforeId ? rest.findIndex((item) => item.id === Number(beforeId)) : -1;
+  if (index < 0) {
+    let last = -1;
+    rest.forEach((item, position) => { if (item.status === status) last = position; });
+    index = last + 1;
+  }
+  rest.splice(index, 0, moved);
+  tasksState.items = rest;
+  return moved;
+}
+
+async function persistTaskMove(task, status, beforeId) {
+  try {
+    const data = await api(`/api/tasks/${task.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status, before_id: beforeId == null ? null : Number(beforeId) }),
+    });
+    if (data.counts) tasksState.counts = data.counts;
+    if (data.task) {
+      const index = tasksState.items.findIndex((item) => item.id === task.id);
+      if (index >= 0) tasksState.items[index] = data.task;
+    }
+    renderTasks();
+    showToast(status === 'done' ? 'Задача выполнена' : `Задача перешла в «${taskStatusLabel(status)}»`);
+  } catch (error) {
+    showToast(error.message);
+    await loadTasksForMode();
+  }
+}
+
+async function shiftTaskStatus(task, status) {
+  const moved = moveTaskLocally(task, status, null);
+  renderTasks();
+  await persistTaskMove(moved, status, null);
+}
+
+function hideTaskUndo() {
+  const toast = document.querySelector('#task-undo-toast');
+  if (toast) {
+    toast.classList.remove('is-visible');
+    toast.hidden = true;
+  }
+  if (taskUndo) window.clearTimeout(taskUndo.timer);
+  taskUndo = null;
+}
+
+/* Тост «Отменить»: держим задачу и её место, чтобы вернуть карточку одним
+   кликом (сервер хранит её как мягко удалённую — is_deleted). */
+function showTaskUndo(task) {
+  hideTaskUndo();
+  const toast = document.querySelector('#task-undo-toast');
+  const name = document.querySelector('#task-undo-name');
+  if (!toast) return;
+  if (name) name.textContent = `«${task.title}»`;
+  toast.hidden = false;
+  requestAnimationFrame(() => toast.classList.add('is-visible'));
+  taskUndo = { task, timer: window.setTimeout(hideTaskUndo, TASK_UNDO_MS) };
+}
+
+async function deleteTaskWithUndo(task) {
+  try {
+    await api(`/api/tasks/${task.id}`, { method: 'DELETE' });
+  } catch (error) {
+    showToast(error.message);
+    return;
+  }
+  tasksState.items = tasksState.items.filter((item) => item.id !== task.id);
+  renderTasks();
+  showTaskUndo(task);
+}
+
+async function restoreTaskAfterUndo() {
+  const undo = taskUndo;
+  if (!undo) return;
+  const task = undo.task;
+  hideTaskUndo();
+  try {
+    await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ is_deleted: false }) });
+    await loadTasksForMode();
+    showToast(`Задача «${task.title}» возвращена на доску`);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function archiveTask(task, status) {
+  try {
+    await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+    tasksState.items = tasksState.items.filter((item) => item.id !== task.id);
+    renderTasks();
+    showToast(status === 'archived_done' ? 'Задача в архиве: выполнено' : 'Задача в архиве: отменено');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+/* --- Диалоги: задача, просмотр архивной задачи, категории ---------------- */
+
+function renderTaskCategoryPicker(selected) {
+  const node = document.querySelector('#task-category-picker');
+  if (!node) return;
+  node.innerHTML = (tasksState.categories || []).map((item) => `
+    <label class="task-category-option">
+      <input type="radio" name="category_code" value="${escapeHtml(item.code)}"${item.code === selected ? ' checked' : ''}>
+      <span style="--task-color: ${escapeHtml(item.color)}"><i class="task-pip"></i>#${escapeHtml(item.label)}</span>
+    </label>`).join('');
+}
+
+function syncTaskAssigneeRows() {
+  const form = document.querySelector('#task-form');
+  if (!form) return;
+  const type = form.elements.assignee_type.value;
+  const roleRow = document.querySelector('#task-assignee-role-row');
+  const userRow = document.querySelector('#task-assignee-user-row');
+  if (roleRow) roleRow.hidden = type !== 'role';
+  if (userRow) userRow.hidden = type !== 'user';
+}
+
+async function openTaskDialog(task = null) {
+  const dialog = document.querySelector('#task-dialog');
+  const form = document.querySelector('#task-form');
+  if (!dialog || !form) return;
+  await loadTaskAssignees();
+  const reference = tasksState.assignees || { roles: [], users: [] };
+  form.elements.assignee_role.innerHTML = reference.roles
+    .map((role) => `<option value="${escapeHtml(role.code)}">${escapeHtml(role.label)}</option>`).join('');
+  form.elements.assignee_user_id.innerHTML = reference.users
+    .map((person) => `<option value="${person.id}">${escapeHtml(person.name)}${person.role_label ? ` · ${escapeHtml(person.role_label)}` : ''}</option>`).join('');
+  form.reset();
+  form.dataset.taskId = task ? String(task.id) : '';
+  const errorNode = document.querySelector('#task-form-error');
+  if (errorNode) errorNode.hidden = true;
+  document.querySelector('#task-dialog-title').textContent = task ? 'Правка задачи' : 'Новая задача';
+  document.querySelector('#task-submit').textContent = task ? 'Сохранить' : 'Создать задачу';
+  renderTaskCategoryPicker(task ? task.category : ((tasksState.categories[0] || {}).code || ''));
+  // У архивной задачи этап не выбираем: с доски её возвращает отдельная кнопка.
+  const archived = Boolean(task && String(task.status).startsWith('archived'));
+  form.elements.status.disabled = archived;
+  form.elements.status.value = archived ? 'done' : (task ? task.status : tasksState.mobileStatus);
+  if (task) {
+    form.elements.title.value = task.title;
+    form.elements.description.value = task.description || '';
+    form.elements.meta_info.value = (task.meta || []).join('\n');
+    form.elements.priority.value = task.priority;
+    form.elements.assignee_type.value = task.assignee.type;
+    if (task.assignee.role) form.elements.assignee_role.value = task.assignee.role;
+    if (task.assignee.user_id) form.elements.assignee_user_id.value = String(task.assignee.user_id);
+  }
+  syncTaskAssigneeRows();
+  dialog.showModal();
+  form.elements.title.focus();
+}
+
+async function submitTaskForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const errorNode = document.querySelector('#task-form-error');
+  const submit = document.querySelector('#task-submit');
+  const picked = form.querySelector('input[name="category_code"]:checked');
+  const payload = {
+    title: form.elements.title.value.trim(),
+    description: form.elements.description.value.trim(),
+    meta_info: form.elements.meta_info.value,
+    priority: form.elements.priority.value,
+    assignee_type: form.elements.assignee_type.value,
+    category_code: picked ? picked.value : '',
+  };
+  if (!form.elements.status.disabled) payload.status = form.elements.status.value;
+  if (payload.assignee_type === 'role') payload.assignee_role = form.elements.assignee_role.value;
+  if (payload.assignee_type === 'user') payload.assignee_user_id = Number(form.elements.assignee_user_id.value);
+  const taskId = form.dataset.taskId;
+  if (submit) submit.disabled = true;
+  try {
+    const data = taskId
+      ? await api(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      : await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+    if (data.counts) tasksState.counts = data.counts;
+    document.querySelector('#task-dialog')?.close();
+    await loadTasksForMode();
+    showToast(taskId ? 'Задача обновлена' : 'Задача создана');
+  } catch (error) {
+    if (errorNode) {
+      errorNode.textContent = error.message;
+      errorNode.hidden = false;
+    }
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+function openTaskViewDialog(taskId) {
+  const task = taskById(taskId);
+  const dialog = document.querySelector('#task-view-dialog');
+  const body = document.querySelector('#task-view-body');
+  if (!task || !dialog || !body) return;
+  const archivedDone = task.status === 'archived_done';
+  body.innerHTML = `
+    <div class="task-view-head">
+      ${taskBadgeMarkup('#' + task.category_label, task.category_color)}
+      <span class="task-archive-state ${archivedDone ? 'is-done' : 'is-cancelled'}">${archivedDone ? 'ВЫПОЛНЕНО' : 'ОТМЕНЕНО'}</span>
+      ${task.priority !== 'normal' ? `<span class="task-badge is-priority-${escapeHtml(task.priority)}">${escapeHtml(TASK_PRIORITY_LABELS[task.priority] || '')}</span>` : ''}
+    </div>
+    <h3 class="task-view-title">${escapeHtml(task.title)}</h3>
+    ${task.description ? `<p class="task-view-text">${escapeHtml(task.description)}</p>` : ''}
+    ${(task.meta || []).length ? `<div class="task-view-meta">${task.meta.map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('')}</div>` : ''}
+    <dl class="task-view-facts">
+      <div><dt>Автор</dt><dd>${escapeHtml(task.author_name || '—')}</dd></div>
+      <div><dt>Кому</dt><dd>${escapeHtml(task.assignee.type === 'all' ? 'Всем' : (task.assignee.role_label || task.assignee.name || '—'))}</dd></div>
+      <div><dt>Итог</dt><dd>${escapeHtml(task.completed_name || '—')}${task.completed_at ? ` · ${escapeHtml(taskStamp(task.completed_at))}` : ''}</dd></div>
+    </dl>`;
+  const errorNode = document.querySelector('#task-view-error');
+  if (errorNode) errorNode.hidden = true;
+  ['#task-view-save', '#task-view-restore', '#task-view-delete'].forEach((selector) => {
+    const button = document.querySelector(selector);
+    if (button) button.hidden = !task.can_edit;
+  });
+  dialog.dataset.taskId = String(task.id);
+  dialog.showModal();
+}
+
+function renderTaskCategories() {
+  const node = document.querySelector('#tasks-categories');
+  if (!node) return;
+  const categories = tasksState.categories || [];
+  node.innerHTML = categories.length
+    ? categories.map((item) => `
+      <article class="announcement-category">
+        <span class="category-swatch" style="--announcement-color: ${escapeHtml(item.color)}"></span>
+        <strong>${escapeHtml(item.label)}</strong>
+        <span class="category-flags">${escapeHtml(item.code)}</span>
+        ${tasksState.canManage ? `<div class="category-actions">
+          <button class="text-button" type="button" data-task-category-edit="${escapeHtml(item.code)}">Изменить</button>
+          <button class="text-button" type="button" data-task-category-delete="${escapeHtml(item.code)}">Удалить</button>
+        </div>` : ''}
+      </article>`).join('')
+    : '<p class="empty-state">Категории не загружены</p>';
+}
+
+function openTaskCategoryDialog(item = null) {
+  const dialog = document.querySelector('#task-category-dialog');
+  const form = document.querySelector('#task-category-form');
+  if (!dialog || !form) return;
+  form.reset();
+  form.dataset.code = item ? item.code : '';
+  document.querySelector('#task-category-title').textContent = item ? 'Изменить категорию' : 'Новая категория';
+  document.querySelector('#task-category-submit').textContent = item ? 'Сохранить' : 'Создать';
+  form.elements.color.value = item ? item.color : '#ff6b4a';
+  if (item) form.elements.label.value = item.label;
+  const errorNode = document.querySelector('#task-category-error');
+  if (errorNode) errorNode.hidden = true;
+  dialog.showModal();
+}
+
+/* --- Перетаскивание карточек (мышь + палец) ------------------------------
+   Как в графике смен: на тач-устройствах перенос начинается только после
+   удержания (TASK_DRAG_HOLD_MS) — иначе это обычный вертикальный скролл.
+   Ghost-карточка едет за указателем, drop-индикатор показывает место вставки,
+   снизу плавно выезжает зона удаления, у краёв экрана подсвечиваются боковые
+   зоны переброса в соседний этап. Esc — отмена. */
+
+const TASK_DRAG_HOLD_MS = 350;
+const TASK_DRAG_SLOP = 12;
+const TASK_EDGE_ZONE = 64;
+
+let taskDrag = null;
+
+function taskDragTargets() {
+  return {
+    dropzone: document.querySelector('#task-dropzone'),
+    edgeLeft: document.querySelector('#task-edge-left'),
+    edgeRight: document.querySelector('#task-edge-right'),
+  };
+}
+
+function startTaskDrag(event, card) {
+  if (event.button || !card.dataset.taskDrag) return false;
+  const task = taskById(card.dataset.taskId);
+  if (!task) return false;
+  const ghost = card.cloneNode(true);
+  ghost.classList.add('task-drag-ghost');
+  ghost.removeAttribute('data-task-drag');
+  ghost.hidden = true;
+  document.body.appendChild(ghost);
+  taskDrag = {
+    task, card, ghost, active: false, indicator: null, insertBefore: null,
+    pointerId: event.pointerId, pointerType: event.pointerType,
+    originX: event.clientX, originY: event.clientY, holdTimer: 0,
+    overDropzone: false, edge: null,
+  };
+  // Тач: перенос только после удержания, иначе палец листает доску.
+  if (event.pointerType === 'touch') {
+    taskDrag.holdTimer = window.setTimeout(() => {
+      if (taskDrag && !taskDrag.active) activateTaskDrag();
+    }, TASK_DRAG_HOLD_MS);
+  }
+  return true;
+}
+
+function activateTaskDrag() {
+  if (!taskDrag) return;
+  taskDrag.active = true;
+  taskDrag.ghost.hidden = false;
+  taskDrag.card.classList.add('is-dragging');
+  document.body.classList.add('task-dragging');
+  const { dropzone, edgeLeft, edgeRight } = taskDragTargets();
+  if (dropzone) {
+    dropzone.hidden = false;
+    requestAnimationFrame(() => dropzone.classList.add('is-visible'));
+  }
+  if (edgeLeft) edgeLeft.hidden = false;
+  if (edgeRight) edgeRight.hidden = false;
+  document.querySelectorAll('.task-column').forEach((column) => column.classList.add('is-droppable'));
+  if (navigator.vibrate) { try { navigator.vibrate(15); } catch (error) { /* не критично */ } }
+}
+
+function cancelTaskDrag() {
+  const drag = taskDrag;
+  taskDrag = null;
+  if (!drag) return;
+  window.clearTimeout(drag.holdTimer);
+  drag.ghost.remove();
+  drag.card.classList.remove('is-dragging');
+  drag.indicator?.remove();
+  document.body.classList.remove('task-dragging');
+  document.querySelectorAll('.task-column').forEach((column) => column.classList.remove('is-droppable', 'is-drag-over'));
+  const { dropzone, edgeLeft, edgeRight } = taskDragTargets();
+  if (dropzone) {
+    dropzone.classList.remove('is-visible', 'is-hover');
+    dropzone.hidden = true;
+  }
+  if (edgeLeft) { edgeLeft.classList.remove('is-active'); edgeLeft.hidden = true; }
+  if (edgeRight) { edgeRight.classList.remove('is-active'); edgeRight.hidden = true; }
+  const title = document.querySelector('#task-dropzone-title');
+  if (title) title.textContent = 'Перетащите задачу сюда для удаления';
+}
+
+function taskDragAfterElement(list, y) {
+  const cards = Array.from(list.querySelectorAll('.task-card:not(.is-dragging)'));
+  return cards.find((card) => {
+    const box = card.getBoundingClientRect();
+    return y < box.top + box.height / 2;
+  }) || null;
+}
+
+function placeTaskIndicator(list, y) {
+  if (!taskDrag) return;
+  if (!list) {
+    taskDrag.indicator?.remove();
+    taskDrag.indicator = null;
+    taskDrag.insertBefore = null;
+    return;
+  }
+  const after = taskDragAfterElement(list, y);
+  taskDrag.insertBefore = after ? Number(after.dataset.taskId) : null;
+  if (!taskDrag.indicator) {
+    taskDrag.indicator = document.createElement('div');
+    taskDrag.indicator.className = 'task-drop-indicator';
+  }
+  if (after) list.insertBefore(taskDrag.indicator, after);
+  else list.appendChild(taskDrag.indicator);
+}
+
+function markTaskColumn(list) {
+  document.querySelectorAll('.task-column').forEach((column) => {
+    column.classList.toggle('is-drag-over', Boolean(list) && column.contains(list));
+  });
+}
+
+function updateTaskDropTarget(x, y) {
+  if (!taskDrag) return;
+  taskDrag.ghost.style.left = `${x}px`;
+  taskDrag.ghost.style.top = `${y}px`;
+  const { dropzone, edgeLeft, edgeRight } = taskDragTargets();
+  const inRect = (node) => {
+    if (!node || node.hidden) return false;
+    const box = node.getBoundingClientRect();
+    return x >= box.left && x <= box.right && y >= box.top && y <= box.bottom;
+  };
+  const overTrash = inRect(dropzone);
+  if (overTrash !== taskDrag.overDropzone) {
+    taskDrag.overDropzone = overTrash;
+    if (dropzone) dropzone.classList.toggle('is-hover', overTrash);
+    const title = document.querySelector('#task-dropzone-title');
+    if (title) {
+      title.textContent = overTrash ? 'Отпустите, чтобы удалить задачу' : 'Перетащите задачу сюда для удаления';
+    }
+  }
+  // Боковые зоны: подсветка края — переброс в соседний этап без точного попадания.
+  const edge = x < TASK_EDGE_ZONE ? 'left' : (x > window.innerWidth - TASK_EDGE_ZONE ? 'right' : null);
+  if (edge !== taskDrag.edge) {
+    taskDrag.edge = edge;
+    if (edgeLeft) edgeLeft.classList.toggle('is-active', edge === 'left');
+    if (edgeRight) edgeRight.classList.toggle('is-active', edge === 'right');
+  }
+  if (overTrash || edge) {
+    taskDrag.indicator?.remove();
+    taskDrag.indicator = null;
+    taskDrag.insertBefore = null;
+    markTaskColumn(null);
+    return;
+  }
+  const list = document.elementFromPoint(x, y)?.closest('[data-task-drop]') || null;
+  markTaskColumn(list);
+  placeTaskIndicator(list, y);
+}
+
+async function finishTaskDrag(commit) {
+  const drag = taskDrag;
+  if (!drag) return false;
+  const wasActive = drag.active;
+  const overTrash = drag.overDropzone;
+  const edge = drag.edge;
+  const list = drag.indicator?.closest('[data-task-drop]') || null;
+  const status = list ? list.dataset.taskDrop : null;
+  const beforeId = drag.insertBefore;
+  const task = drag.task;
+  cancelTaskDrag();
+  if (!commit || !wasActive) return false;
+  if (overTrash) {
+    await deleteTaskWithUndo(task);
+    return true;
+  }
+  let target = status || task.status;
+  if (edge) {
+    const index = TASK_STATUSES.indexOf(task.status);
+    if (edge === 'left' && index > 0) target = TASK_STATUSES[index - 1];
+    if (edge === 'right' && index < TASK_STATUSES.length - 1) target = TASK_STATUSES[index + 1];
+    if (target === task.status) return false;
+  } else if (!status) {
+    return false;
+  }
+  const moved = moveTaskLocally(task, target, edge ? null : beforeId);
+  renderTasks();
+  await persistTaskMove(moved, target, edge ? null : beforeId);
+  return true;
+}
+
+/* --- Обработчики модуля ------------------------------------------------- */
+
+let tasksBound = false;
+
+function setupTasks() {
+  const view = document.querySelector('#tasks-view');
+  if (!view || tasksBound) return;
+  tasksBound = true;
+
+  view.addEventListener('click', async (event) => {
+    const tab = event.target.closest('[data-task-tab]');
+    if (tab) { tasksState.mobileStatus = tab.dataset.taskTab; renderTasks(); return; }
+
+    const mode = event.target.closest('[data-task-mode]');
+    if (mode) { tasksState.mode = mode.dataset.taskMode; syncTaskModes(); await loadTasksForMode(); return; }
+
+    const assignee = event.target.closest('[data-task-assignee]');
+    if (assignee) { tasksState.assignee = assignee.dataset.taskAssignee; syncTaskModes(); await loadTasksForMode(); return; }
+
+    const category = event.target.closest('[data-task-category]');
+    if (category) { tasksState.category = category.dataset.taskCategory; renderTaskChips(); await loadTasksForMode(); return; }
+
+    if (event.target.closest('#tasks-reset')) {
+      tasksState.mode = 'board';
+      tasksState.assignee = 'all';
+      tasksState.category = 'all';
+      syncTaskModes();
+      await loadTasksForMode();
+      showToast('Фильтры сброшены');
+      return;
+    }
+    if (event.target.closest('#tasks-add')) { openTaskDialog(null); return; }
+
+    const move = event.target.closest('[data-task-move]');
+    if (move) {
+      const task = taskById(move.dataset.taskId);
+      if (task) await shiftTaskStatus(task, move.dataset.taskMove);
+      return;
+    }
+    const remove = event.target.closest('[data-task-delete]');
+    if (remove) {
+      const task = taskById(remove.dataset.taskDelete);
+      if (task) await deleteTaskWithUndo(task);
+      return;
+    }
+    const categoryEdit = event.target.closest('[data-task-category-edit]');
+    if (categoryEdit) {
+      const item = (tasksState.categories || []).find((entry) => entry.code === categoryEdit.dataset.taskCategoryEdit);
+      if (item) openTaskCategoryDialog(item);
+      return;
+    }
+    const categoryDelete = event.target.closest('[data-task-category-delete]');
+    if (categoryDelete) {
+      try {
+        const data = await api(`/api/tasks/categories/${categoryDelete.dataset.taskCategoryDelete}`, { method: 'DELETE' });
+        tasksState.categories = data.categories || tasksState.categories;
+        renderTaskCategories();
+        renderTaskChips();
+        showToast('Категория удалена');
+      } catch (error) { showToast(error.message); }
+      return;
+    }
+    if (event.target.closest('#tasks-category-add')) { openTaskCategoryDialog(null); return; }
+
+    const open = event.target.closest('[data-task-open]');
+    if (open) { openTaskViewDialog(open.dataset.taskOpen); return; }
+    // Клик по самой карточке — правка (управляющие кнопки проверены выше).
+    const card = event.target.closest('.task-card');
+    if (card) {
+      const task = taskById(card.dataset.taskId);
+      if (!task) return;
+      if (task.can_edit) openTaskDialog(task);
+      else showToast('Эту задачу правит автор или тот, кому она адресована');
+    }
+  });
+
+  // Перетаскивание: pointerdown по карточке, движение — на документе, чтобы
+  // карточка не «терялась» при выходе указателя за её пределы.
+  view.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('button, a, input, textarea')) return;
+    const card = event.target.closest('.task-card[data-task-drag]');
+    if (card) startTaskDrag(event, card);
+  });
+  document.addEventListener('pointermove', (event) => {
+    if (!taskDrag || event.pointerId !== taskDrag.pointerId) return;
+    if (!taskDrag.active) {
+      if (taskDrag.pointerType === 'touch') return; // тач ждёт удержания
+      const dx = Math.abs(event.clientX - taskDrag.originX);
+      const dy = Math.abs(event.clientY - taskDrag.originY);
+      if (Math.hypot(dx, dy) < TASK_DRAG_SLOP / 2) return;
+      activateTaskDrag();
+    }
+    if (!taskDrag || !taskDrag.active) return;
+    event.preventDefault();
+    updateTaskDropTarget(event.clientX, event.clientY);
+  }, { passive: false });
+  document.addEventListener('pointerup', (event) => {
+    if (!taskDrag || event.pointerId !== taskDrag.pointerId) return;
+    finishTaskDrag(true);
+  });
+  document.addEventListener('pointercancel', () => {
+    if (taskDrag) finishTaskDrag(false);
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && taskDrag) finishTaskDrag(false);
+  });
+  // Формы и кнопки диалогов
+  document.querySelector('#task-form')?.addEventListener('submit', submitTaskForm);
+  document.querySelector('#task-assignee-type')?.addEventListener('change', syncTaskAssigneeRows);
+
+  const categoryForm = document.querySelector('#task-category-form');
+  categoryForm?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const errorNode = document.querySelector('#task-category-error');
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const code = form.dataset.code;
+    try {
+      const data = code
+        ? await api(`/api/tasks/categories/${code}`, { method: 'PATCH', body: JSON.stringify(payload) })
+        : await api('/api/tasks/categories', { method: 'POST', body: JSON.stringify(payload) });
+      tasksState.categories = data.categories || tasksState.categories;
+      document.querySelector('#task-category-dialog')?.close();
+      renderTaskCategories();
+      renderTaskChips();
+      showToast(code ? 'Категория обновлена' : 'Категория создана');
+    } catch (error) {
+      if (errorNode) {
+        errorNode.textContent = error.message;
+        errorNode.hidden = false;
+      }
+    }
+  });
+
+  document.querySelector('#task-view-save')?.addEventListener('click', () => {
+    const dialog = document.querySelector('#task-view-dialog');
+    const task = taskById(dialog ? dialog.dataset.taskId : 0);
+    dialog?.close();
+    if (task) openTaskDialog(task);
+  });
+  document.querySelector('#task-view-restore')?.addEventListener('click', async () => {
+    const dialog = document.querySelector('#task-view-dialog');
+    const task = taskById(dialog ? dialog.dataset.taskId : 0);
+    if (!task) return;
+    try {
+      await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'todo' }) });
+      dialog?.close();
+      await loadTaskArchive();
+      showToast('Задача возвращена на доску');
+    } catch (error) { showToast(error.message); }
+  });
+  document.querySelector('#task-view-delete')?.addEventListener('click', async () => {
+    const dialog = document.querySelector('#task-view-dialog');
+    const task = taskById(dialog ? dialog.dataset.taskId : 0);
+    if (!task) return;
+    if (!window.confirm(`Удалить задачу «${task.title}» окончательно? Действие необратимо.`)) return;
+    try {
+      await api(`/api/tasks/${task.id}?permanent=true`, { method: 'DELETE' });
+      dialog?.close();
+      await loadTaskArchive();
+      showToast('Задача удалена окончательно');
+    } catch (error) { showToast(error.message); }
+  });
+
+  // Undo: таймер тоста встаёт на паузу, пока на него смотрят (как в макете).
+  const undoToast = document.querySelector('#task-undo-toast');
+  if (undoToast) {
+    undoToast.addEventListener('mouseenter', () => {
+      if (taskUndo) window.clearTimeout(taskUndo.timer);
+    });
+    undoToast.addEventListener('mouseleave', () => {
+      if (taskUndo) taskUndo.timer = window.setTimeout(hideTaskUndo, TASK_UNDO_MS);
+    });
+  }
+  document.querySelector('#task-undo-btn')?.addEventListener('click', restoreTaskAfterUndo);
+  document.querySelector('#task-undo-close')?.addEventListener('click', hideTaskUndo);
+}
+
 /* --- Панель управления: навигация по модулям и вкл/выкл ------------------- */
 
 function controlIsNarrow() {
@@ -8352,6 +9218,7 @@ function setupDashboard() {
   setupWorkloadForm();
   setupAnalytics();
   setupAnnouncements();
+  setupTasks();
   loadAnnouncements();
   setupKnowledgeBase();
   setupDrinks();

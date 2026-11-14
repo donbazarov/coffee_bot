@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, modules, push, schedule_snapshot, stories_service, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -215,6 +215,9 @@ def migrate_database():
     workload_service.initialize_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
+    # Канбан-доска задач: таблицы категорий и задач + уборка давно удалённых.
+    tasks.initialize_schema(engine)
+    tasks.prune_deleted(engine)
     push.initialize_schema(engine)
     chat.initialize_schema(engine)
     # Справочники базы знаний (menu_drinks/coffee_beans) создаём до таблиц
@@ -1166,6 +1169,156 @@ async def update_announcement(announcement_id: int, request: Request,
     if not updated:
         raise HTTPException(status_code=404, detail="Анонс не найден")
     return {"ok": True}
+
+
+@app.get("/api/tasks/categories")
+def list_task_categories(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Категории задач — нужны и доске (чипы), и панели управления."""
+    return {"categories": tasks.all_categories(engine)}
+
+
+@app.post("/api/tasks/categories")
+async def create_task_category(request: Request,
+                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    payload = await _read_json_object(request)
+    if set(payload) - {"label", "color"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля категории")
+    try:
+        code = tasks.create_category(engine, payload.get("label"), payload.get("color"))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "code": code, "categories": tasks.all_categories(engine)}
+
+
+@app.patch("/api/tasks/categories/{code}")
+async def update_task_category(code: str, request: Request,
+                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    payload = await _read_json_object(request)
+    if set(payload) - {"label", "color"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля категории")
+    try:
+        category = tasks.update_category(engine, code, payload.get("label"), payload.get("color"))
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "category": category, "categories": tasks.all_categories(engine)}
+
+
+@app.delete("/api/tasks/categories/{code}")
+async def delete_task_category(code: str,
+                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    try:
+        tasks.delete_category(engine, code)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "categories": tasks.all_categories(engine)}
+
+
+def _task_filter(assignee: str, category: str | None) -> str | None:
+    """Проверяет режим «Все/Мои/Общие» и категорию, возвращает код категории или None."""
+    if assignee not in tasks.FILTERS:
+        raise HTTPException(status_code=422, detail="Неизвестный режим выборки")
+    if category not in (None, "all") and category not in tasks.category_keys(engine):
+        raise HTTPException(status_code=422, detail="Неизвестная категория")
+    return None if category in (None, "all") else category
+
+
+def _with_permissions(items: list[dict[str, Any]], user: dict[str, Any]) -> list[dict[str, Any]]:
+    """Право правки считает сервер — интерфейс только показывает результат."""
+    for item in items:
+        item["can_edit"] = tasks.can_edit(item, user)
+    return items
+
+
+@app.get("/api/tasks")
+def list_tasks(assignee: str = "all", category: str | None = None,
+               user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Актуальные задачи: общие + на мою должность + лично мне (чужих не отдаём)."""
+    code = _task_filter(assignee, category)
+    return {
+        "items": _with_permissions(tasks.list_active(engine, user, assignee, code), user),
+        "counts": tasks.counts(engine, user, assignee),
+        "categories": tasks.all_categories(engine),
+        "can_manage_categories": user["role"] in {"senior", "mentor"},
+    }
+
+
+@app.get("/api/tasks/archive")
+def list_tasks_archive(assignee: str = "all", category: str | None = None,
+                       user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Архив: выполненные и отменённые задачи по тем же правилам видимости."""
+    code = _task_filter(assignee, category)
+    return {
+        "items": _with_permissions(tasks.list_archive(engine, user, assignee, code), user),
+        "counts": tasks.counts(engine, user, assignee),
+        "categories": tasks.all_categories(engine),
+        "can_manage_categories": user["role"] in {"senior", "mentor"},
+    }
+
+
+@app.get("/api/tasks/assignees")
+def task_assignees(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Справочник адресации: должности и активные сотрудники."""
+    return tasks.assignees(engine)
+
+
+@app.post("/api/tasks")
+async def create_task(request: Request, user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Новая задача: категория, мета-бейджи и адресация (Все / Должность / Сотрудник)."""
+    payload = await _read_json_object(request)
+    allowed = {"title", "description", "category_code", "status", "priority", "meta_info",
+               "assignee_type", "assignee_role", "assignee_user_id"}
+    if set(payload) - allowed:
+        raise HTTPException(status_code=422, detail="Неизвестные поля задачи")
+    try:
+        task_id = tasks.create_task(engine, user, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "id": task_id,
+            "task": _with_permissions([tasks.get_task(engine, task_id)], user)[0],
+            "counts": tasks.counts(engine, user, "all")}
+
+
+@app.patch("/api/tasks/{task_id}")
+async def update_task(task_id: int, request: Request,
+                      user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Правка задачи: поля, перенос/порядок, архив и возврат из Undo-удаления."""
+    payload = await _read_json_object(request)
+    allowed = {"title", "description", "category_code", "status", "priority", "meta_info",
+               "assignee_type", "assignee_role", "assignee_user_id", "before_id", "is_deleted"}
+    if set(payload) - allowed:
+        raise HTTPException(status_code=422, detail="Неизвестные поля задачи")
+    if "is_deleted" in payload and payload.get("is_deleted") is not False:
+        raise HTTPException(status_code=422, detail="Удаление выполняется через DELETE")
+    try:
+        task = tasks.update_task(engine, task_id, user, payload)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "task": _with_permissions([task], user)[0],
+            "counts": tasks.counts(engine, user, "all")}
+
+
+@app.delete("/api/tasks/{task_id}")
+async def delete_task(task_id: int, permanent: bool = False,
+                      user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Мягкое удаление (окно Undo) либо окончательное удаление архивной задачи."""
+    try:
+        task = tasks.delete_task(engine, task_id, user, permanent)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "task": _with_permissions([task], user)[0],
+            "counts": tasks.counts(engine, user, "all")}
 
 
 @app.get("/api/users")

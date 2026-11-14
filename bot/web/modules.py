@@ -35,6 +35,8 @@ MODULES: tuple[dict[str, Any], ...] = (
      "admin": False, "settable": True},
     {"code": "announcements", "title": "Анонсы", "icon": "i-bell", "view": "announcements",
      "admin": False, "settable": True},
+    {"code": "tasks", "title": "Задачи", "icon": "i-kanban", "view": "tasks",
+     "admin": False, "settable": True},
     {"code": "chat", "title": "Чат", "icon": "i-chat", "view": "chat",
      "admin": False, "settable": True},
     {"code": "development", "title": "Развитие", "icon": "i-spark", "view": "development",
@@ -148,6 +150,13 @@ SETTINGS_SCHEMA: dict[str, tuple[dict[str, Any], ...]] = {
         {"key": "MAX_BODY", "label": "Макс. длина текста", "type": "int", "min": 100, "max": 20000},
         {"key": "MAX_LABEL", "label": "Макс. длина названия", "type": "int", "min": 5, "max": 200},
         {"key": "MAX_LIST", "label": "Макс. размер выборки ленты", "type": "int", "min": 1, "max": 500},
+    ),
+    "tasks": (
+        {"key": "MAX_TITLE", "label": "Макс. длина названия задачи", "type": "int", "min": 10, "max": 500},
+        {"key": "MAX_DESCRIPTION", "label": "Макс. длина описания", "type": "int", "min": 100, "max": 20000},
+        {"key": "MAX_META", "label": "Макс. длина мета-подвала карточки", "type": "int", "min": 20, "max": 500,
+         "hint": "бейджи вида «Смена: Утро» — по строке на бейдж"},
+        {"key": "MAX_LABEL", "label": "Макс. длина названия категории", "type": "int", "min": 5, "max": 200},
     ),
     "kb": (
         {"key": "MAX_TITLE", "label": "Макс. длина заголовка", "type": "int", "min": 10, "max": 1000},

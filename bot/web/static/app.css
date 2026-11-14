@@ -2702,3 +2702,201 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* Строка «Ищем статью…»: подсказка остаётся на экране, пока не пришёл ответ. */
 .chat-mention-empty { margin: 0; padding: 8px 9px; color: var(--dim); font-size: 12px; }
 
+/* --- Задачи: канбан-доска (макет Stitch «Kanban Board Page Layout») --------
+   Тёмная эстетика CrewDesk: градиентные колонки, карточки с бейджами,
+   динамическая drop-zone удаления, Undo-тост и боковые зоны переброса.
+   Скругления и тайминги — из макета (12/16px, 150–300 мс, cubic-bezier). */
+
+.tasks-heading { --task-todo: var(--muted); --task-progress: #e5a13a; --task-done: var(--mint); }
+.tasks-modes { display: flex; flex-wrap: wrap; gap: 10px; }
+.tasks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.tasks-chips { margin: 0; flex: 1 1 auto; min-width: 0; -webkit-mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); }
+.tasks-chips .chip b { margin-left: 4px; color: var(--task-color, var(--muted)); font: 600 10px var(--mono); }
+.tasks-chips .chip.is-selected b { color: var(--text); }
+.tasks-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.tasks-status { display: block; margin-top: 14px; color: var(--dim); }
+
+.task-pip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--task-color, currentColor); }
+
+/* Табы этапов: видны только на узком экране (там колонки не помещаются). */
+.task-tabs { display: none; gap: 6px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--line); background: var(--surface-sunken); }
+.task-tabs .task-tab { display: inline-flex; flex: 1 1 0; min-height: 34px; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: var(--muted); font: 600 12px var(--sans); cursor: pointer; transition: color .18s, background .18s; }
+.task-tabs .task-tab b { color: var(--dim); font: 600 11px var(--mono); }
+.task-tabs .task-tab.is-selected { background: var(--surface-raised); color: var(--text); }
+.task-tabs .task-tab.is-selected b { color: var(--accent); }
+
+.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; border: 1px solid var(--line); background: var(--bg-deep); }
+.task-column { display: flex; flex-direction: column; min-height: 380px; padding: 15px; border: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--hl) 3%, transparent), transparent 42%), var(--surface-sunken); transition: border-color .2s, background-color .2s; }
+.task-column[data-task-status="in_progress"] { border-color: color-mix(in srgb, var(--task-progress) 26%, transparent); }
+.task-column[data-task-status="done"] { border-color: color-mix(in srgb, var(--task-done) 26%, transparent); }
+.task-column.is-droppable { border-style: dashed; }
+.task-column.is-drag-over { border-color: var(--accent-line); background-color: color-mix(in srgb, var(--accent) 4%, transparent); }
+.task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line-faint); }
+.task-column-title { display: flex; flex-direction: column; gap: 4px; }
+.task-stage { color: var(--muted); font: 700 10px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+.task-column[data-task-status="in_progress"] .task-stage { color: var(--task-progress); }
+.task-column[data-task-status="done"] .task-stage { color: var(--task-done); }
+.task-column-title h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
+.task-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--task-todo); }
+.task-column[data-task-status="in_progress"] .task-dot { background: var(--task-progress); box-shadow: 0 0 8px color-mix(in srgb, var(--task-progress) 60%, transparent); }
+.task-column[data-task-status="done"] .task-dot { background: var(--task-done); box-shadow: 0 0 8px color-mix(in srgb, var(--task-done) 60%, transparent); }
+.task-count { min-width: 26px; padding: 2px 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: 600 11px var(--mono); text-align: center; }
+.task-count[data-task-count="in_progress"] { color: var(--task-progress); border-color: color-mix(in srgb, var(--task-progress) 30%, transparent); }
+.task-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 11px; overflow-y: auto; max-height: 640px; scrollbar-width: thin; }
+.task-list::-webkit-scrollbar { width: 4px; }
+.task-list::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--hl) 12%, transparent); border-radius: 4px; }
+
+
+
+/* Карточка задачи: бейджи, заголовок, мета-подвал и быстрые действия. */
+.task-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); background: var(--surface); cursor: grab; transition: transform .25s ease, opacity .25s ease, border-color .2s ease, box-shadow .2s ease; }
+.task-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 10px 24px -12px var(--accent-faint); }
+.task-card:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.task-card.is-locked { cursor: default; }
+.task-card.is-dragging { opacity: .45; transform: scale(.98) rotate(1deg); border-color: var(--accent); box-shadow: 0 10px 25px -5px var(--accent-faint); }
+.task-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.task-card-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.task-grip { color: var(--dim); opacity: 0; transition: opacity .18s, color .18s; }
+.task-card:hover .task-grip { opacity: 1; color: var(--muted); }
+
+.task-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--task-color, var(--accent)) 38%, transparent); background: color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); color: color-mix(in srgb, var(--task-color, var(--accent)) 88%, var(--text)); font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+.task-badge.is-priority-high { --task-color: var(--task-progress); }
+.task-badge.is-priority-urgent { --task-color: var(--warn); }
+.task-badge.is-priority-urgent::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); animation: task-ping 1.6s ease-out infinite; }
+.task-badge.is-shared { --task-color: var(--muted); }
+@keyframes task-ping { 0% { transform: scale(1); opacity: 1; } 70%, 100% { transform: scale(1.9); opacity: 0; } }
+
+.task-card-title { margin: 0; color: var(--text); font-size: 14px; font-weight: 500; line-height: 1.35; }
+.task-card-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.task-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 9px; border-top: 1px solid var(--line-faint); }
+.task-card-meta { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.task-meta-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font: 400 10.5px var(--mono); }
+.task-meta-item .icon { width: 13px; height: 13px; color: var(--dim); }
+.task-card-owner { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px 8px 2px 3px; border: 1px solid var(--line-faint); background: var(--surface-raised); color: var(--text-soft); font: 500 10.5px var(--mono); }
+.task-avatar { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 700 9px var(--mono); }
+
+/* Быстрые действия: на телефоне — всегда, на десктопе — при наведении. */
+.task-card-quick { display: flex; gap: 6px; }
+.task-quick { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 11px var(--sans); cursor: pointer; transition: color .18s, border-color .18s, background .18s; }
+.task-quick:hover { border-color: var(--line-strong); color: var(--text); }
+.task-quick.is-done { border-color: color-mix(in srgb, var(--task-done) 40%, transparent); background: color-mix(in srgb, var(--task-done) 14%, transparent); color: color-mix(in srgb, var(--task-done) 82%, var(--text)); }
+.task-quick.is-danger:hover { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+.task-quick .icon { width: 14px; height: 14px; }
+
+.task-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: auto 0; padding: 26px 14px; border: 1px dashed var(--line); background: color-mix(in srgb, var(--hl) 2%, transparent); color: var(--dim); font: 500 11.5px var(--mono); text-align: center; }
+.task-empty .icon { width: 22px; height: 22px; color: var(--dim); }
+.task-empty small { color: color-mix(in srgb, var(--dim) 70%, transparent); font-size: 10px; }
+
+/* Индикатор места вставки и «карточка в руке». */
+.task-drop-indicator { height: 3px; border-radius: 9999px; background: var(--accent); box-shadow: 0 0 10px var(--accent); transition: all .15s ease; }
+.task-drag-ghost { position: fixed; z-index: 60; width: min(280px, 60vw); pointer-events: none; transform: translate(-50%, -50%) rotate(1.5deg); box-shadow: var(--shadow-2); opacity: .96; }
+.task-drag-ghost[hidden] { display: none; }
+body.task-dragging { cursor: grabbing; user-select: none; -webkit-user-select: none; overscroll-behavior: none; }
+body.task-dragging .task-board { touch-action: none; }
+body.task-dragging .task-card { cursor: grabbing; }
+
+/* Динамическая drop-zone удаления: в покое скрыта, выезжает при перетаскивании. */
+.task-dropzone { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); z-index: 55; transform: translate(-50%, 150%); opacity: 0; pointer-events: none; transition: transform .3s ease-out, opacity .3s ease-out; }
+.task-dropzone[hidden] { display: none; }
+.task-dropzone.is-visible { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
+.task-dropzone-inner { display: flex; align-items: center; gap: 14px; min-width: min(420px, calc(100vw - 32px)); padding: 14px 18px; border: 1px dashed var(--danger-line); background: color-mix(in srgb, var(--toast-bg) 95%, transparent); backdrop-filter: blur(8px); animation: task-trash-pulse 2.8s infinite ease-in-out; transition: transform .2s, border-color .2s, box-shadow .2s; }
+.task-dropzone-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+.task-dropzone-icon .icon { width: 17px; height: 17px; transform-origin: 4px 7px; transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+.task-dropzone-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.task-dropzone-kicker { color: var(--danger-text); font: 700 10px var(--mono); letter-spacing: .1em; }
+.task-dropzone-copy strong { color: var(--text); font-size: 13px; font-weight: 600; }
+.task-dropzone-copy small { color: var(--muted); font: 400 10px var(--mono); }
+.task-dropzone-badge { margin-left: auto; padding: 3px 8px; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); font: 700 9.5px var(--mono); letter-spacing: .08em; }
+.task-dropzone.is-hover .task-dropzone-inner { transform: scale(1.02); border-style: solid; border-color: var(--danger-text); box-shadow: 0 8px 30px -4px var(--danger-soft); animation: none; }
+.task-dropzone.is-hover .task-dropzone-icon { background: var(--danger-line); color: var(--text); }
+.task-dropzone.is-hover .task-dropzone-icon .icon { transform: rotate(-26deg) translateY(-2px); }
+@keyframes task-trash-pulse {
+  0%, 100% { box-shadow: 0 4px 20px -2px var(--danger-soft); border-color: var(--danger-line); }
+  50% { box-shadow: 0 6px 24px -2px var(--danger-soft); border-color: var(--danger-text); }
+}
+
+/* Боковые зоны: подсветка края экрана — переброс в соседний этап. */
+.task-edge-zone { position: fixed; top: 0; bottom: 0; z-index: 54; display: grid; width: 54px; place-items: center; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 18%, transparent), transparent); color: var(--accent); font: 700 20px var(--mono); opacity: 0; pointer-events: none; transition: opacity .2s ease; }
+.task-edge-zone[hidden] { display: none; }
+.task-edge-left { left: 0; }
+.task-edge-right { right: 0; background: linear-gradient(270deg, color-mix(in srgb, var(--accent) 18%, transparent), transparent); }
+.task-edge-zone.is-active { opacity: 1; }
+
+/* Undo-тост: держится 5.5 с, таймер встаёт на паузу под курсором (см. app.js). */
+.task-undo-toast { position: fixed; right: 22px; bottom: 22px; z-index: 56; display: flex; align-items: center; gap: 12px; max-width: min(460px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--accent-line); background: color-mix(in srgb, var(--toast-bg) 96%, transparent); box-shadow: var(--shadow-1); transform: translateY(16px); opacity: 0; pointer-events: none; transition: transform .3s ease, opacity .3s ease; }
+.task-undo-toast[hidden] { display: none; }
+.task-undo-toast.is-visible { transform: translateY(0); opacity: 1; pointer-events: auto; }
+.task-undo-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+.task-undo-icon .icon { width: 16px; height: 16px; }
+.task-undo-copy { display: flex; flex-direction: column; min-width: 0; }
+.task-undo-copy strong { color: var(--danger-text); font-size: 12px; }
+.task-undo-copy span { overflow: hidden; max-width: 230px; color: var(--muted); font: 400 11px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.task-undo-actions { display: flex; align-items: center; gap: 6px; padding-left: 10px; border-left: 1px solid var(--line-faint); }
+.task-undo-actions .icon-button { width: 28px; height: 28px; font-size: 15px; }
+
+
+
+/* Архив: единая сетка карточек со статус-бейджами вместо колонок. */
+.task-archive { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.task-archive-card { display: flex; flex-direction: column; gap: 9px; padding: 14px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; transition: border-color .2s, transform .2s; }
+.task-archive-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.task-archive-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.task-archive-state { padding: 2px 7px; border: 1px solid var(--line); color: var(--muted); font: 700 9.5px var(--mono); letter-spacing: .06em; }
+.task-archive-state.is-done { border-color: color-mix(in srgb, var(--task-done) 40%, transparent); background: color-mix(in srgb, var(--task-done) 14%, transparent); color: color-mix(in srgb, var(--task-done) 82%, var(--text)); }
+.task-archive-state.is-cancelled { border-color: var(--line-strong); background: var(--surface-sunken); color: var(--dim); }
+.task-archive-meta { margin: 0; color: var(--dim); font: 400 10.5px var(--mono); }
+
+/* Форма задачи и карточка просмотра архивной задачи. */
+.task-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.task-fieldset { margin: 15px 0; padding: 0; border: 0; }
+.task-fieldset legend { color: var(--muted); font-size: 11px; }
+.task-category-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 6px; margin-top: 7px; }
+.task-category-option { position: relative; cursor: pointer; }
+.task-category-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.task-category-option span { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 8px; border: 1px solid var(--line); color: var(--text-soft); font: 600 11px var(--mono); transition: border-color .18s, background .18s, color .18s; }
+.task-category-option input:checked + span { border-color: color-mix(in srgb, var(--task-color) 45%, transparent); background: color-mix(in srgb, var(--task-color) 14%, transparent); color: color-mix(in srgb, var(--task-color) 88%, var(--text)); }
+.user-dialog.task-dialog { width: min(680px, calc(100vw - 32px)); }
+.task-view-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-view-title { margin: 10px 0 6px; font-size: 18px; }
+.task-view-text { margin: 0 0 8px; color: var(--text-soft); font-size: 13px; line-height: 1.6; white-space: pre-line; }
+.task-view-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; }
+.task-view-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0; padding-top: 10px; border-top: 1px solid var(--line-faint); }
+.task-view-facts dt { color: var(--dim); font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+.task-view-facts dd { margin: 3px 0 0; color: var(--text-soft); font-size: 12px; }
+
+/* Десктоп: быстрые кнопки прячем до наведения, чтобы не шуметь в карточке. */
+@media (min-width: 761px) {
+  .task-card-quick { opacity: 0; pointer-events: none; transition: opacity .18s ease; }
+  .task-card:hover .task-card-quick,
+  .task-card:focus-within .task-card-quick { opacity: 1; pointer-events: auto; }
+}
+
+@media (max-width: 1080px) {
+  .task-board { gap: 13px; padding: 14px; }
+  .task-column { padding: 12px; }
+}
+
+/* Телефон/PWA: колонки превращаются в табы этапов, действия — на карточке. */
+@media (max-width: 760px) {
+  .task-tabs { display: flex; }
+  .task-board { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .task-column { display: none; min-height: 260px; }
+  .task-column.is-active { display: flex; }
+  .task-list { max-height: none; }
+  .tasks-modes { width: 100%; }
+  .tasks-toolbar { flex-wrap: wrap; }
+  .tasks-actions { width: 100%; }
+  .tasks-actions .button { flex: 1 1 0; }
+  .task-card-quick { opacity: 1; pointer-events: auto; }
+  .task-dropzone { bottom: calc(86px + env(safe-area-inset-bottom)); }
+  .task-dropzone-inner { min-width: min(330px, calc(100vw - 24px)); gap: 11px; padding: 12px 14px; }
+  .task-dropzone-badge { display: none; }
+  .task-undo-toast { right: 12px; bottom: calc(86px + env(safe-area-inset-bottom)); left: 12px; max-width: none; }
+  .task-undo-copy span { max-width: none; }
+  .task-edge-zone { width: 42px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card, .task-archive-card, .task-dropzone, .task-dropzone-inner, .task-undo-toast, .task-drop-indicator { transition: none; }
+  .task-dropzone-inner, .task-badge.is-priority-urgent::before { animation: none; }
+}
