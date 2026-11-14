@@ -31,6 +31,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, RedirectResponse
 from PIL import Image, ImageOps
@@ -208,6 +209,11 @@ def initialize_schema(db: Engine) -> None:
         """), {"room": int(room_id)})
     # Заявки из «Поделиться», которые так и не отправили, живут сутки.
     _prune_share_uploads()
+    # Старые сообщения в открытом виде пере-шифруем (без ключа — no-op).
+    try:
+        migrate_plaintext_messages(db)
+    except Exception as error:  # noqa: BLE001 — миграция не должна ломать старт
+        logger.warning("Чат: миграция шифрования не выполнена: %s", error)
 
 
 def default_room_id() -> int:
@@ -441,6 +447,83 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+# --- Шифрование текста сообщений -------------------------------------------- #
+
+# Ключ Fernet берётся из окружения (.env) один раз за процесс. Формат — url-safe
+# base64 (44 символа), сгенерировать можно так:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+_cipher: Fernet | None = None
+_cipher_checked = False
+
+
+def _get_cipher() -> Fernet | None:
+    """Fernet-шифр из ENCRYPTION_KEY. None — ключа нет или он некорректен."""
+    global _cipher, _cipher_checked
+    if _cipher_checked:
+        return _cipher
+    _cipher_checked = True
+    raw = (os.getenv("ENCRYPTION_KEY") or "").strip()
+    if not raw:
+        logger.warning("ENCRYPTION_KEY не задан — текст чата хранится без шифрования")
+        return None
+    try:
+        _cipher = Fernet(raw.encode("ascii"))
+    except (ValueError, TypeError):
+        logger.error("ENCRYPTION_KEY некорректен — ожидался url-safe base64 ключ Fernet")
+        _cipher = None
+    return _cipher
+
+
+def encrypt_text(value: str | None) -> str | None:
+    """Шифрует текст перед записью. Пустое значение или отсутствие ключа — как есть."""
+    if not value:
+        return value
+    cipher = _get_cipher()
+    if cipher is None:
+        return value
+    return cipher.encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_text(value: str | None) -> str | None:
+    """Расшифровывает при чтении. Не-Fernet данные (старый plaintext) отдаёт как есть."""
+    if not value:
+        return value
+    cipher = _get_cipher()
+    if cipher is None:
+        return value
+    try:
+        return cipher.decrypt(value.encode("utf-8")).decode("utf-8")
+    except (InvalidToken, ValueError, UnicodeDecodeError):
+        return value
+
+
+def migrate_plaintext_messages(db: Engine) -> int:
+    """Одноразово шифрует старые сообщения, лежащие в открытом виде. Без ключа — no-op."""
+    cipher = _get_cipher()
+    if cipher is None:
+        return 0
+    migrated = 0
+    with db.begin() as connection:
+        rows = connection.execute(text(
+            "SELECT id, text FROM chat_messages WHERE text IS NOT NULL AND text != ''"
+        )).mappings().all()
+        for row in rows:
+            raw = str(row["text"])
+            try:
+                cipher.decrypt(raw.encode("utf-8"))
+                continue  # уже зашифровано
+            except (InvalidToken, ValueError):
+                pass
+            connection.execute(
+                text("UPDATE chat_messages SET text = :t WHERE id = :id"),
+                {"t": encrypt_text(raw), "id": int(row["id"])},
+            )
+            migrated += 1
+    if migrated:
+        logger.info("Чат: зашифровано старых сообщений — %s", migrated)
+    return migrated
+
+
 # --- Хранение --------------------------------------------------------------- #
 
 
@@ -450,7 +533,7 @@ def _row_to_message(row: Any) -> dict[str, Any]:
         "sender_id": int(row["sender_id"]),
         "recipient_id": int(row["recipient_id"]) if row["recipient_id"] is not None else None,
         "room_id": int(row["room_id"]) if row["room_id"] is not None else None,
-        "text": row["text"] or "",
+        "text": decrypt_text(row["text"]) or "",
         "image_url": row["image_url"],
         "created_at": row["created_at"],
         "edited_at": row["edited_at"] if "edited_at" in row.keys() else None,
@@ -471,7 +554,7 @@ def store_message(sender_id: int, recipient_id: int | None, text_value: str | No
             INSERT INTO chat_messages (sender_id, recipient_id, room_id, text, image_url, created_at)
             VALUES (:s, :r, :room, :t, :i, :c)
         """), {"s": sender_id, "r": recipient_id, "room": room_id,
-               "t": text_value, "i": image_url, "c": created})
+               "t": encrypt_text(text_value), "i": image_url, "c": created})
         new_id = int(result.lastrowid)
         poll_id = _create_poll(connection, new_id, sender_id, poll, created) if poll else None
     return {
@@ -977,7 +1060,7 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
         """), {"me": me}).mappings().all()
     users = []
     for row in rows:
-        preview = str(row["last_text"] or "").strip().replace("\n", " ")
+        preview = str(decrypt_text(row["last_text"]) or "").strip().replace("\n", " ")
         if len(preview) > 80:
             preview = preview[:79].rstrip() + "…"
         users.append({
@@ -996,7 +1079,7 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 
 def _room_row(row: Any) -> dict[str, Any]:
-    preview = str(row["last_text"] or "").strip().replace("\n", " ")
+    preview = str(decrypt_text(row["last_text"]) or "").strip().replace("\n", " ")
     if len(preview) > 80:
         preview = preview[:79].rstrip() + "…"
     return {
@@ -1211,7 +1294,7 @@ async def chat_message_edit(message_id: int, request: Request,
             raise HTTPException(status_code=422, detail="Нельзя править сообщение с изображением")
         connection.execute(text("""
             UPDATE chat_messages SET text = :text, edited_at = :now WHERE id = :id
-        """), {"text": text_value, "now": _utcnow_iso(), "id": int(message_id)})
+        """), {"text": encrypt_text(text_value), "now": _utcnow_iso(), "id": int(message_id)})
         updated = connection.execute(text(f"""
             SELECT {', '.join(MESSAGE_COLUMNS)} FROM chat_messages WHERE id = :id
         """), {"id": int(message_id)}).mappings().first()
@@ -1432,4 +1515,5 @@ async def chat_socket(websocket: WebSocket) -> None:
 
 
 __all__ = ["chat_router", "router", "initialize_schema", "manager", "compress_image",
-           "uploads_dir", "default_room_id"]
+           "uploads_dir", "default_room_id", "encrypt_text", "decrypt_text",
+           "migrate_plaintext_messages"]
