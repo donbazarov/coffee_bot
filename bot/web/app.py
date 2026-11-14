@@ -215,8 +215,10 @@ def migrate_database():
     workload_service.initialize_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
-    # Канбан-доска задач: таблицы категорий и задач + уборка давно удалённых.
+    # Канбан-доска задач: таблицы категорий и задач, авто-архив выполненных
+    # и уборка мягко удалённых, которые дольше срока лежат в архиве.
     tasks.initialize_schema(engine)
+    tasks.auto_archive(engine)
     tasks.prune_deleted(engine)
     push.initialize_schema(engine)
     chat.initialize_schema(engine)
@@ -1221,7 +1223,7 @@ def _task_filter(assignee: str, category: str | None) -> str | None:
     """Проверяет режим «Все/Мои/Общие» и категорию, возвращает код категории или None."""
     if assignee not in tasks.FILTERS:
         raise HTTPException(status_code=422, detail="Неизвестный режим выборки")
-    if category not in (None, "all") and category not in tasks.category_keys(engine):
+    if category not in (None, "all") and category != tasks.NO_CATEGORY and category not in tasks.category_keys(engine):
         raise HTTPException(status_code=422, detail="Неизвестная категория")
     return None if category in (None, "all") else category
 
@@ -1236,13 +1238,15 @@ def _with_permissions(items: list[dict[str, Any]], user: dict[str, Any]) -> list
 @app.get("/api/tasks")
 def list_tasks(assignee: str = "all", category: str | None = None,
                user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Актуальные задачи: общие + на мою должность + лично мне (чужих не отдаём)."""
+    """Актуальные задачи: общие, моя должность, лично мне и созданные мной."""
+    tasks.auto_archive(engine)  # выполненные сами уезжают в архив через N дней
     code = _task_filter(assignee, category)
     return {
         "items": _with_permissions(tasks.list_active(engine, user, assignee, code), user),
         "counts": tasks.counts(engine, user, assignee),
         "categories": tasks.all_categories(engine),
         "can_manage_categories": user["role"] in {"senior", "mentor"},
+        "auto_archive_days": tasks.archive_after_days(),
     }
 
 
@@ -1270,6 +1274,7 @@ async def create_task(request: Request, user: dict[str, Any] = Depends(require_c
     """Новая задача: категория, мета-бейджи и адресация (Все / Должность / Сотрудник)."""
     payload = await _read_json_object(request)
     allowed = {"title", "description", "category_code", "status", "priority", "meta_info",
+               "due_date", "due_time",
                "assignee_type", "assignee_role", "assignee_user_id"}
     if set(payload) - allowed:
         raise HTTPException(status_code=422, detail="Неизвестные поля задачи")
@@ -1288,6 +1293,7 @@ async def update_task(task_id: int, request: Request,
     """Правка задачи: поля, перенос/порядок, архив и возврат из Undo-удаления."""
     payload = await _read_json_object(request)
     allowed = {"title", "description", "category_code", "status", "priority", "meta_info",
+               "due_date", "due_time",
                "assignee_type", "assignee_role", "assignee_user_id", "before_id", "is_deleted"}
     if set(payload) - allowed:
         raise HTTPException(status_code=422, detail="Неизвестные поля задачи")

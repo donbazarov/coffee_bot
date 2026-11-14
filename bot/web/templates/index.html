@@ -83,6 +83,8 @@
     <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></symbol>
     <symbol id="i-timer" viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2M9 2h6"/></symbol>
     <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></symbol>
+    <symbol id="i-trash-body" viewBox="0 0 24 24"><path d="M5.5 6.5L6.8 19.2a2 2 0 0 0 2 1.8h6.4a2 2 0 0 0 2-1.8L18.5 6.5"/><path d="M10 11v6M14 11v6"/></symbol>
+    <symbol id="i-trash-lid" viewBox="0 0 24 24"><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M3.5 6.5h17"/></symbol>
     <symbol id="i-lock" viewBox="0 0 24 24"><path d="M6 11h12v9H6z"/><path d="M9 11V8a3 3 0 0 1 6 0v3"/></symbol>
     <symbol id="i-clipboard" viewBox="0 0 24 24"><path d="M9 3h6v3H9z"/><path d="M9 4.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.5a2 2 0 0 0-2-2h-2"/></symbol>
     <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h12v18H6a2 2 0 0 1-2-2z"/><path d="M8 3v18"/></symbol>
@@ -830,9 +832,9 @@
   <div class="task-edge-zone task-edge-right" id="task-edge-right" hidden aria-hidden="true"><span>→</span></div>
   <div class="task-dropzone" id="task-dropzone" hidden>
     <div class="task-dropzone-inner" id="task-dropzone-inner">
-      <span class="task-dropzone-icon"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></span>
+      <span class="task-dropzone-icon"><svg class="task-trash-svg" viewBox="0 0 24 24" aria-hidden="true"><use class="task-trash-lid" href="#i-trash-lid"></use><use class="task-trash-body" href="#i-trash-body"></use></svg></span>
       <div class="task-dropzone-copy">
-        <span class="task-dropzone-kicker">// DROP ZONE: УДАЛИТЬ ЗАДАЧУ //</span>
+        <span class="task-dropzone-kicker"><i class="task-dropzone-dot"></i>// DROP ZONE: УДАЛИТЬ ЗАДАЧУ //</span>
         <strong id="task-dropzone-title">Перетащите задачу сюда для удаления</strong>
         <small>Отпустите для сброса</small>
       </div>
@@ -913,7 +915,11 @@
         <label id="task-assignee-role-row" hidden>Должность<select name="assignee_role" id="task-assignee-role"></select></label>
         <label id="task-assignee-user-row" hidden>Сотрудник<select name="assignee_user_id" id="task-assignee-user"></select></label>
       </div>
-      <label>Мета-бейджи <span class="optional">по бейджу на строку: «Смена: Утро», «Дедлайн: 14:00»</span><textarea name="meta_info" rows="2" maxlength="120" placeholder="Смена: Утро&#10;Дедлайн: 14:00"></textarea></label>
+      <div class="task-form-grid">
+        <label>Дедлайн — дата <span class="optional">необязательно</span><input name="due_date" type="date"></label>
+        <label>Дедлайн — время <span class="optional">если нужно точное</span><input name="due_time" type="time"></label>
+      </div>
+      <label>Мета-бейджи <span class="optional">по бейджу на строку: «Смена: Утро», «Зона выдачи»</span><textarea name="meta_info" rows="2" maxlength="120" placeholder="Смена: Утро&#10;Зона выдачи"></textarea></label>
       <label>Описание <span class="optional">необязательно</span><textarea name="description" rows="3" maxlength="2000" placeholder="Детали задачи или регламент"></textarea></label>
       <p class="dialog-error" id="task-form-error" role="alert" hidden></p>
       <div class="dialog-actions">

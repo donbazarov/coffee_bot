@@ -40,16 +40,9 @@ from bot.web.calendar_service import ROLE_NAMES as ROLE_LABELS, _ensure_columns
 
 logger = logging.getLogger("bot.web.tasks")
 
-# Категории по умолчанию: code, название, цвет, порядок. Цвета взяты из макета
-# CrewDesk (Stitch «Kanban Board Page Layout»), дальше их ведёт панель управления.
-DEFAULT_CATEGORIES = (
-    ("bar", "БАР", "#ff6b4a", 10),
-    ("tech", "ТЕХНИКА", "#60a5fa", 20),
-    ("stock", "СКЛАД", "#5eead4", 30),
-    ("prep", "ЗАГОТОВКИ", "#f59e0b", 40),
-    ("inventory", "ИНВЕНТАРЬ", "#fcba5f", 50),
-    ("checklist", "ЧЕК-ЛИСТ", "#4ade80", 60),
-)
+# Категории задач не засеиваются шаблонами: единственный источник — панель
+# управления (senior/mentor). Задача может жить и без категории («БЕЗ КАТЕГОРИИ»),
+# поэтому новый модуль работает «из коробки» с пустым справочником.
 
 STATUSES = ("todo", "in_progress", "done", "archived_done", "archived_cancelled")
 BOARD_STATUSES = ("todo", "in_progress", "done")
@@ -57,8 +50,11 @@ ARCHIVE_STATUSES = ("archived_done", "archived_cancelled")
 PRIORITIES = ("normal", "high", "urgent")
 ASSIGNEE_TYPES = ("all", "role", "user")
 ASSIGNEE_ROLES = tuple(ROLE_LABELS)
-# Режимы выборки: всё доступное, только моё (должность + лично), только общие.
+# Режимы выборки: всё доступное, только моё, только общие.
 FILTERS = ("all", "mine", "shared")
+
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 FALLBACK_COLOR = "#7b8794"
 
@@ -68,10 +64,78 @@ MAX_META = 120
 MAX_LABEL = 60
 MAX_LIST = 300
 
+# Авто-архив: сколько дней выполненная задача остаётся в колонке «Готово»
+# (0 — не архивировать автоматически). TRASH_KEEP_DAYS — срок жизни мягко
+# удалённых задач в архиве (0 — хранить бессрочно).
+ARCHIVE_AFTER_DAYS = 1
+TRASH_KEEP_DAYS = 30
+
 modules.register_defaults("tasks", {
     "MAX_TITLE": MAX_TITLE, "MAX_DESCRIPTION": MAX_DESCRIPTION,
     "MAX_META": MAX_META, "MAX_LABEL": MAX_LABEL,
+    "ARCHIVE_AFTER_DAYS": ARCHIVE_AFTER_DAYS, "TRASH_KEEP_DAYS": TRASH_KEEP_DAYS,
 })
+
+
+_TASKS_DDL = """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT,
+        category_code TEXT,
+        status TEXT NOT NULL DEFAULT 'todo',
+        priority TEXT NOT NULL DEFAULT 'normal',
+        meta_info TEXT,
+        due_date TEXT,
+        due_time TEXT,
+        assignee_type TEXT NOT NULL DEFAULT 'all',
+        assignee_role TEXT,
+        assignee_user_id INTEGER REFERENCES users(id),
+        author_id INTEGER REFERENCES users(id),
+        completed_by_id INTEGER REFERENCES users(id),
+        completed_at DATETIME,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        position INTEGER NOT NULL DEFAULT 0,
+        is_deleted INTEGER NOT NULL DEFAULT 0,
+        deleted_at DATETIME
+    )
+"""
+
+_TASK_COLUMNS = {
+    "priority": "TEXT NOT NULL DEFAULT 'normal'",
+    "meta_info": "TEXT",
+    "due_date": "TEXT",
+    "due_time": "TEXT",
+    "assignee_role": "TEXT",
+    "assignee_user_id": "INTEGER",
+    "completed_by_id": "INTEGER",
+    "completed_at": "TEXT",
+    "position": "INTEGER NOT NULL DEFAULT 0",
+    "is_deleted": "INTEGER NOT NULL DEFAULT 0",
+    "deleted_at": "TEXT",
+}
+
+
+def _relax_category_nullable(connection: Any) -> None:
+    """Снимает NOT NULL с `category_code` на базах прошлой версии.
+
+    Категория стала необязательной, а SQLite не умеет менять ограничения через
+    ALTER: таблицу пересобираем (данные копируются, индексы создаются следом).
+    """
+    info = connection.execute(text("PRAGMA table_info(tasks)")).mappings().all()
+    column = next((row for row in info if row["name"] == "category_code"), None)
+    if column is None or not int(column["notnull"]):
+        return
+    logger.info("tasks: category_code теперь необязательна — пересобираю таблицу задач")
+    columns = [row["name"] for row in info]
+    connection.execute(text("ALTER TABLE tasks RENAME TO tasks_legacy"))
+    connection.execute(text(_TASKS_DDL))
+    fresh = [row["name"] for row in connection.execute(text("PRAGMA table_info(tasks)")).mappings().all()]
+    shared = [name for name in fresh if name in columns]
+    names = ", ".join(shared)
+    connection.execute(text(f"INSERT INTO tasks ({names}) SELECT {names} FROM tasks_legacy"))
+    connection.execute(text("DROP TABLE tasks_legacy"))
 
 
 def initialize_schema(engine: Engine) -> None:
@@ -86,63 +150,67 @@ def initialize_schema(engine: Engine) -> None:
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """))
-        # Категории по умолчанию — один раз, дальше их ведёт панель управления.
-        for code, label, color, position in DEFAULT_CATEGORIES:
-            connection.execute(text("""
-                INSERT OR IGNORE INTO task_categories (code, label, color, position)
-                VALUES (:code, :label, :color, :position)
-            """), {"code": code, "label": label, "color": color, "position": position})
-        connection.execute(text("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                description TEXT,
-                category_code TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'todo',
-                priority TEXT NOT NULL DEFAULT 'normal',
-                meta_info TEXT,
-                assignee_type TEXT NOT NULL DEFAULT 'all',
-                assignee_role TEXT,
-                assignee_user_id INTEGER REFERENCES users(id),
-                author_id INTEGER REFERENCES users(id),
-                completed_by_id INTEGER REFERENCES users(id),
-                completed_at DATETIME,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                position INTEGER NOT NULL DEFAULT 0,
-                is_deleted INTEGER NOT NULL DEFAULT 0,
-                deleted_at DATETIME
-            )
-        """))
+        # Категории не засеиваются: их ведёт панель управления (см. create_category).
+        connection.execute(text(_TASKS_DDL))
+        if engine.dialect.name == "sqlite":
+            # Поля докатываются и на живой базе — таблица живёт между релизами.
+            _ensure_columns(connection, "tasks", _TASK_COLUMNS)
+            _relax_category_nullable(connection)
         for name, ddl in (
             ("idx_tasks_column", "(status, position)"),
             ("idx_tasks_category", "(category_code)"),
             ("idx_tasks_assignee", "(assignee_type, assignee_user_id, assignee_role)"),
         ):
             connection.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON tasks {ddl}"))
-        if engine.dialect.name == "sqlite":
-            # Поля докатываются и на живой базе — таблица живёт между релизами.
-            _ensure_columns(connection, "tasks", {
-                "priority": "TEXT NOT NULL DEFAULT 'normal'",
-                "meta_info": "TEXT",
-                "assignee_role": "TEXT",
-                "assignee_user_id": "INTEGER",
-                "completed_by_id": "INTEGER",
-                "completed_at": "TEXT",
-                "position": "INTEGER NOT NULL DEFAULT 0",
-                "is_deleted": "INTEGER NOT NULL DEFAULT 0",
-                "deleted_at": "TEXT",
-            })
 
 
-def prune_deleted(engine: Engine, days: int = 14) -> int:
-    """Убирает давно удалённые (мягко) задачи: окно Undo — сессия, не вечность."""
+def archive_after_days() -> int:
+    """Сколько дней «Готово» держится на доске до авто-архива (0 — выключено)."""
+    try:
+        return int(modules.setting("tasks", "ARCHIVE_AFTER_DAYS", ARCHIVE_AFTER_DAYS))
+    except (TypeError, ValueError):
+        return ARCHIVE_AFTER_DAYS
+
+
+def auto_archive(engine: Engine, days: int | None = None) -> int:
+    """Переводит выполненные задачи в архив через N дней после выполнения.
+
+    Планировщика в приложении нет, поэтому уборка ленивая: вызывается на старте
+    и перед выдачей доски — так счётчики колонок всегда актуальны.
+    """
+    if days is None:
+        days = archive_after_days()
+    if days <= 0:
+        return 0
+    with engine.begin() as connection:
+        result = connection.execute(text("""
+            UPDATE tasks SET status = 'archived_done', updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'done' AND is_deleted = 0 AND completed_at IS NOT NULL
+              AND completed_at <= datetime('now', :offset)
+        """), {"offset": f"-{days} days"})
+    return int(result.rowcount or 0)
+
+
+def prune_deleted(engine: Engine, days: int | None = None) -> int:
+    """Убирает удалённые (мягко) задачи старше TRASH_KEEP_DAYS.
+
+    Удалённая задача живёт в архиве и может быть восстановлена; срок хранения
+    правится в панели управления (0 — хранить бессрочно).
+    """
+    if days is None:
+        days = modules.setting("tasks", "TRASH_KEEP_DAYS", TRASH_KEEP_DAYS)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = TRASH_KEEP_DAYS
+    if days <= 0:
+        return 0
     with engine.begin() as connection:
         result = connection.execute(text("""
             DELETE FROM tasks
             WHERE is_deleted = 1 AND deleted_at IS NOT NULL
               AND deleted_at < datetime('now', :offset)
-        """), {"offset": f"-{int(days)} days"})
+        """), {"offset": f"-{days} days"})
     return int(result.rowcount or 0)
 
 
@@ -247,7 +315,8 @@ def delete_category(engine: Engine, code: str) -> None:
 
 _TASK_SELECT = """
     SELECT t.id, t.title, t.description, t.category_code, t.status, t.priority,
-           t.meta_info, t.assignee_type, t.assignee_role, t.assignee_user_id,
+           t.meta_info, t.due_date, t.due_time,
+           t.assignee_type, t.assignee_role, t.assignee_user_id,
            t.author_id, t.completed_by_id, t.completed_at, t.created_at,
            t.updated_at, t.position, t.is_deleted,
            c.label AS category_label, c.color AS category_color,
@@ -263,15 +332,16 @@ _TASK_SELECT = """
 
 
 def _visibility(user: dict[str, Any], assignee: str) -> str:
-    """SQL-условие видимости: общие + своя должность + лично мне.
+    """SQL-условие видимости: общие + моя должность + лично мне + созданные мной.
 
-    Чужие персональные задачи не возвращаются ни в одном режиме — «Все» это
-    персональная выборка целиком, а не вся база.
+    Автор видит задачу, которую поставил коллеге — иначе выданная задача
+    пропадала бы из его поля зрения сразу после создания.
     """
     if assignee == "shared":
         return "t.assignee_type = 'all'"
     mine = ("(t.assignee_type = 'role' AND t.assignee_role = :role) "
-            "OR (t.assignee_type = 'user' AND t.assignee_user_id = :uid)")
+            "OR (t.assignee_type = 'user' AND t.assignee_user_id = :uid) "
+            "OR t.author_id = :uid")
     return f"({mine})" if assignee == "mine" else f"(t.assignee_type = 'all' OR {mine})"
 
 
@@ -293,12 +363,14 @@ def _task_payload(row: Any) -> dict[str, Any]:
         "id": int(row["id"]),
         "title": row["title"],
         "description": row["description"] or "",
-        "category": row["category_code"],
-        "category_label": row["category_label"] or row["category_code"],
+        "category": row["category_code"] or "",
+        "category_label": row["category_label"] or "",
         "category_color": _clean_color(row["category_color"]),
         "status": row["status"],
         "priority": row["priority"] or "normal",
         "meta": _metas(row["meta_info"]),
+        "due_date": row["due_date"] or "",
+        "due_time": row["due_time"] or "",
         "assignee": {
             "type": row["assignee_type"] or "all",
             "role": role,
@@ -321,6 +393,20 @@ def _params(user: dict[str, Any], limit: int) -> dict[str, Any]:
     return {"role": user["role"], "uid": user["id"], "limit": limit}
 
 
+NO_CATEGORY = "none"
+
+
+def _apply_category(category: str | None, where: list[str], params: dict[str, Any]) -> None:
+    """Фильтр по категории; NO_CATEGORY — только задачи без категории."""
+    if not category:
+        return
+    if category == NO_CATEGORY:
+        where.append("(t.category_code IS NULL OR t.category_code = '')")
+        return
+    where.append("t.category_code = :category")
+    params["category"] = category
+
+
 def list_active(engine: Engine, user: dict[str, Any], assignee: str = "all",
                 category: str | None = None, limit: int = MAX_LIST) -> list[dict[str, Any]]:
     """Актуальные задачи доски (без архива и мягко удалённых)."""
@@ -328,9 +414,7 @@ def list_active(engine: Engine, user: dict[str, Any], assignee: str = "all",
         assignee = "all"
     params = _params(user, limit)
     where = [f"t.is_deleted = 0 AND t.status IN {BOARD_STATUSES}", _visibility(user, assignee)]
-    if category:
-        where.append("t.category_code = :category")
-        params["category"] = category
+    _apply_category(category, where, params)
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
             {_TASK_SELECT}
@@ -344,19 +428,21 @@ def list_active(engine: Engine, user: dict[str, Any], assignee: str = "all",
 
 def list_archive(engine: Engine, user: dict[str, Any], assignee: str = "all",
                  category: str | None = None, limit: int = MAX_LIST) -> list[dict[str, Any]]:
-    """Архив: выполненные и отменённые задачи, свежие сверху."""
+    """Архив: выполненные, отменённые и мягко удалённые задачи, свежие сверху.
+
+    Удалённая задача не исчезает совсем: она лежит в архиве до восстановления
+    или до истечения TRASH_KEEP_DAYS — так с доски ничего не пропадает молча.
+    """
     if assignee not in FILTERS:
         assignee = "all"
     params = _params(user, limit)
-    where = [f"t.is_deleted = 0 AND t.status IN {ARCHIVE_STATUSES}", _visibility(user, assignee)]
-    if category:
-        where.append("t.category_code = :category")
-        params["category"] = category
+    where = [f"(t.status IN {ARCHIVE_STATUSES} OR t.is_deleted = 1)", _visibility(user, assignee)]
+    _apply_category(category, where, params)
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
             {_TASK_SELECT}
             WHERE {" AND ".join(where)}
-            ORDER BY COALESCE(t.completed_at, t.updated_at) DESC, t.id DESC
+            ORDER BY COALESCE(t.deleted_at, t.completed_at, t.updated_at) DESC, t.id DESC
             LIMIT :limit
         """), params).mappings().all()
     return [_task_payload(row) for row in rows]
@@ -387,7 +473,7 @@ def counts(engine: Engine, user: dict[str, Any], assignee: str = "all") -> dict[
     by_status.update({row["status"]: int(row["total"]) for row in status_rows})
     return {
         "by_status": by_status,
-        "by_category": {row["category_code"]: int(row["total"]) for row in category_rows},
+        "by_category": {(row["category_code"] or ""): int(row["total"]) for row in category_rows},
         "mine": int(mine_rows[0]["total"]) if mine_rows else 0,
         "total": sum(by_status.values()),
     }
@@ -502,14 +588,42 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _clean_category(engine: Engine, value: Any) -> str | None:
+    """Категория необязательна: пусто → NULL, карточка покажет «Без категории»."""
+    code = str(value or "").strip()
+    if not code or code == "all":
+        return None
+    if code not in category_keys(engine):
+        raise ValueError("Такой категории нет — выберите из списка")
+    return code
+
+
+def _clean_deadline(payload: dict[str, Any],
+                    current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Дедлайн — необязательная пара «дата + время».
+
+    Пустая дата снимает дедлайн целиком: время без даты смысла не имеет.
+    """
+    base = current or {}
+    due_date = str(payload.get("due_date", base.get("due_date")) or "").strip()
+    due_time = str(payload.get("due_time", base.get("due_time")) or "").strip()
+    if due_date and not DATE_RE.match(due_date):
+        raise ValueError("Дедлайн: дата в формате ГГГГ-ММ-ДД")
+    if due_time and not TIME_RE.match(due_time):
+        raise ValueError("Дедлайн: время в формате ЧЧ:ММ")
+    if not due_date:
+        if due_time:
+            raise ValueError("Дедлайн: сначала выберите дату, потом время")
+        return {"due_date": None, "due_time": None}
+    return {"due_date": due_date, "due_time": due_time or None}
+
+
 def create_task(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) -> int:
     """Создаёт задачу и ставит её в конец выбранной колонки."""
     title = str(payload.get("title") or "").strip()[:modules.setting("tasks", "MAX_TITLE", MAX_TITLE)]
     if not title:
         raise ValueError("Название задачи обязательно")
-    category = str(payload.get("category_code") or "").strip()
-    if category not in category_keys(engine):
-        raise ValueError("Выберите категорию задачи")
+    category = _clean_category(engine, payload.get("category_code"))
     status = str(payload.get("status") or "todo").strip()
     if status not in BOARD_STATUSES:
         raise ValueError("Неизвестный этап доски")
@@ -523,13 +637,15 @@ def create_task(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) -
     with engine.begin() as connection:
         result = connection.execute(text("""
             INSERT INTO tasks (title, description, category_code, status, priority, meta_info,
+                               due_date, due_time,
                                assignee_type, assignee_role, assignee_user_id, author_id, position)
             VALUES (:title, :description, :category_code, :status, :priority, :meta_info,
+                    :due_date, :due_time,
                     :assignee_type, :assignee_role, :assignee_user_id, :author_id, 0)
         """), {
             "title": title, "description": description, "category_code": category,
             "status": status, "priority": priority, "meta_info": _clean_meta(payload.get("meta_info")),
-            "author_id": user["id"], **assignee,
+            "author_id": user["id"], **_clean_deadline(payload), **assignee,
         })
         task_id = int(result.lastrowid or 0)
         _place(connection, status, task_id, None)
@@ -566,10 +682,9 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
         values["description"] = str(payload.get("description") or "").strip()[
             :modules.setting("tasks", "MAX_DESCRIPTION", MAX_DESCRIPTION)]
     if "category_code" in payload:
-        category = str(payload.get("category_code") or "").strip()
-        if category not in category_keys(engine):
-            raise ValueError("Выберите категорию задачи")
-        values["category_code"] = category
+        values["category_code"] = _clean_category(engine, payload.get("category_code"))
+    if {"due_date", "due_time"} & set(payload):
+        values.update(_clean_deadline(payload, task))
     if "priority" in payload:
         priority = str(payload.get("priority") or "").strip()
         if priority not in PRIORITIES:
@@ -580,7 +695,7 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
     if {"assignee_type", "assignee_role", "assignee_user_id"} & set(payload):
         values.update(_validate_assignee(engine, payload, task["assignee"]))
     if payload.get("is_deleted") is False:
-        # Undo: карточка возвращается на доску на прежнее место.
+        # Undo: карточка возвращается на доску; из архива её достаёт status='todo'.
         values["is_deleted"] = 0
         values["deleted_at"] = None
 
@@ -631,8 +746,10 @@ def delete_task(engine: Engine, task_id: int, user: dict[str, Any],
     if not can_edit(task, user):
         raise PermissionError("Удалять задачу может автор или наставник")
     if permanent:
-        if task["status"] not in ARCHIVE_STATUSES:
-            raise ValueError("Окончательно удалять можно только архивные задачи")
+        # Окончательно сносим только то, что уже лежит в архиве: либо архивный
+        # статус, либо мягкое удаление (удалённая задача тоже видна в архиве).
+        if task["status"] not in ARCHIVE_STATUSES and not task["is_deleted"]:
+            raise ValueError("Окончательно удалять можно только из архива — сначала перенесите задачу")
         with engine.begin() as connection:
             connection.execute(text("DELETE FROM tasks WHERE id = :id"), {"id": task_id})
         return task

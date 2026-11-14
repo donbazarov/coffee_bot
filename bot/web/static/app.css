@@ -2707,41 +2707,66 @@ body { transition: background-color .3s ease, color .3s ease; }
    динамическая drop-zone удаления, Undo-тост и боковые зоны переброса.
    Скругления и тайминги — из макета (12/16px, 150–300 мс, cubic-bezier). */
 
-.tasks-heading { --task-todo: var(--muted); --task-progress: #e5a13a; --task-done: var(--mint); }
+/* Доменные токены модуля объявлены на уровне палитры: внутри карточек, колонок
+   и диалогов color-mix() с ними иначе не разрешался, и статусные цвета
+   (янтарь «В работе», зелень «Готово») просто пропадали. */
+:root {
+  --task-todo: var(--muted);
+  --task-progress: #e9a93b;
+  --task-done: var(--mint);
+  --task-r-board: 14px;
+  --task-r-col: 12px;
+  --task-r-card: 10px;
+  --task-r-tile: 6px;
+}
+
+[data-theme="light"] {
+  --task-progress: #a86a12;
+}
+
 .tasks-modes { display: flex; flex-wrap: wrap; gap: 10px; }
 .tasks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .tasks-chips { margin: 0; flex: 1 1 auto; min-width: 0; -webkit-mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); }
-.tasks-chips .chip b { margin-left: 4px; color: var(--task-color, var(--muted)); font: 600 10px var(--mono); }
-.tasks-chips .chip.is-selected b { color: var(--text); }
+/* Чип категории тонируется своим цветом — как бейдж на карточке. */
+.tasks-chips .chip { border-color: color-mix(in srgb, var(--task-color, var(--line)) 34%, var(--line)); color: color-mix(in srgb, var(--task-color, var(--muted)) 55%, var(--text)); }
+.tasks-chips .chip.is-selected { border-color: color-mix(in srgb, var(--task-color, var(--accent)) 70%, transparent); background: color-mix(in srgb, var(--task-color, var(--accent)) 16%, transparent); color: color-mix(in srgb, var(--task-color, var(--accent)) 80%, var(--text)); }
+.tasks-chips .chip b { margin-left: 4px; padding: 1px 5px; border: 1px solid color-mix(in srgb, var(--task-color, var(--line)) 30%, transparent); border-radius: 4px; color: color-mix(in srgb, var(--task-color, var(--muted)) 85%, var(--text)); font: 600 10px var(--mono); }
 .tasks-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .tasks-status { display: block; margin-top: 14px; color: var(--dim); }
 
 .task-pip { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--task-color, currentColor); }
 
 /* Табы этапов: видны только на узком экране (там колонки не помещаются). */
-.task-tabs { display: none; gap: 6px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--line); background: var(--surface-sunken); }
-.task-tabs .task-tab { display: inline-flex; flex: 1 1 0; min-height: 34px; align-items: center; justify-content: center; gap: 6px; border: 0; background: transparent; color: var(--muted); font: 600 12px var(--sans); cursor: pointer; transition: color .18s, background .18s; }
+.task-tabs { display: none; gap: 6px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: var(--task-r-col); background: var(--surface-sunken); }
+.task-tabs .task-tab { display: inline-flex; flex: 1 1 0; min-height: 34px; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: calc(var(--task-r-col) - 5px); background: transparent; color: var(--muted); font: 600 12px var(--sans); cursor: pointer; transition: color .18s, background .18s; }
 .task-tabs .task-tab b { color: var(--dim); font: 600 11px var(--mono); }
 .task-tabs .task-tab.is-selected { background: var(--surface-raised); color: var(--text); }
 .task-tabs .task-tab.is-selected b { color: var(--accent); }
+.task-tabs .task-tab[data-task-tab="in_progress"] .task-dot { background: var(--task-progress); }
+.task-tabs .task-tab[data-task-tab="done"] .task-dot { background: var(--task-done); }
+.task-tabs .task-tab[data-task-tab="in_progress"] b { color: var(--task-progress); }
+.task-tabs .task-tab[data-task-tab="done"] b { color: var(--task-done); }
 
-.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; border: 1px solid var(--line); background: var(--bg-deep); }
-.task-column { display: flex; flex-direction: column; min-height: 380px; padding: 15px; border: 1px solid var(--line); background: linear-gradient(180deg, color-mix(in srgb, var(--hl) 3%, transparent), transparent 42%), var(--surface-sunken); transition: border-color .2s, background-color .2s; }
-.task-column[data-task-status="in_progress"] { border-color: color-mix(in srgb, var(--task-progress) 26%, transparent); }
-.task-column[data-task-status="done"] { border-color: color-mix(in srgb, var(--task-done) 26%, transparent); }
+.task-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 18px; border: 1px solid var(--line); border-radius: var(--task-r-board); background: var(--bg-deep); }
+.task-column { display: flex; flex-direction: column; min-height: 380px; padding: 15px; border: 1px solid var(--line); border-radius: var(--task-r-col); background: linear-gradient(180deg, color-mix(in srgb, var(--hl) 3%, transparent), transparent 42%), var(--surface-sunken); transition: border-color .2s, background-color .2s; }
+/* Этапы кодируются цветом: янтарь — «В работе», зелень — «Готово». */
+.task-column[data-task-status="in_progress"] { border-color: color-mix(in srgb, var(--task-progress) 34%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--task-progress) 10%, transparent), transparent 46%), var(--surface-sunken); }
+.task-column[data-task-status="done"] { border-color: color-mix(in srgb, var(--task-done) 34%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--task-done) 10%, transparent), transparent 46%), var(--surface-sunken); }
 .task-column.is-droppable { border-style: dashed; }
-.task-column.is-drag-over { border-color: var(--accent-line); background-color: color-mix(in srgb, var(--accent) 4%, transparent); }
+.task-column.is-drag-over { border-color: var(--accent-line); background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
 .task-column-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line-faint); }
 .task-column-title { display: flex; flex-direction: column; gap: 4px; }
-.task-stage { color: var(--muted); font: 700 10px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+.task-stage { color: color-mix(in srgb, var(--task-todo) 78%, var(--text)); font: 700 10px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
 .task-column[data-task-status="in_progress"] .task-stage { color: var(--task-progress); }
 .task-column[data-task-status="done"] .task-stage { color: var(--task-done); }
+.task-stage-hint { color: color-mix(in srgb, var(--task-done) 60%, var(--muted)); font: 400 9.5px var(--mono); }
 .task-column-title h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 15px; }
 .task-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--task-todo); }
-.task-column[data-task-status="in_progress"] .task-dot { background: var(--task-progress); box-shadow: 0 0 8px color-mix(in srgb, var(--task-progress) 60%, transparent); }
-.task-column[data-task-status="done"] .task-dot { background: var(--task-done); box-shadow: 0 0 8px color-mix(in srgb, var(--task-done) 60%, transparent); }
-.task-count { min-width: 26px; padding: 2px 7px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); font: 600 11px var(--mono); text-align: center; }
-.task-count[data-task-count="in_progress"] { color: var(--task-progress); border-color: color-mix(in srgb, var(--task-progress) 30%, transparent); }
+.task-column[data-task-status="in_progress"] .task-dot { background: var(--task-progress); box-shadow: 0 0 8px color-mix(in srgb, var(--task-progress) 70%, transparent); }
+.task-column[data-task-status="done"] .task-dot { background: var(--task-done); box-shadow: 0 0 8px color-mix(in srgb, var(--task-done) 70%, transparent); }
+.task-count { min-width: 26px; padding: 2px 7px; border: 1px solid var(--line); border-radius: var(--task-r-tile); background: var(--surface); color: var(--muted); font: 600 11px var(--mono); text-align: center; }
+.task-count[data-task-count="in_progress"] { border-color: color-mix(in srgb, var(--task-progress) 40%, transparent); background: color-mix(in srgb, var(--task-progress) 12%, transparent); color: var(--task-progress); }
+.task-count[data-task-count="done"] { border-color: color-mix(in srgb, var(--task-done) 40%, transparent); background: color-mix(in srgb, var(--task-done) 12%, transparent); color: var(--task-done); }
 .task-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 11px; overflow-y: auto; max-height: 640px; scrollbar-width: thin; }
 .task-list::-webkit-scrollbar { width: 4px; }
 .task-list::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--hl) 12%, transparent); border-radius: 4px; }
@@ -2749,7 +2774,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 
 
 /* Карточка задачи: бейджи, заголовок, мета-подвал и быстрые действия. */
-.task-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); background: var(--surface); cursor: grab; transition: transform .25s ease, opacity .25s ease, border-color .2s ease, box-shadow .2s ease; }
+.task-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--line); border-radius: var(--task-r-card); background: var(--surface); cursor: grab; transition: transform .25s ease, opacity .25s ease, border-color .2s ease, box-shadow .2s ease; }
 .task-card:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); box-shadow: 0 10px 24px -12px var(--accent-faint); }
 .task-card:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 2px; }
 .task-card.is-locked { cursor: default; }
@@ -2759,31 +2784,41 @@ body { transition: background-color .3s ease, color .3s ease; }
 .task-grip { color: var(--dim); opacity: 0; transition: opacity .18s, color .18s; }
 .task-card:hover .task-grip { opacity: 1; color: var(--muted); }
 
-.task-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--task-color, var(--accent)) 38%, transparent); background: color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); color: color-mix(in srgb, var(--task-color, var(--accent)) 88%, var(--text)); font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
+.task-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--task-color, var(--accent)) 38%, transparent); border-radius: var(--task-r-tile); background: color-mix(in srgb, var(--task-color, var(--accent)) 14%, transparent); color: color-mix(in srgb, var(--task-color, var(--accent)) 88%, var(--text)); font: 600 10px var(--mono); text-transform: uppercase; letter-spacing: .04em; }
 .task-badge.is-priority-high { --task-color: var(--task-progress); }
 .task-badge.is-priority-urgent { --task-color: var(--warn); }
 .task-badge.is-priority-urgent::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); animation: task-ping 1.6s ease-out infinite; }
 .task-badge.is-shared { --task-color: var(--muted); }
+.task-badge.is-no-category { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--dim); }
+/* Статус этапа прямо на карточке — как в макете: янтарь «в процессе», зелень «выполнено». */
+.task-badge.is-stage-progress { --task-color: var(--task-progress); }
+.task-badge.is-stage-progress::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--task-progress); }
+.task-badge.is-stage-done { --task-color: var(--task-done); }
 @keyframes task-ping { 0% { transform: scale(1); opacity: 1; } 70%, 100% { transform: scale(1.9); opacity: 0; } }
 
 .task-card-title { margin: 0; color: var(--text); font-size: 14px; font-weight: 500; line-height: 1.35; }
+/* Выполненная задача читается «погашенной» — как в макете. */
+.task-card-title.is-done { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--task-done) 70%, transparent); text-decoration-thickness: 1.5px; }
 .task-card-note { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .task-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 9px; border-top: 1px solid var(--line-faint); }
 .task-card-meta { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
 .task-meta-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font: 400 10.5px var(--mono); }
 .task-meta-item .icon { width: 13px; height: 13px; color: var(--dim); }
-.task-card-owner { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px 8px 2px 3px; border: 1px solid var(--line-faint); background: var(--surface-raised); color: var(--text-soft); font: 500 10.5px var(--mono); }
+/* Просроченный дедлайн подсвечиваем — смена видит, что горит. */
+.task-meta-item.is-overdue { color: var(--danger-text); font-weight: 600; }
+.task-meta-item.is-overdue .icon { color: var(--danger-text); }
+.task-card-owner { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 2px 8px 2px 3px; border: 1px solid var(--line-faint); border-radius: 9999px; background: var(--surface-raised); color: var(--text-soft); font: 500 10.5px var(--mono); }
 .task-avatar { display: grid; width: 17px; height: 17px; place-items: center; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font: 700 9px var(--mono); }
 
 /* Быстрые действия: на телефоне — всегда, на десктопе — при наведении. */
 .task-card-quick { display: flex; gap: 6px; }
-.task-quick { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 600 11px var(--sans); cursor: pointer; transition: color .18s, border-color .18s, background .18s; }
+.task-quick { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 0 9px; border: 1px solid var(--line); border-radius: var(--task-r-tile); background: transparent; color: var(--muted); font: 600 11px var(--sans); cursor: pointer; transition: color .18s, border-color .18s, background .18s; }
 .task-quick:hover { border-color: var(--line-strong); color: var(--text); }
 .task-quick.is-done { border-color: color-mix(in srgb, var(--task-done) 40%, transparent); background: color-mix(in srgb, var(--task-done) 14%, transparent); color: color-mix(in srgb, var(--task-done) 82%, var(--text)); }
 .task-quick.is-danger:hover { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
 .task-quick .icon { width: 14px; height: 14px; }
 
-.task-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: auto 0; padding: 26px 14px; border: 1px dashed var(--line); background: color-mix(in srgb, var(--hl) 2%, transparent); color: var(--dim); font: 500 11.5px var(--mono); text-align: center; }
+.task-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: auto 0; padding: 26px 14px; border: 1px dashed var(--line); border-radius: var(--task-r-card); background: color-mix(in srgb, var(--hl) 2%, transparent); color: var(--dim); font: 500 11.5px var(--mono); text-align: center; }
 .task-empty .icon { width: 22px; height: 22px; color: var(--dim); }
 .task-empty small { color: color-mix(in srgb, var(--dim) 70%, transparent); font-size: 10px; }
 
@@ -2799,17 +2834,20 @@ body.task-dragging .task-card { cursor: grabbing; }
 .task-dropzone { position: fixed; left: 50%; bottom: calc(22px + env(safe-area-inset-bottom)); z-index: 55; transform: translate(-50%, 150%); opacity: 0; pointer-events: none; transition: transform .3s ease-out, opacity .3s ease-out; }
 .task-dropzone[hidden] { display: none; }
 .task-dropzone.is-visible { transform: translate(-50%, 0); opacity: 1; pointer-events: auto; }
-.task-dropzone-inner { display: flex; align-items: center; gap: 14px; min-width: min(420px, calc(100vw - 32px)); padding: 14px 18px; border: 1px dashed var(--danger-line); background: color-mix(in srgb, var(--toast-bg) 95%, transparent); backdrop-filter: blur(8px); animation: task-trash-pulse 2.8s infinite ease-in-out; transition: transform .2s, border-color .2s, box-shadow .2s; }
-.task-dropzone-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
-.task-dropzone-icon .icon { width: 17px; height: 17px; transform-origin: 4px 7px; transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+.task-dropzone-inner { display: flex; align-items: center; gap: 14px; min-width: min(420px, calc(100vw - 32px)); padding: 14px 18px; border: 1px dashed var(--danger-line); border-radius: var(--task-r-col); background: color-mix(in srgb, var(--toast-bg) 95%, transparent); backdrop-filter: blur(8px); animation: task-trash-pulse 2.8s infinite ease-in-out; transition: transform .2s, border-color .2s, box-shadow .2s; }
+.task-dropzone-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); border-radius: var(--task-r-card); background: var(--danger-soft); color: var(--danger-text); transition: background .2s, border-color .2s, color .2s; }
+/* Бак состоит из двух групп: открывается только крышка (origin — петля сверху слева). */
+.task-trash-svg { width: 19px; height: 19px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.task-trash-lid { transform-origin: 4px 7px; transition: transform .25s cubic-bezier(.34, 1.56, .64, 1); }
+.task-dropzone-dot { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--danger-text); animation: task-ping 1.6s ease-out infinite; }
 .task-dropzone-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.task-dropzone-kicker { color: var(--danger-text); font: 700 10px var(--mono); letter-spacing: .1em; }
+.task-dropzone-kicker { display: inline-flex; align-items: center; color: var(--danger-text); font: 700 10px var(--mono); letter-spacing: .1em; }
 .task-dropzone-copy strong { color: var(--text); font-size: 13px; font-weight: 600; }
 .task-dropzone-copy small { color: var(--muted); font: 400 10px var(--mono); }
-.task-dropzone-badge { margin-left: auto; padding: 3px 8px; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); font: 700 9.5px var(--mono); letter-spacing: .08em; }
+.task-dropzone-badge { margin-left: auto; padding: 3px 8px; border: 1px solid var(--danger-line); border-radius: var(--task-r-tile); background: var(--danger-soft); color: var(--danger-text); font: 700 9.5px var(--mono); letter-spacing: .08em; }
 .task-dropzone.is-hover .task-dropzone-inner { transform: scale(1.02); border-style: solid; border-color: var(--danger-text); box-shadow: 0 8px 30px -4px var(--danger-soft); animation: none; }
-.task-dropzone.is-hover .task-dropzone-icon { background: var(--danger-line); color: var(--text); }
-.task-dropzone.is-hover .task-dropzone-icon .icon { transform: rotate(-26deg) translateY(-2px); }
+.task-dropzone.is-hover .task-dropzone-icon { background: color-mix(in srgb, var(--danger-text) 26%, transparent); border-color: var(--danger-text); color: var(--text); }
+.task-dropzone.is-hover .task-trash-lid { transform: rotate(-26deg) translateY(-2px); }
 @keyframes task-trash-pulse {
   0%, 100% { box-shadow: 0 4px 20px -2px var(--danger-soft); border-color: var(--danger-line); }
   50% { box-shadow: 0 6px 24px -2px var(--danger-soft); border-color: var(--danger-text); }
@@ -2823,10 +2861,10 @@ body.task-dragging .task-card { cursor: grabbing; }
 .task-edge-zone.is-active { opacity: 1; }
 
 /* Undo-тост: держится 5.5 с, таймер встаёт на паузу под курсором (см. app.js). */
-.task-undo-toast { position: fixed; right: 22px; bottom: 22px; z-index: 56; display: flex; align-items: center; gap: 12px; max-width: min(460px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--accent-line); background: color-mix(in srgb, var(--toast-bg) 96%, transparent); box-shadow: var(--shadow-1); transform: translateY(16px); opacity: 0; pointer-events: none; transition: transform .3s ease, opacity .3s ease; }
+.task-undo-toast { position: fixed; right: 22px; bottom: 22px; z-index: 56; display: flex; align-items: center; gap: 12px; max-width: min(460px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--accent-line); border-radius: var(--task-r-col); background: color-mix(in srgb, var(--toast-bg) 96%, transparent); box-shadow: var(--shadow-1); transform: translateY(16px); opacity: 0; pointer-events: none; transition: transform .3s ease, opacity .3s ease; }
 .task-undo-toast[hidden] { display: none; }
 .task-undo-toast.is-visible { transform: translateY(0); opacity: 1; pointer-events: auto; }
-.task-undo-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
+.task-undo-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid var(--danger-line); border-radius: var(--task-r-tile); background: var(--danger-soft); color: var(--danger-text); }
 .task-undo-icon .icon { width: 16px; height: 16px; }
 .task-undo-copy { display: flex; flex-direction: column; min-width: 0; }
 .task-undo-copy strong { color: var(--danger-text); font-size: 12px; }
@@ -2838,12 +2876,14 @@ body.task-dragging .task-card { cursor: grabbing; }
 
 /* Архив: единая сетка карточек со статус-бейджами вместо колонок. */
 .task-archive { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-.task-archive-card { display: flex; flex-direction: column; gap: 9px; padding: 14px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; transition: border-color .2s, transform .2s; }
+.task-archive-card { display: flex; flex-direction: column; gap: 9px; padding: 14px; border: 1px solid var(--line); border-radius: var(--task-r-card); background: var(--surface); cursor: pointer; transition: border-color .2s, transform .2s; }
 .task-archive-card:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.task-archive-card.is-deleted { border-color: var(--danger-line); background: color-mix(in srgb, var(--danger-soft) 60%, var(--surface)); }
 .task-archive-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.task-archive-state { padding: 2px 7px; border: 1px solid var(--line); color: var(--muted); font: 700 9.5px var(--mono); letter-spacing: .06em; }
+.task-archive-state { padding: 2px 7px; border: 1px solid var(--line); border-radius: var(--task-r-tile); color: var(--muted); font: 700 9.5px var(--mono); letter-spacing: .06em; }
 .task-archive-state.is-done { border-color: color-mix(in srgb, var(--task-done) 40%, transparent); background: color-mix(in srgb, var(--task-done) 14%, transparent); color: color-mix(in srgb, var(--task-done) 82%, var(--text)); }
 .task-archive-state.is-cancelled { border-color: var(--line-strong); background: var(--surface-sunken); color: var(--dim); }
+.task-archive-state.is-deleted { border-color: var(--danger-line); background: var(--danger-soft); color: var(--danger-text); }
 .task-archive-meta { margin: 0; color: var(--dim); font: 400 10.5px var(--mono); }
 
 /* Форма задачи и карточка просмотра архивной задачи. */
@@ -2853,8 +2893,13 @@ body.task-dragging .task-card { cursor: grabbing; }
 .task-category-picker { display: grid; grid-template-columns: repeat(auto-fit, minmax(108px, 1fr)); gap: 6px; margin-top: 7px; }
 .task-category-option { position: relative; cursor: pointer; }
 .task-category-option input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.task-category-option span { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 8px; border: 1px solid var(--line); color: var(--text-soft); font: 600 11px var(--mono); transition: border-color .18s, background .18s, color .18s; }
+.task-category-option span { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 8px; border: 1px solid var(--line); border-radius: var(--task-r-tile); color: var(--text-soft); font: 600 11px var(--mono); transition: border-color .18s, background .18s, color .18s; }
 .task-category-option input:checked + span { border-color: color-mix(in srgb, var(--task-color) 45%, transparent); background: color-mix(in srgb, var(--task-color) 14%, transparent); color: color-mix(in srgb, var(--task-color) 88%, var(--text)); }
+.task-category-option.is-none span { border-style: dashed; color: var(--dim); }
+.task-category-option.is-none input:checked + span { border-color: var(--line-strong); background: var(--surface-sunken); color: var(--text-soft); }
+/* Быстрое создание категории прямо из карточки задачи — для наставников. */
+.task-category-add { align-self: stretch; min-height: 32px; padding: 0 8px; border: 1px dashed var(--line-strong); border-radius: var(--task-r-tile); background: transparent; color: var(--muted); font: 600 11px var(--mono); cursor: pointer; transition: color .18s, border-color .18s; }
+.task-category-add:hover { border-color: var(--accent-line); color: var(--accent); }
 .user-dialog.task-dialog { width: min(680px, calc(100vw - 32px)); }
 .task-view-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .task-view-title { margin: 10px 0 6px; font-size: 18px; }
@@ -2898,5 +2943,21 @@ body.task-dragging .task-card { cursor: grabbing; }
 
 @media (prefers-reduced-motion: reduce) {
   .task-card, .task-archive-card, .task-dropzone, .task-dropzone-inner, .task-undo-toast, .task-drop-indicator { transition: none; }
-  .task-dropzone-inner, .task-badge.is-priority-urgent::before { animation: none; }
+  .task-dropzone-inner, .task-badge.is-priority-urgent::before, .task-dropzone-dot { animation: none; }
+}
+
+/* Режим «стекло»: доска подчиняется общим токенам скруглений проекта.
+   Колонки не трогаем — их рамка и подложка кодируют этап (янтарь/зелень). */
+[data-glass="on"] :is(.task-board, .task-column, .task-card, .task-archive-card, .task-tabs, .task-dropzone-inner, .task-undo-toast) {
+  border-radius: var(--lg-r-panel);
+}
+[data-glass="on"] :is(.task-card, .task-archive-card) {
+  border-color: var(--lg-border);
+  background-image: none;
+  background-color: var(--lg-chip);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+  backdrop-filter: blur(10px) saturate(1.4);
+}
+[data-glass="on"] :is(.task-count, .task-badge, .task-quick, .task-archive-state, .task-tabs .task-tab) {
+  border-radius: var(--lg-r-tile);
 }

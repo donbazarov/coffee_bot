@@ -3090,7 +3090,7 @@ function setView(name) {
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar') loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); renderTaskCategories(); ensureControlSelection(); }
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -8228,10 +8228,10 @@ const TASK_UNDO_MS = 5500;
 const tasksState = {
   mode: 'board',        // board | archive
   assignee: 'all',      // all | mine | shared
-  category: 'all',      // all | <код категории>
+  category: 'all',      // all | none | <код категории>
   mobileStatus: 'todo', // какой этап открыт на узком экране
   items: [], counts: null, categories: [], assignees: null,
-  canManage: false,
+  canManage: false, autoArchiveDays: 1,
 };
 
 let taskUndo = null;      // { task, timer } — что можно вернуть кнопкой «Отменить»
@@ -8254,16 +8254,52 @@ function taskBadgeMarkup(text, color) {
   return `<span class="task-badge" style="--task-color: ${escapeHtml(color)}">${escapeHtml(text)}</span>`;
 }
 
+/* Время выполнения (ЧЧ:ММ) — для бейджа «ВЫПОЛНЕНО · 07:45». */
+function taskClock(value) {
+  try {
+    return new Date(value).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  } catch (error) {
+    return '';
+  }
+}
+
+/* Дедлайн карточки: сегодня — «Дедлайн: 14:00», иначе — «Дедлайн: 16.11 14:00».
+   Просрочку считаем по локальному времени смены, а не по UTC сервера. */
+function taskDueInfo(task) {
+  if (!task.due_date) return null;
+  const parts = String(task.due_date).split('-');
+  if (parts.length !== 3) return null;
+  const due = new Date(`${task.due_date}T${task.due_time || '23:59'}`);
+  if (Number.isNaN(due.getTime())) return null;
+  const now = new Date();
+  const time = task.due_time ? ` ${task.due_time}` : '';
+  const isToday = due.toDateString() === now.toDateString();
+  const label = isToday
+    ? `Дедлайн:${time || ' до конца дня'}`
+    : `Дедлайн: ${parts[2]}.${parts[1]}${time}`;
+  const open = task.status !== 'done' && !String(task.status).startsWith('archived') && !task.is_deleted;
+  return { label, overdue: open && due.getTime() < now.getTime() };
+}
+
 /* Карточка: бейджи (категория + приоритет), название, мета-подвал и быстрые
    кнопки перевода статуса — на узком экране они видны всегда (см. app.css). */
 function taskCardMarkup(task) {
   const stage = TASK_STAGE[task.status] || TASK_STAGE.todo;
-  const badges = [taskBadgeMarkup(`#${task.category_label}`, task.category_color)];
+  const done = task.status === 'done';
+  const badges = [task.category_label
+    ? taskBadgeMarkup(`#${task.category_label}`, task.category_color)
+    : '<span class="task-badge is-no-category">БЕЗ КАТЕГОРИИ</span>'];
   if (task.priority !== 'normal') {
     badges.push(`<span class="task-badge is-priority-${escapeHtml(task.priority)}">${escapeHtml(TASK_PRIORITY_LABELS[task.priority] || '')}</span>`);
   }
+  if (task.status === 'in_progress') badges.push('<span class="task-badge is-stage-progress">В ПРОЦЕССЕ</span>');
+  if (done) badges.push(`<span class="task-badge is-stage-done">ВЫПОЛНЕНО${task.completed_at ? ` · ${escapeHtml(taskClock(task.completed_at))}` : ''}</span>`);
   if (task.assignee.type === 'all') badges.push('<span class="task-badge is-shared">ДЛЯ ВСЕХ</span>');
-  const metas = (task.meta || []).slice(0, 2).map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('');
+  const due = taskDueInfo(task);
+  const metas = [
+    due ? `<span class="task-meta-item${due.overdue ? ' is-overdue' : ''}"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>` : '',
+    ...(task.meta || []).slice(0, 2).map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`),
+  ].join('');
   const who = task.assignee.type === 'role'
     ? task.assignee.role_label
     : (task.assignee.name || task.author_name || 'Общая');
@@ -8282,7 +8318,7 @@ function taskCardMarkup(task) {
       <div class="task-card-badges">${badges.join('')}</div>
       ${task.can_edit ? '<span class="task-grip" aria-hidden="true"><svg class="icon"><use href="#i-drag"></use></svg></span>' : ''}
     </header>
-    <p class="task-card-title">${escapeHtml(task.title)}</p>
+    <p class="task-card-title${done ? ' is-done' : ''}">${escapeHtml(task.title)}</p>
     ${task.description ? `<p class="task-card-note">${escapeHtml(task.description.slice(0, 160))}</p>` : ''}
     <footer class="task-card-foot">
       <div class="task-card-meta">${metas || `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg>${escapeHtml(who)}</span>`}</div>
@@ -8303,6 +8339,11 @@ function renderTaskChips() {
     const value = Number((counts.by_category || {})[item.code] || 0);
     chips.push(`<button class="chip ${tasksState.category === item.code ? 'is-selected' : ''}" type="button" data-task-category="${escapeHtml(item.code)}" style="--task-color: ${escapeHtml(item.color)}"><i class="task-pip"></i>#${escapeHtml(item.label)} <b>${value}</b></button>`);
   });
+  // Категории может не быть вовсе — такие задачи живут с меткой «Без категории».
+  const empty = Number((counts.by_category || {})[''] || 0);
+  if (empty) {
+    chips.push(`<button class="chip ${tasksState.category === 'none' ? 'is-selected' : ''}" type="button" data-task-category="none" style="--task-color: var(--muted)"><i class="task-pip"></i>Без категории <b>${empty}</b></button>`);
+  }
   node.innerHTML = chips.join('');
 }
 
@@ -8324,15 +8365,56 @@ function renderTaskArchive() {
     return;
   }
   node.innerHTML = tasksState.items.length
-    ? tasksState.items.map((task) => `
-      <article class="task-archive-card" data-task-open="${task.id}" tabindex="0" role="button">
-        <div class="task-archive-top">${taskBadgeMarkup('#' + task.category_label, task.category_color)}
-          <span class="task-archive-state ${task.status === 'archived_done' ? 'is-done' : 'is-cancelled'}">${task.status === 'archived_done' ? 'ВЫПОЛНЕНО' : 'ОТМЕНЕНО'}</span>
+    ? tasksState.items.map((task) => {
+      // Удалённая задача тоже живёт в архиве — до восстановления или до срока.
+      const state = task.is_deleted
+        ? '<span class="task-archive-state is-deleted">УДАЛЕНО</span>'
+        : (task.status === 'archived_done'
+          ? '<span class="task-archive-state is-done">ВЫПОЛНЕНО</span>'
+          : '<span class="task-archive-state is-cancelled">ОТМЕНЕНО</span>');
+      const due = taskDueInfo(task);
+      const meta = [
+        task.completed_name || task.author_name || '',
+        task.completed_at ? taskStamp(task.completed_at) : '',
+        due ? due.label : '',
+      ].filter(Boolean).join(' · ');
+      return `
+      <article class="task-archive-card${task.is_deleted ? ' is-deleted' : ''}" data-task-open="${task.id}" tabindex="0" role="button">
+        <div class="task-archive-top">${task.category_label ? taskBadgeMarkup('#' + task.category_label, task.category_color) : '<span class="task-badge is-no-category">БЕЗ КАТЕГОРИИ</span>'}
+          ${state}
         </div>
         <p class="task-card-title">${escapeHtml(task.title)}</p>
-        <p class="task-archive-meta">${escapeHtml(task.completed_name || task.author_name || '')}${task.completed_at ? ` · ${escapeHtml(taskStamp(task.completed_at))}` : ''}</p>
-      </article>`).join('')
+        <p class="task-archive-meta">${escapeHtml(meta)}</p>
+      </article>`;
+    }).join('')
     : '<p class="empty-state">В архиве пока пусто</p>';
+}
+
+/* Подпись колонки «Готово»: сколько задача ждёт здесь до авто-архива. */
+function renderTaskDoneHint() {
+  const title = document.querySelector('.task-column[data-task-status="done"] .task-column-title');
+  if (!title) return;
+  let hint = title.querySelector('.task-stage-hint');
+  if (!hint) {
+    hint = document.createElement('span');
+    hint.className = 'task-stage-hint';
+    title.appendChild(hint);
+  }
+  const days = Number(tasksState.autoArchiveDays || 0);
+  hint.textContent = days > 0 ? `в архив через ${days} дн.` : 'архив вручную';
+}
+
+/* Категории нужны и панели управления: туда можно зайти, не открывая доску. */
+async function loadTaskCategories() {
+  try {
+    const data = await api('/api/tasks/categories');
+    tasksState.categories = data.categories || [];
+  } catch (error) {
+    showToast(error.message);
+  }
+  renderTaskCategories();
+  renderTaskChips();
+  return tasksState.categories;
 }
 
 function syncTaskModes() {
@@ -8342,9 +8424,6 @@ function syncTaskModes() {
   document.querySelectorAll('#tasks-assignee [data-task-assignee]').forEach((button) => {
     button.classList.toggle('is-selected', button.dataset.taskAssignee === tasksState.assignee);
   });
-  // В архиве фильтр адресации не нужен: там уже всё, что доступно сотруднику.
-  const assignee = document.querySelector('#tasks-assignee');
-  if (assignee) assignee.hidden = tasksState.mode === 'archive';
 }
 
 function renderTasks() {
@@ -8367,6 +8446,7 @@ function renderTasks() {
       : '<p class="task-empty"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg>Нет активных задач<small>Перетащите задачу сюда</small></p>';
   });
   renderTaskArchive();
+  renderTaskDoneHint();
   const status = document.querySelector('#tasks-status');
   if (status) {
     const counts = tasksState.counts || {};
@@ -8394,6 +8474,7 @@ function applyTaskPayload(data) {
   tasksState.counts = data.counts || null;
   tasksState.categories = data.categories || [];
   tasksState.canManage = Boolean(data.can_manage_categories);
+  if (data.auto_archive_days != null) tasksState.autoArchiveDays = Number(data.auto_archive_days) || 0;
 }
 
 async function loadTasks() {
@@ -8557,11 +8638,21 @@ async function archiveTask(task, status) {
 function renderTaskCategoryPicker(selected) {
   const node = document.querySelector('#task-category-picker');
   if (!node) return;
-  node.innerHTML = (tasksState.categories || []).map((item) => `
+  const options = (tasksState.categories || []).map((item) => `
     <label class="task-category-option">
       <input type="radio" name="category_code" value="${escapeHtml(item.code)}"${item.code === selected ? ' checked' : ''}>
       <span style="--task-color: ${escapeHtml(item.color)}"><i class="task-pip"></i>#${escapeHtml(item.label)}</span>
-    </label>`).join('');
+    </label>`);
+  // Категорий может не быть вовсе — тогда задача создаётся без категории.
+  options.push(`
+    <label class="task-category-option is-none">
+      <input type="radio" name="category_code" value=""${selected ? '' : ' checked'}>
+      <span>Без категории</span>
+    </label>`);
+  if (tasksState.canManage) {
+    options.push('<button class="task-category-add" type="button" id="task-category-quick-add">+ Категория</button>');
+  }
+  node.innerHTML = options.join('');
 }
 
 function syncTaskAssigneeRows() {
@@ -8601,6 +8692,8 @@ async function openTaskDialog(task = null) {
     form.elements.meta_info.value = (task.meta || []).join('\n');
     form.elements.priority.value = task.priority;
     form.elements.assignee_type.value = task.assignee.type;
+    form.elements.due_date.value = task.due_date || '';
+    form.elements.due_time.value = task.due_time || '';
     if (task.assignee.role) form.elements.assignee_role.value = task.assignee.role;
     if (task.assignee.user_id) form.elements.assignee_user_id.value = String(task.assignee.user_id);
   }
@@ -8622,6 +8715,8 @@ async function submitTaskForm(event) {
     priority: form.elements.priority.value,
     assignee_type: form.elements.assignee_type.value,
     category_code: picked ? picked.value : '',
+    due_date: form.elements.due_date.value,
+    due_time: form.elements.due_time.value,
   };
   if (!form.elements.status.disabled) payload.status = form.elements.status.value;
   if (payload.assignee_type === 'role') payload.assignee_role = form.elements.assignee_role.value;
@@ -8652,15 +8747,19 @@ function openTaskViewDialog(taskId) {
   const body = document.querySelector('#task-view-body');
   if (!task || !dialog || !body) return;
   const archivedDone = task.status === 'archived_done';
+  const due = taskDueInfo(task);
+  const state = task.is_deleted
+    ? '<span class="task-archive-state is-deleted">УДАЛЕНО</span>'
+    : `<span class="task-archive-state ${archivedDone ? 'is-done' : 'is-cancelled'}">${archivedDone ? 'ВЫПОЛНЕНО' : 'ОТМЕНЕНО'}</span>`;
   body.innerHTML = `
     <div class="task-view-head">
-      ${taskBadgeMarkup('#' + task.category_label, task.category_color)}
-      <span class="task-archive-state ${archivedDone ? 'is-done' : 'is-cancelled'}">${archivedDone ? 'ВЫПОЛНЕНО' : 'ОТМЕНЕНО'}</span>
+      ${task.category_label ? taskBadgeMarkup('#' + task.category_label, task.category_color) : '<span class="task-badge is-no-category">БЕЗ КАТЕГОРИИ</span>'}
+      ${state}
       ${task.priority !== 'normal' ? `<span class="task-badge is-priority-${escapeHtml(task.priority)}">${escapeHtml(TASK_PRIORITY_LABELS[task.priority] || '')}</span>` : ''}
     </div>
     <h3 class="task-view-title">${escapeHtml(task.title)}</h3>
     ${task.description ? `<p class="task-view-text">${escapeHtml(task.description)}</p>` : ''}
-    ${(task.meta || []).length ? `<div class="task-view-meta">${task.meta.map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('')}</div>` : ''}
+    ${(task.meta || []).length || due ? `<div class="task-view-meta">${due ? `<span class="task-meta-item${due.overdue ? ' is-overdue' : ''}"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>` : ''}${task.meta.map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('')}</div>` : ''}
     <dl class="task-view-facts">
       <div><dt>Автор</dt><dd>${escapeHtml(task.author_name || '—')}</dd></div>
       <div><dt>Кому</dt><dd>${escapeHtml(task.assignee.type === 'all' ? 'Всем' : (task.assignee.role_label || task.assignee.name || '—'))}</dd></div>
@@ -8672,6 +8771,9 @@ function openTaskViewDialog(taskId) {
     const button = document.querySelector(selector);
     if (button) button.hidden = !task.can_edit;
   });
+  // Удалённую задачу возвращаем из мусора, архивную — просто на доску.
+  const restore = document.querySelector('#task-view-restore');
+  if (restore) restore.textContent = task.is_deleted ? 'Восстановить на доску' : 'Вернуть на доску';
   dialog.dataset.taskId = String(task.id);
   dialog.showModal();
 }
@@ -8902,7 +9004,9 @@ function setupTasks() {
   if (!view || tasksBound) return;
   tasksBound = true;
 
-  view.addEventListener('click', async (event) => {
+  // Делегированный клик — на документе, как у остальных модулей проекта:
+  // кнопки категорий живут в панели управления, а не только на доске.
+  document.addEventListener('click', async (event) => {
     const tab = event.target.closest('[data-task-tab]');
     if (tab) { tasksState.mobileStatus = tab.dataset.taskTab; renderTasks(); return; }
 
@@ -8955,7 +9059,10 @@ function setupTasks() {
       } catch (error) { showToast(error.message); }
       return;
     }
-    if (event.target.closest('#tasks-category-add')) { openTaskCategoryDialog(null); return; }
+    if (event.target.closest('#tasks-category-add') || event.target.closest('#task-category-quick-add')) {
+      openTaskCategoryDialog(null);
+      return;
+    }
 
     const open = event.target.closest('[data-task-open]');
     if (open) { openTaskViewDialog(open.dataset.taskOpen); return; }
@@ -9037,11 +9144,13 @@ function setupTasks() {
     const dialog = document.querySelector('#task-view-dialog');
     const task = taskById(dialog ? dialog.dataset.taskId : 0);
     if (!task) return;
+    // Удалённую возвращаем из мусора, архивную — переводим на первый этап.
+    const payload = task.is_deleted ? { is_deleted: false, status: 'todo' } : { status: 'todo' };
     try {
-      await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'todo' }) });
+      await api(`/api/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
       dialog?.close();
       await loadTaskArchive();
-      showToast('Задача возвращена на доску');
+      showToast(task.is_deleted ? 'Задача восстановлена' : 'Задача возвращена на доску');
     } catch (error) { showToast(error.message); }
   });
   document.querySelector('#task-view-delete')?.addEventListener('click', async () => {
@@ -9069,6 +9178,16 @@ function setupTasks() {
   }
   document.querySelector('#task-undo-btn')?.addEventListener('click', restoreTaskAfterUndo);
   document.querySelector('#task-undo-close')?.addEventListener('click', hideTaskUndo);
+
+  // Закрытие — только кнопками .dialog-close (как в остальных диалогах проекта):
+  // клик по краю окна не должен выбрасывать заполненную форму.
+  ['#task-dialog', '#task-view-dialog', '#task-category-dialog'].forEach((selector) => {
+    const dialog = document.querySelector(selector);
+    if (!dialog) return;
+    dialog.querySelectorAll('.dialog-close').forEach((button) => {
+      button.addEventListener('click', () => dialog.close());
+    });
+  });
 }
 
 /* --- Панель управления: навигация по модулям и вкл/выкл ------------------- */
