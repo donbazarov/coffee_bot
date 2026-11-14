@@ -1652,19 +1652,19 @@ def evaluation_analytics(_: dict[str, Any] = Depends(require_manager)):
 
 # --- Аналитика команды и качества (дашборд «Аналитика команды») --------------- #
 
-@app.get("/api/analytics/team-overview")
+@app.get("/api/reports/team-overview")
 def analytics_team_overview(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
     """Тепловая карта навыков команды: средние по веткам, активность и охват."""
     return analytics.team_overview(engine, days)
 
 
-@app.get("/api/analytics/drinks-quality")
+@app.get("/api/reports/drinks-quality")
 def analytics_drinks_quality(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
     """Зоны риска по напиткам, проблемные параметры и чистота по точкам."""
     return analytics.drinks_quality(engine, days)
 
 
-@app.get("/api/analytics/shifts-report")
+@app.get("/api/reports/shifts-report")
 async def analytics_shifts_report(
     year: int,
     month: int,

@@ -738,7 +738,7 @@ function renderEvaluationAnalytics(data) {
 }
 
 /* --- Аналитика команды и качества (дашборд наставника) ------------------
-   Три сводки бэкенда (/api/analytics/*): тепловая карта навыков, зоны риска
+   Три сводки бэкенда (/api/reports/*): тепловая карта навыков, зоны риска
    по напиткам и чистоте, выработка часов по точкам. Без сторонних графических
    библиотек — только таблицы, чипы и CSS-прогресс-бары. */
 
@@ -803,7 +803,7 @@ async function loadTeamOverview() {
     analyticsState.team = null;
   }
   try {
-    const data = await api(`/api/analytics/team-overview?days=${analyticsState.days}`);
+    const data = await api(`/api/reports/team-overview?days=${analyticsState.days}`);
     analyticsState.team = data;
     renderTeamOverview();
     // Кэш пишем после успешного рендера: битые данные в него не попадут.
@@ -829,7 +829,7 @@ async function loadDrinksQuality() {
     analyticsState.drinks = null;
   }
   try {
-    const data = await api(`/api/analytics/drinks-quality?days=${analyticsState.days}`);
+    const data = await api(`/api/reports/drinks-quality?days=${analyticsState.days}`);
     analyticsState.drinks = data;
     renderDrinksQuality();
     syncCache(cacheKey, data);
@@ -854,7 +854,7 @@ async function loadShiftsReport() {
     analyticsState.shifts = null;
   }
   try {
-    const data = await api(`/api/analytics/shifts-report?year=${analyticsState.year}&month=${analyticsState.month}`);
+    const data = await api(`/api/reports/shifts-report?year=${analyticsState.year}&month=${analyticsState.month}`);
     analyticsState.shifts = data;
     renderShiftsReport();
     syncCache(cacheKey, data);
