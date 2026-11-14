@@ -252,3 +252,20 @@ SQLite. На старте приложение само создаёт недо�
 python -c "from bot.web.app import app"     # импорт без висячих зависимостей
 python -m compileall -q bot run.py          # синтаксис
 ```
+
+## Окружение Windows (PowerShell 7)
+
+Терминал VS Code закреплён в `.vscode/settings.json`: профиль `PowerShell` — это
+pwsh 7 (через `source`, путь к exe не зашит), включена shell integration.
+
+Чтобы pwsh не показывал кириллицу как `╨╛╤В╨┤...`, в пользовательский профиль
+(`$PROFILE.CurrentUserAllHosts`) добавлен блок с кодировками UTF-8. Повторить на
+другой машине (идемпотентно, повторный запуск ничего не дублирует):
+
+```powershell
+pwsh -NoProfile -File .\setup_powershell_utf8.ps1
+```
+
+Проверка после открытия нового терминала: `[Console]::OutputEncoding.WebName`
+даёт `utf-8`, а `git log -1 --pretty=%s` на этом репозитории читается по-русски.
+
