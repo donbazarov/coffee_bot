@@ -43,7 +43,7 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import modules, page_links
+from bot.web import maintenance, modules, page_links
 from bot.web.deps import require_manager_csrf, require_user
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -53,10 +53,11 @@ kb_router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 router = kb_router
 
 # Системные разделы: их ключи (`kb_pages.category`) привязаны к другим модулям
-# (зерно — оценки/рецепты, напитки — описание напитков), поэтому ключи beans/drinks
-# фиксированы, меняется только подпись. Прочие разделы — кастомные; их список
-# настраивается в панели управления (`SECTIONS`, формат `ключ=Название`).
-SYSTEM_SECTIONS = (("beans", "Зерно"), ("drinks", "Напитки"))
+# (зерно — оценки/рецепты, напитки — описание напитков, оборудование — остатки
+# и журнал ТО), поэтому ключи beans/drinks/equipment фиксированы, меняется
+# только подпись. Прочие разделы — кастомные; их список настраивается в панели
+# управления (`SECTIONS`, формат `ключ=Название`).
+SYSTEM_SECTIONS = (("beans", "Зерно"), ("drinks", "Напитки"), ("equipment", "Оборудование"))
 SYSTEM_SECTION_KEYS = tuple(key for key, _ in SYSTEM_SECTIONS)
 # Разделы по умолчанию для уже работающих баз: прежние «вики» и «стандарты»
 # остаются доступными, поэтому миграция данных не нужна.
@@ -544,6 +545,11 @@ def _page_summary(row: dict[str, Any]) -> dict[str, Any]:
         reference = {
             "type": "drinks", "category": row["drink_category"], "is_active": row["drink_active"],
         }
+    elif row["category"] == "equipment" and row.get("part_name") is not None:
+        reference = {
+            "type": "equipment", "name": row["part_name"], "model": row["part_model"],
+            "category": row["part_category"],
+        }
     return {
         "id": row["id"], "parent_id": row["parent_id"], "title": row["title"],
         "slug": row["slug"], "category": row["category"], "author_id": row["author_id"],
@@ -579,11 +585,13 @@ def list_pages(engine: Engine, category: str | None = None, query: str | None = 
             SELECT p.id, p.parent_id, p.title, p.slug, p.category, p.tags, p.author_id, p.updated_at,
                    u.display_name AS author_name,
                    b.name AS bean_name, b.roast_type, b.pantone_color, b.is_active AS bean_active,
-                   d.category AS drink_category, d.is_active AS drink_active
+                   d.category AS drink_category, d.is_active AS drink_active,
+                   e.name AS part_name, e.model AS part_model, e.category_code AS part_category
             FROM kb_pages p
             LEFT JOIN users u ON u.id = p.author_id
             LEFT JOIN coffee_beans b ON b.page_id = p.id
             LEFT JOIN menu_drinks d ON d.page_id = p.id
+            LEFT JOIN equipment_parts e ON e.page_id = p.id
             WHERE (:category IS NULL OR p.category = :category)
             ORDER BY p.category ASC, p.title COLLATE NOCASE ASC
         """), {"category": category}).mappings().all()
@@ -605,21 +613,21 @@ def get_page(engine: Engine, page_id: int) -> dict[str, Any] | None:
         if row is None:
             return None
         page = dict(row)
+        page["bean"] = None
+        page["drink"] = None
+        page["part"] = None
         if page["category"] == "beans":
             bean = connection.execute(
                 text("SELECT * FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id}
             ).mappings().first()
             page["bean"] = dict(bean) if bean else None
-            page["drink"] = None
         elif page["category"] == "drinks":
             drink = connection.execute(
                 text("SELECT * FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id}
             ).mappings().first()
             page["drink"] = dict(drink) if drink else None
-            page["bean"] = None
-        else:
-            page["bean"] = None
-            page["drink"] = None
+        elif page["category"] == "equipment":
+            page["part"] = maintenance.part_for_page(connection, page_id)
         page["children"] = int(connection.execute(
             text("SELECT COUNT(*) FROM kb_pages WHERE parent_id = :id"), {"id": page_id}
         ).scalar_one())
@@ -657,6 +665,8 @@ def create_page(engine: Engine, author_id: int, payload: dict[str, Any]) -> int:
             _upsert_bean(connection, page_id, title, payload)
         elif category == "drinks":
             _upsert_drink(connection, page_id, title, payload)
+        elif category == "equipment":
+            maintenance.upsert_part(connection, page_id, title, payload)
     return page_id
 
 
@@ -709,12 +719,19 @@ def update_page(engine: Engine, page_id: int, payload: dict[str, Any]) -> bool:
         if category == "beans":
             _upsert_bean(connection, page_id, title, payload)
             connection.execute(text("DELETE FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id})
+            maintenance.delete_parts_for_page(connection, page_id)
         elif category == "drinks":
             _upsert_drink(connection, page_id, title, payload)
             connection.execute(text("DELETE FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id})
+            maintenance.delete_parts_for_page(connection, page_id)
+        elif category == "equipment":
+            maintenance.upsert_part(connection, page_id, title, payload)
+            connection.execute(text("DELETE FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id})
+            connection.execute(text("DELETE FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id})
         else:
             connection.execute(text("DELETE FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id})
             connection.execute(text("DELETE FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id})
+            maintenance.delete_parts_for_page(connection, page_id)
     return True
 
 
@@ -728,6 +745,7 @@ def delete_page(engine: Engine, page_id: int) -> bool:
             return False
         connection.execute(text("DELETE FROM coffee_beans WHERE page_id = :page_id"), {"page_id": page_id})
         connection.execute(text("DELETE FROM menu_drinks WHERE page_id = :page_id"), {"page_id": page_id})
+        maintenance.delete_parts_for_page(connection, page_id)
         connection.execute(
             text("UPDATE kb_pages SET parent_id = :parent WHERE parent_id = :id"),
             {"parent": current["parent_id"], "id": page_id},

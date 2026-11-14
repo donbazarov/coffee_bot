@@ -3053,6 +3053,7 @@ function setView(name) {
         name === 'analytics' ? 'Аналитика команды' :
         name === 'announcements' ? 'Анонсы' :
         name === 'tasks' ? 'Задачи' :
+        name === 'maintenance' ? 'Тех. обслуживание' :
         name === 'kb' ? 'База знаний' :
         name === 'drinks' ? 'Описание напитков' :
         name === 'chat' ? 'Чат' :
@@ -3088,11 +3089,12 @@ function setView(name) {
   if (name === 'chat') window.NeftChat?.open();
   if (name === 'announcements') openAnnouncements();
   if (name === 'tasks') loadTasks();
+  if (name === 'maintenance') openMaintenance();
   if (name === 'kb') openKnowledgeBase();
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar') loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); ensureControlSelection(); }
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); loadMaintenanceAdmin(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -4630,8 +4632,9 @@ const KB_SECTIONS = [
   { key: 'standards', label: 'Стандарты', system: false },
   { key: 'beans', label: 'Зерно', system: true },
   { key: 'drinks', label: 'Напитки', system: true },
+  { key: 'equipment', label: 'Оборудование', system: true },
 ];
-const KB_SYSTEM_KEYS = ['beans', 'drinks'];
+const KB_SYSTEM_KEYS = ['beans', 'drinks', 'equipment'];
 const KB_CATEGORY_ALL = 'all';
 const KB_ROAST_LABELS = { espresso: 'Эспрессо', filter: 'Фильтр', omni: 'Омни' };
 
@@ -4678,6 +4681,9 @@ const kbState = {
   openCategories: new Set(),
   expandedLoaded: false,
   treeOpen: true,
+  // Категории запчастей для карточки раздела «Оборудование» (тянутся из модуля ТО).
+  partCategories: [],
+  partCategoriesLoaded: false,
 };
 
 /* Карусель страниц базы знаний: свайп/стрелки открывают соседнюю страницу из
@@ -4718,6 +4724,30 @@ function kbRenderCategorySelect() {
   else select.selectedIndex = 0;
 }
 
+/* Категории запчастей: селект в карточке «Оборудование». Источник — модуль ТО,
+   поэтому в БЗ нет ни одной захардкоженной категории. */
+async function kbLoadPartCategories() {
+  if (kbState.partCategoriesLoaded) return;
+  try {
+    const data = await api('/api/maintenance/categories');
+    kbState.partCategories = data.categories || [];
+  } catch (error) {
+    kbState.partCategories = [];
+  }
+  kbState.partCategoriesLoaded = true;
+  kbRenderPartCategories();
+}
+
+function kbRenderPartCategories() {
+  const select = document.querySelector('#kb-part-category');
+  if (!select) return;
+  const previous = select.value;
+  select.innerHTML = ['<option value="">Без категории</option>']
+    .concat(kbState.partCategories.map((item) => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.label)}</option>`))
+    .join('');
+  if (previous === '' || kbState.partCategories.some((item) => item.code === previous)) select.value = previous;
+}
+
 function kbPantoneHex(value) {
   if (typeof value === 'string' && /^#[0-9a-f]{3,8}$/i.test(value.trim())) return value.trim();
   const found = KB_PANTONE.find((item) => item.value === value);
@@ -4734,6 +4764,10 @@ function kbReferenceBadge(reference) {
   }
   if (reference.type === 'drinks') {
     return `<span class="kb-ref kb-ref-plain">${escapeHtml(reference.category || '')}</span>`;
+  }
+  if (reference.type === 'equipment') {
+    const label = reference.model || reference.category || '';
+    return label ? `<span class="kb-ref kb-ref-plain">${escapeHtml(label)}</span>` : '';
   }
   return '';
 }
@@ -5032,6 +5066,26 @@ function kbDrinkMarkup(drink) {
   return `<div class="kb-fields">${kbFieldMarkup('Категория', drink.category)}${kbFieldMarkup('Технологическая карта (ТТК)', drink.ttk)}${kbFieldMarkup('Состав', drink.ingredients)}${kbFieldMarkup('Описание', drink.description)}</div>${serveBlock}${status}`;
 }
 
+/* Карточка запчасти (раздел «Оборудование»): реквизиты, лимит остатка и QR-код.
+   QR рисует сервер (`/api/maintenance/parts/<id>/qr.svg`) — картинка с тем же
+   URL кешируется браузером, отдельный JS-энкодер не нужен. */
+function kbPartMarkup(part) {
+  if (!part) return '';
+  const interval = part.replacement_interval_days
+    ? `каждые ${Number(part.replacement_interval_days)} дн.`
+    : 'по мере износа';
+  const purchase = part.purchase_url
+    ? `<p class="kb-field-value"><a class="neft-page-link" href="${escapeHtml(part.purchase_url)}" target="_blank" rel="noopener"><svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg>Где заказать</a></p>`
+    : '';
+  const qr = part.id
+    ? `<div class="kb-part-qr"><img src="/api/maintenance/parts/${Number(part.id)}/qr.svg" alt="QR-код запчасти" loading="lazy" width="132" height="132"><small>QR для маркировки: реквизиты и лимит остатка</small></div>`
+    : '';
+  const swatch = part.category_color
+    ? `<i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color)}"></i>`
+    : '';
+  return `<div class="kb-fields">${kbFieldMarkup('Категория', part.category_label)}${kbFieldMarkup('Модель', part.model)}${kbFieldMarkup('Артикул', part.article)}${kbFieldMarkup('Периодичность замены', interval)}${kbFieldMarkup('Минимальный остаток', String(part.min_stock ?? 0))}</div>${purchase}<div class="kb-part-foot">${qr}<span class="kb-badge kb-badge-muted">${swatch}${escapeHtml(part.category_label || 'Без категории')}</span></div>`;
+}
+
 /* --- Рендер содержимого страницы -----------------------------------------
    Хранимый текст — Markdown с набором безопасных токенов форматирования,
    которые вставляет тулбар: **жирный**, *курсив*, «### » заголовок, списки
@@ -5255,6 +5309,7 @@ function renderKbPage() {
     body = kbBeanMarkup(page.bean)
       + '<div class="kb-recipe-history" id="kb-recipe-history"><p class="kb-empty">Загрузка истории…</p></div>';
   } else if (page.category === 'drinks') body = kbDrinkMarkup(page.drink);
+  else if (page.category === 'equipment') body = kbPartMarkup(page.part);
   const content = kbBodyMarkup(page);
   let outgoing = null;
   if (animate) {
@@ -5594,6 +5649,8 @@ function openKbDialog(page) {
   kbRenderPantone();
   form.reset();
   kbRenderCategorySelect();
+  kbRenderPartCategories();
+  kbLoadPartCategories();
   kbResetDrinkPhotos();
   clearDraftNotice(form);
   const errorNode = document.querySelector('#kb-form-error');
@@ -5646,6 +5703,14 @@ function openKbDialog(page) {
       kbSetDrinkPhoto('serve_takeaway', page.drink.serve_takeaway_photo);
       form.elements.drink_description.value = page.drink.description || '';
       form.elements.is_active.checked = Number(page.drink.is_active) !== 0;
+    } else if (page.category === 'equipment') {
+      const part = page.part || {};
+      form.elements.part_category_code.value = part.category_code || '';
+      form.elements.part_model.value = part.model || '';
+      form.elements.part_article.value = part.article || '';
+      form.elements.part_interval.value = part.replacement_interval_days != null ? String(part.replacement_interval_days) : '';
+      form.elements.part_min_stock.value = part.min_stock != null ? String(part.min_stock) : '1';
+      form.elements.part_purchase_url.value = part.purchase_url || '';
     } else {
       form.elements.content_json.value = page.content_json || '';
     }
@@ -5705,6 +5770,16 @@ async function submitKbForm(event) {
       serve_here_photo: form.elements.serve_here_photo.value || null,
       serve_takeaway_photo: form.elements.serve_takeaway_photo.value || null,
       is_active: form.elements.is_active.checked,
+    };
+  } else if (category === 'equipment') {
+    payload.part = {
+      name: title,
+      category_code: form.elements.part_category_code.value || null,
+      model: form.elements.part_model.value.trim(),
+      article: form.elements.part_article.value.trim(),
+      replacement_interval_days: form.elements.part_interval.value ? Number(form.elements.part_interval.value) : null,
+      min_stock: form.elements.part_min_stock.value ? Number(form.elements.part_min_stock.value) : 1,
+      purchase_url: form.elements.part_purchase_url.value.trim(),
     };
   } else {
     payload.content_json = await kbCollectContent();
@@ -9254,6 +9329,548 @@ function controlIsNarrow() {
 }
 
 /* Подсвечивает активный пункт списка и обновляет бейджи «Вкл»/«Выкл». */
+/* --- Тех. обслуживание ---------------------------------------------------
+   Точки и категории — справочники в БД: колонки остатков и фильтры строятся
+   из ответа `/api/locations`, в коде нет ни одной захардкоженной точки.
+   Авто-задачи (закупка/замена) создаёт сервер — здесь только отображение. */
+
+const maintenanceState = {
+  tab: 'overview',
+  canManage: managerRole,
+  locations: [],
+  parts: [],
+  partsLoaded: false,
+  categories: [],
+  overview: null,
+  stock: null,
+  logs: [],
+  stats: null,
+  filter: 'all',
+  loading: false,
+};
+
+const MAINTENANCE_STATUS = {
+  overdue: 'Просрочено',
+  soon: 'Скоро',
+  ok: 'В порядке',
+  new: 'Не обслуживалось',
+  none: 'По мере износа',
+};
+
+function maintenanceStatusLabel(status) {
+  return MAINTENANCE_STATUS[status] || status;
+}
+
+function maintenanceDate(value) {
+  if (!value) return '—';
+  const parts = String(value).slice(0, 10).split('-');
+  return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : String(value);
+}
+
+function maintenanceToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function maintenanceSetStatus(message) {
+  const node = document.querySelector('#maintenance-status');
+  if (node) node.textContent = message || '';
+}
+
+function maintenanceSetTab(tab) {
+  maintenanceState.tab = tab;
+  document.querySelectorAll('#maintenance-tabs [data-maintenance-tab]').forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.maintenanceTab === tab);
+  });
+  document.querySelectorAll('[data-maintenance-panel]').forEach((panel) => {
+    panel.hidden = panel.dataset.maintenancePanel !== tab;
+  });
+  loadMaintenance();
+}
+
+function openMaintenance() {
+  maintenanceSetTab(maintenanceState.tab || 'overview');
+}
+
+async function maintenanceEnsureLocations(force = false) {
+  if (maintenanceState.locations.length && !force) return maintenanceState.locations;
+  const data = await api('/api/locations');
+  maintenanceState.locations = data.locations || [];
+  return maintenanceState.locations;
+}
+
+async function maintenanceEnsureParts(force = false) {
+  if (maintenanceState.parts.length && !force) return maintenanceState.parts;
+  const data = await api('/api/maintenance/parts');
+  maintenanceState.parts = data.parts || [];
+  return maintenanceState.parts;
+}
+
+async function loadMaintenance() {
+  if (maintenanceState.loading) return;
+  maintenanceState.loading = true;
+  maintenanceSetStatus('Загрузка…');
+  try {
+    await maintenanceEnsureLocations();
+    if (maintenanceState.tab === 'overview') {
+      maintenanceState.overview = await api('/api/maintenance/overview');
+      renderMaintenanceOverview();
+    } else if (maintenanceState.tab === 'stock') {
+      maintenanceState.stock = await api('/api/maintenance/stock');
+      renderMaintenanceStock();
+    } else {
+      const data = await api('/api/maintenance/logs');
+      maintenanceState.logs = data.items || [];
+      maintenanceState.stats = data.stats || null;
+      renderMaintenanceLogs();
+    }
+    maintenanceSetStatus('');
+  } catch (error) {
+    maintenanceSetStatus(error.message);
+  } finally {
+    maintenanceState.loading = false;
+  }
+}
+
+function renderMaintenanceOverview() {
+  const list = document.querySelector('#maintenance-overview-list');
+  const summary = document.querySelector('#maintenance-summary');
+  if (!list || !summary) return;
+  const data = maintenanceState.overview;
+  if (!data) { list.innerHTML = ''; summary.innerHTML = ''; return; }
+  const counts = data.counts || {};
+  summary.innerHTML = ['overdue', 'soon', 'ok', 'new', 'none'].map((status) => `
+    <div class="maintenance-card is-${status}">
+      <span class="maintenance-card-label"><i class="maintenance-dot is-${status}"></i>${maintenanceStatusLabel(status)}</span>
+      <strong>${Number(counts[status] || 0)}</strong>
+    </div>`).join('');
+  const items = data.items || [];
+  if (!items.length) {
+    list.innerHTML = '<p class="empty-state">Каталог запчастей пуст. Заведите их в Базе знаний, раздел «Оборудование».</p>';
+    return;
+  }
+  const rows = items.map((item) => {
+    const due = item.next_due_date
+      ? `${maintenanceDate(item.next_due_date)}${item.days_left != null ? `<small>${item.days_left < 0 ? `просрочено на ${Math.abs(item.days_left)} дн.` : item.days_left === 0 ? 'сегодня' : `через ${item.days_left} дн.`}</small>` : ''}`
+      : '—';
+    return `<article class="maintenance-row is-${item.status}">
+      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(item.category_color || '#7b8794')}"></i><span><strong>${escapeHtml(item.name)}</strong>${item.model ? `<small>${escapeHtml(item.model)}</small>` : ''}</span></span>
+      <span>${escapeHtml(item.point_name)}</span>
+      <span>${item.replacement_interval_days ? `каждые ${Number(item.replacement_interval_days)} дн.` : 'по износу'}</span>
+      <span>${maintenanceDate(item.last_replaced)}</span>
+      <span class="maintenance-due">${due}</span>
+      <span class="maintenance-badge is-${item.status}">${maintenanceStatusLabel(item.status)}</span>
+    </article>`;
+  }).join('');
+  list.innerHTML = `<div class="maintenance-table" style="--maintenance-columns:minmax(180px,1.7fr) minmax(90px,.8fr) minmax(110px,.9fr) minmax(120px,1fr) minmax(150px,1.2fr) minmax(120px,.9fr)">
+    <div class="maintenance-head"><span>Запчасть</span><span>Точка</span><span>Периодичность</span><span>Последняя замена</span><span>Следующая</span><span>Статус</span></div>
+    ${rows}
+  </div>`;
+}
+
+function renderMaintenanceStock() {
+  const box = document.querySelector('#maintenance-stock-table');
+  if (!box) return;
+  const data = maintenanceState.stock;
+  if (!data) { box.innerHTML = ''; return; }
+  const locations = data.locations || [];
+  const parts = data.parts || [];
+  if (!locations.length) {
+    box.innerHTML = '<p class="empty-state">Нет активных точек — добавьте их в панели управления.</p>';
+    return;
+  }
+  if (!parts.length) {
+    box.innerHTML = '<p class="empty-state">Каталог пуст — заведите запчасти в разделе «Оборудование» БЗ.</p>';
+    return;
+  }
+  const canManage = maintenanceState.canManage;
+  const columns = `minmax(180px,1.7fr) 72px ${locations.map(() => 'minmax(76px,1fr)').join(' ')}`;
+  const head = `<div class="maintenance-head"><span>Запчасть</span><span>Мин.</span>${locations.map((item) => `<span>${escapeHtml(item.name)}</span>`).join('')}</div>`;
+  const rows = parts.map((part) => {
+    const quantities = part.quantities || {};
+    const cells = locations.map((location) => {
+      const has = Object.prototype.hasOwnProperty.call(quantities, location.code);
+      const value = has ? Number(quantities[location.code]) : null;
+      const low = has && value < Number(part.min_stock || 0);
+      const label = has ? String(value) : '—';
+      const cls = `maintenance-qty${low ? ' is-low' : ''}${has ? '' : ' is-empty'}`;
+      if (!canManage) return `<span class="${cls}">${label}</span>`;
+      return `<button class="${cls}" type="button" data-maintenance-stock="${part.part_id}:${escapeHtml(location.code)}" title="Изменить остаток">${label}</button>`;
+    }).join('');
+    return `<article class="maintenance-row">
+      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}"></i><span><strong>${escapeHtml(part.name)}</strong>${part.model ? `<small>${escapeHtml(part.model)}</small>` : ''}</span></span>
+      <span>${Number(part.min_stock || 0)}</span>${cells}
+    </article>`;
+  }).join('');
+  box.innerHTML = `<div class="maintenance-table" style="--maintenance-columns:${columns}">${head}${rows}</div>`;
+}
+
+function renderMaintenanceLogs() {
+  const box = document.querySelector('#maintenance-log-list');
+  const statsBox = document.querySelector('#maintenance-stats');
+  const filters = document.querySelector('#maintenance-log-filters');
+  if (!box) return;
+  const canManage = maintenanceState.canManage;
+  if (filters) {
+    filters.innerHTML = [`<button class="chip ${maintenanceState.filter === 'all' ? 'is-selected' : ''}" type="button" data-maintenance-filter="all">Все точки</button>`]
+      .concat(maintenanceState.locations.map((item) => `<button class="chip ${maintenanceState.filter === item.code ? 'is-selected' : ''}" type="button" data-maintenance-filter="${escapeHtml(item.code)}">${escapeHtml(item.name)}</button>`))
+      .join('');
+  }
+  const stats = maintenanceState.stats || {};
+  if (statsBox) {
+    statsBox.innerHTML = `
+      <div class="maintenance-stat"><strong>${Number(stats.total || 0)}</strong><small>всего замен</small></div>
+      <div class="maintenance-stat"><strong>${Number(stats.last_30_days || 0)}</strong><small>за 30 дней</small></div>
+      <div class="maintenance-stat"><strong>${Number(stats.last_90_days || 0)}</strong><small>за 90 дней</small></div>
+      <div class="maintenance-stat maintenance-stat-wide"><strong>${escapeHtml((stats.by_part || []).map((row) => `${row.label} · ${row.total}`).join(' · ') || '—')}</strong><small>чаще всего меняли</small></div>`;
+  }
+  const items = (maintenanceState.logs || []).filter(
+    (item) => maintenanceState.filter === 'all' || item.point_code === maintenanceState.filter);
+  if (!items.length) {
+    box.innerHTML = '<p class="empty-state">Записей пока нет. Кнопка «Записать замену» создаёт запись журнала и пересчитывает срок следующей замены.</p>';
+    return;
+  }
+  box.innerHTML = items.map((item) => `
+    <article class="maintenance-log">
+      <div class="maintenance-log-main">
+        <span class="maintenance-log-date">${maintenanceDate(item.replaced_at)}</span>
+        <span class="maintenance-log-part"><strong>${escapeHtml(item.part_name)}</strong>${item.part_model ? `<small>${escapeHtml(item.part_model)}</small>` : ''}</span>
+        <span class="maintenance-log-point">${escapeHtml(item.point_name)}</span>
+        <span class="maintenance-log-next">${item.next_due_date ? `следующая: ${maintenanceDate(item.next_due_date)}` : 'без срока'}</span>
+      </div>
+      ${item.comment ? `<p class="maintenance-log-comment">${escapeHtml(item.comment)}</p>` : ''}
+      <div class="maintenance-log-foot">
+        ${item.author ? `<span class="maintenance-log-author">${escapeHtml(item.author)}</span>` : ''}
+        ${item.photo_url ? `<a class="neft-page-link" href="${escapeHtml(item.photo_url)}" target="_blank" rel="noopener">Фото</a>` : ''}
+        ${canManage ? `<button class="text-button" type="button" data-maintenance-log-delete="${Number(item.id)}">Удалить</button>` : ''}
+      </div>
+    </article>`).join('');
+}
+
+function maintenanceFormError(nodeId, message) {
+  const node = document.querySelector(nodeId);
+  if (!node) { showToast(message); return; }
+  node.textContent = message;
+  node.hidden = false;
+}
+
+async function openMaintenanceLogDialog() {
+  const dialog = document.querySelector('#maintenance-log-dialog');
+  const form = document.querySelector('#maintenance-log-form');
+  if (!dialog || !form) return;
+  form.reset();
+  try {
+    const [locations, parts] = await Promise.all([maintenanceEnsureLocations(), maintenanceEnsureParts()]);
+    if (!locations.length || !parts.length) {
+      showToast('Сначала заведите точки и запчасти');
+      return;
+    }
+    form.elements.point_code.innerHTML = locations
+      .map((item) => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.name)}</option>`).join('');
+    form.elements.part_id.innerHTML = parts
+      .map((item) => `<option value="${Number(item.id)}">${escapeHtml(item.name)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</option>`).join('');
+    form.elements.replaced_at.value = maintenanceToday();
+    const error = document.querySelector('#maintenance-log-error');
+    if (error) error.hidden = true;
+    dialog.showModal();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function submitMaintenanceLog(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    point_code: form.elements.point_code.value,
+    part_id: Number(form.elements.part_id.value),
+    replaced_at: form.elements.replaced_at.value,
+    comment: form.elements.comment.value.trim(),
+  };
+  if (form.elements.next_due_date.value) payload.next_due_date = form.elements.next_due_date.value;
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    await api('/api/maintenance/logs', { method: 'POST', body: JSON.stringify(payload) });
+    document.querySelector('#maintenance-log-dialog')?.close();
+    showToast('Запись добавлена');
+    maintenanceState.overview = null;
+    if (maintenanceState.tab === 'logs') await loadMaintenance();
+    else maintenanceSetTab('logs');
+  } catch (error) {
+    maintenanceFormError('#maintenance-log-error', error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+function openMaintenanceStockDialog(key) {
+  const dialog = document.querySelector('#maintenance-stock-dialog');
+  const form = document.querySelector('#maintenance-stock-form');
+  if (!dialog || !form || !key) return;
+  const [partId, pointCode] = String(key).split(':');
+  const part = ((maintenanceState.stock && maintenanceState.stock.parts) || [])
+    .find((item) => String(item.part_id) === partId);
+  const point = maintenanceState.locations.find((item) => item.code === pointCode);
+  form.reset();
+  form.elements.point_code.value = pointCode;
+  form.elements.part_id.value = partId;
+  const current = part && Object.prototype.hasOwnProperty.call(part.quantities || {}, pointCode)
+    ? part.quantities[pointCode] : 0;
+  form.elements.quantity.value = String(current);
+  const title = document.querySelector('#maintenance-stock-title');
+  if (title) title.textContent = `${part ? part.name : 'Запчасть'} · ${point ? point.name : pointCode}`;
+  const error = document.querySelector('#maintenance-stock-error');
+  if (error) error.hidden = true;
+  dialog.showModal();
+}
+
+async function submitMaintenanceStock(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const payload = {
+    point_code: form.elements.point_code.value,
+    part_id: Number(form.elements.part_id.value),
+    quantity: Number(form.elements.quantity.value),
+  };
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    const data = await api('/api/maintenance/stock', { method: 'PATCH', body: JSON.stringify(payload) });
+    document.querySelector('#maintenance-stock-dialog')?.close();
+    maintenanceState.stock = data.matrix;
+    maintenanceState.overview = null;
+    renderMaintenanceStock();
+    const created = Number((data.automation || {}).purchase || 0) + Number((data.automation || {}).replacement || 0);
+    showToast(created ? `Остаток обновлён, создано задач: ${created}` : 'Остаток обновлён');
+  } catch (error) {
+    maintenanceFormError('#maintenance-stock-error', error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function deleteMaintenanceLog(logId) {
+  if (!window.confirm('Удалить запись журнала?')) return;
+  try {
+    const data = await api(`/api/maintenance/logs/${logId}`, { method: 'DELETE' });
+    maintenanceState.logs = data.items || [];
+    maintenanceState.stats = data.stats || null;
+    maintenanceState.overview = null;
+    renderMaintenanceLogs();
+    showToast('Запись удалена');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function setupMaintenance() {
+  const bind = (selector, handler, event = 'click') => {
+    const node = document.querySelector(selector);
+    if (!node || node.dataset.maintenanceBound) return;
+    node.dataset.maintenanceBound = '1';
+    node.addEventListener(event, handler);
+  };
+  bind('#maintenance-tabs', (event) => {
+    const button = event.target.closest('[data-maintenance-tab]');
+    if (button) maintenanceSetTab(button.dataset.maintenanceTab);
+  });
+  bind('#maintenance-stock-table', (event) => {
+    const button = event.target.closest('[data-maintenance-stock]');
+    if (button) openMaintenanceStockDialog(button.dataset.maintenanceStock);
+  });
+  bind('#maintenance-log-list', (event) => {
+    const button = event.target.closest('[data-maintenance-log-delete]');
+    if (button) deleteMaintenanceLog(Number(button.dataset.maintenanceLogDelete));
+  });
+  bind('#maintenance-log-filters', (event) => {
+    const chip = event.target.closest('[data-maintenance-filter]');
+    if (!chip) return;
+    maintenanceState.filter = chip.dataset.maintenanceFilter;
+    renderMaintenanceLogs();
+  });
+  bind('#maintenance-log-add', openMaintenanceLogDialog);
+  bind('#maintenance-log-form', submitMaintenanceLog, 'submit');
+  bind('#maintenance-stock-form', submitMaintenanceStock, 'submit');
+  bind('#maintenance-location-add', () => openMaintenanceLocationDialog(null));
+  bind('#maintenance-location-form', submitMaintenanceLocation, 'submit');
+  bind('#maintenance-locations', onMaintenanceLocationAction);
+  bind('#maintenance-category-add', () => openMaintenanceCategoryDialog(null));
+  bind('#maintenance-category-form', submitMaintenanceCategory, 'submit');
+  bind('#maintenance-categories', onMaintenanceCategoryAction);
+}
+
+/* --- Панель управления: точки и категории ТО ---------------------------- */
+
+async function loadMaintenanceAdmin() {
+  try {
+    const [locations, categories] = await Promise.all([
+      api('/api/locations'),
+      api('/api/maintenance/categories'),
+    ]);
+    maintenanceState.locations = locations.locations || [];
+    maintenanceState.categories = categories.categories || [];
+    renderMaintenanceLocations();
+    renderMaintenanceCategories();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function renderMaintenanceLocations() {
+  const node = document.querySelector('#maintenance-locations');
+  if (!node) return;
+  const items = maintenanceState.locations || [];
+  node.innerHTML = items.length ? items.map((item) => `
+    <article class="announcement-category">
+      <span class="category-swatch" style="--announcement-color:${item.is_active ? '#4cbfa9' : '#7b8794'}"></span>
+      <strong>${escapeHtml(item.name)}</strong>
+      <span class="category-flags">${escapeHtml(item.code)}${item.is_active ? '' : ' · выкл'}</span>
+      <div class="category-actions">
+        <button class="text-button" type="button" data-maintenance-location-edit="${escapeHtml(item.code)}">Изменить</button>
+        <button class="text-button" type="button" data-maintenance-location-delete="${escapeHtml(item.code)}">Удалить</button>
+      </div>
+    </article>`).join('') : '<p class="empty-state">Точек нет</p>';
+}
+
+function renderMaintenanceCategories() {
+  const node = document.querySelector('#maintenance-categories');
+  if (!node) return;
+  const items = maintenanceState.categories || [];
+  node.innerHTML = items.length ? items.map((item) => `
+    <article class="announcement-category">
+      <span class="category-swatch" style="--announcement-color:${escapeHtml(item.color || '#7b8794')}"></span>
+      <strong>${escapeHtml(item.label)}</strong>
+      <span class="category-flags">${escapeHtml(item.code)} · ${Number(item.parts_count || 0)} запч.</span>
+      <div class="category-actions">
+        <button class="text-button" type="button" data-maintenance-category-edit="${escapeHtml(item.code)}">Изменить</button>
+        <button class="text-button" type="button" data-maintenance-category-delete="${escapeHtml(item.code)}">Удалить</button>
+      </div>
+    </article>`).join('') : '<p class="empty-state">Категорий нет</p>';
+}
+
+function openMaintenanceLocationDialog(item) {
+  const dialog = document.querySelector('#maintenance-location-dialog');
+  const form = document.querySelector('#maintenance-location-form');
+  if (!dialog || !form) return;
+  form.reset();
+  form.dataset.code = item ? item.code : '';
+  const title = document.querySelector('#maintenance-location-title');
+  if (title) title.textContent = item ? 'Точка сети' : 'Новая точка';
+  if (item) {
+    form.elements.name.value = item.name;
+    form.elements.code.value = item.code;
+    form.elements.is_active.checked = Boolean(item.is_active);
+    form.elements.code.disabled = true;   // код — первичный ключ, его не меняем
+  } else {
+    form.elements.is_active.checked = true;
+    form.elements.code.disabled = false;
+  }
+  const error = document.querySelector('#maintenance-location-error');
+  if (error) error.hidden = true;
+  dialog.showModal();
+}
+
+async function submitMaintenanceLocation(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const code = form.dataset.code;
+  const payload = { name: form.elements.name.value.trim(), is_active: form.elements.is_active.checked };
+  if (!code) payload.code = form.elements.code.value.trim();
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    if (code) await api(`/api/locations/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    else await api('/api/locations', { method: 'POST', body: JSON.stringify(payload) });
+    document.querySelector('#maintenance-location-dialog')?.close();
+    maintenanceState.partsLoaded = false;
+    await loadMaintenanceAdmin();
+    showToast(code ? 'Точка сохранена' : 'Точка добавлена');
+  } catch (error) {
+    maintenanceFormError('#maintenance-location-error', error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function onMaintenanceLocationAction(event) {
+  const edit = event.target.closest('[data-maintenance-location-edit]');
+  if (edit) {
+    const item = (maintenanceState.locations || []).find((row) => row.code === edit.dataset.maintenanceLocationEdit);
+    if (item) openMaintenanceLocationDialog(item);
+    return;
+  }
+  const remove = event.target.closest('[data-maintenance-location-delete]');
+  if (!remove) return;
+  const code = remove.dataset.maintenanceLocationDelete;
+  if (!window.confirm('Удалить точку? Её остатки и записи журнала будут стёрты.')) return;
+  try {
+    await api(`/api/locations/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    maintenanceState.stock = null;
+    await loadMaintenanceAdmin();
+    showToast('Точка удалена');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function openMaintenanceCategoryDialog(item) {
+  const dialog = document.querySelector('#maintenance-category-dialog');
+  const form = document.querySelector('#maintenance-category-form');
+  if (!dialog || !form) return;
+  form.reset();
+  form.dataset.code = item ? item.code : '';
+  const title = document.querySelector('#maintenance-category-title');
+  if (title) title.textContent = item ? 'Категория ТО' : 'Новая категория';
+  form.elements.color.value = item ? (item.color || '#7b8794') : '#7b8794';
+  if (item) form.elements.label.value = item.label;
+  const error = document.querySelector('#maintenance-category-error');
+  if (error) error.hidden = true;
+  dialog.showModal();
+}
+
+async function submitMaintenanceCategory(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const code = form.dataset.code;
+  const payload = { label: form.elements.label.value.trim(), color: form.elements.color.value };
+  const submit = form.querySelector('button[type="submit"]');
+  if (submit) submit.disabled = true;
+  try {
+    if (code) await api(`/api/maintenance/categories/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    else await api('/api/maintenance/categories', { method: 'POST', body: JSON.stringify(payload) });
+    document.querySelector('#maintenance-category-dialog')?.close();
+    kbState.partCategoriesLoaded = false;   // селект в карточке БЗ перечитает список
+    await loadMaintenanceAdmin();
+    showToast(code ? 'Категория сохранена' : 'Категория добавлена');
+  } catch (error) {
+    maintenanceFormError('#maintenance-category-error', error.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function onMaintenanceCategoryAction(event) {
+  const edit = event.target.closest('[data-maintenance-category-edit]');
+  if (edit) {
+    const item = (maintenanceState.categories || []).find((row) => row.code === edit.dataset.maintenanceCategoryEdit);
+    if (item) openMaintenanceCategoryDialog(item);
+    return;
+  }
+  const remove = event.target.closest('[data-maintenance-category-delete]');
+  if (!remove) return;
+  const code = remove.dataset.maintenanceCategoryDelete;
+  if (!window.confirm('Удалить категорию?')) return;
+  try {
+    await api(`/api/maintenance/categories/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    kbState.partCategoriesLoaded = false;
+    await loadMaintenanceAdmin();
+    showToast('Категория удалена');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 function renderControlNav() {
   const list = document.querySelector('#control-nav');
   if (!list) return;
@@ -9395,6 +10012,7 @@ function setupDashboard() {
   setupAnalytics();
   setupAnnouncements();
   setupTasks();
+  setupMaintenance();
   loadAnnouncements();
   setupKnowledgeBase();
   setupDrinks();

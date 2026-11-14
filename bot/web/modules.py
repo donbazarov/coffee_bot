@@ -37,6 +37,10 @@ MODULES: tuple[dict[str, Any], ...] = (
      "admin": False, "settable": True},
     {"code": "tasks", "title": "Задачи", "icon": "i-kanban", "view": "tasks",
      "admin": False, "settable": True},
+    # Тех. обслуживание: точки, остатки и журнал замен. Категории и точки —
+    # справочники в БД (см. `bot/web/maintenance.py`), в коде их нет.
+    {"code": "maintenance", "title": "Тех. обслуживание", "icon": "i-tune", "view": "maintenance",
+     "admin": False, "settable": True},
     {"code": "chat", "title": "Чат", "icon": "i-chat", "view": "chat",
      "admin": False, "settable": True},
     {"code": "development", "title": "Развитие", "icon": "i-spark", "view": "development",
@@ -185,6 +189,10 @@ SETTINGS_SCHEMA: dict[str, tuple[dict[str, Any], ...]] = {
         {"key": "MAX_PHOTOS_PER_KIND", "label": "Макс. фото на бариста (латте-арт/мем)", "type": "int", "min": 1, "max": 20},
         {"key": "DEFAULT_PAGE", "label": "Размер страницы ленты по умолчанию", "type": "int", "min": 5, "max": 100},
         {"key": "MAX_PAGE", "label": "Макс. размер страницы ленты", "type": "int", "min": 10, "max": 200},
+    ),
+    "maintenance": (
+        {"key": "SOON_DAYS", "label": "Порог «скоро дедлайн», дней", "type": "int", "min": 0, "max": 120,
+         "hint": "сколько дней до замены считать жёлтой зоной на дашборде ТО"},
     ),
     "team": (
         {"key": "DEFAULT_MIN_HOURS", "label": "Нормо-часы: минимум по умолчанию", "type": "int", "min": 0, "max": 744},

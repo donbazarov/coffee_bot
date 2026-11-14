@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -116,6 +116,9 @@ app.include_router(chat.chat_router)
 app.include_router(knowledge_base.kb_router)
 # Описание напитков (bot/web/drink_descriptions.py): лента смен, рецепты и викторины.
 app.include_router(drink_descriptions.router)
+# Тех. обслуживание (bot/web/maintenance.py): точки сети, остатки и журнал замен.
+app.include_router(maintenance.maintenance_router)
+app.include_router(maintenance.locations_router)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
@@ -226,6 +229,12 @@ def migrate_database():
     # геймификации: `evaluations` ссылается на них через drink_id/bean_id, и на
     # чистой базе FK-цели должны существовать раньше.
     knowledge_base.initialize_schema(engine)
+    # Тех. обслуживание: точки, категории, каталог запчастей, остатки и журнал.
+    # Схема КБ создана строкой выше — `equipment_parts` ссылается на `kb_pages`.
+    maintenance.initialize_schema(engine)
+    # Авто-задачи ТО (закупка/замена) — идемпотентно, после того как есть и
+    # таблицы ТО, и доска задач.
+    maintenance.run_automation(engine)
     gamification.initialize_schema(engine)
     # Описание напитков: лента смен, напитки постов и викторины «где чей латте-арт».
     drink_descriptions.initialize_schema(engine)
