@@ -3,9 +3,11 @@ import hashlib
 import logging
 import mimetypes
 import re
+import tempfile
 import threading
 import time
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl
@@ -82,12 +84,25 @@ MAX_AVATAR_BYTES = 4 * 1024 * 1024
 # свои логгеры, а корневой остаётся на WARNING. Заводим собственный обработчик,
 # чтобы информационные события (запуск из ярлыка PWA, миграции) были видны в логах.
 logger = logging.getLogger("bot.web")
+# Логи пишем вне рабочей папки: %TEMP%\coffee_bot\server.log. Файл внутри
+# репозитория держит дескриптор открытым (его нельзя ни удалить, ни забэкапить),
+# а рабочая папка проекта постоянно обходится git-скриптами. Каталог создаём сами.
+LOG_DIR = Path(os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()) / "coffee_bot"
+LOG_FILE = LOG_DIR / "server.log"
 if not logger.handlers:
     _log_handler = logging.StreamHandler()
     _log_handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
     logger.addHandler(_log_handler)
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
+        _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+        logger.addHandler(_file_handler)
+    except OSError as error:  # нет TEMP/нет прав — остаётся консольный обработчик
+        logger.warning("Не удалось открыть файл логов %s: %s", LOG_FILE, error)
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    logger.info("Файл логов: %s", LOG_FILE)
 
 app = FastAPI(title="Coffee Quality", docs_url=None, redoc_url=None)
 # Windows-реестр не знает .glb, и Starlette отдавал модель как text/plain.
