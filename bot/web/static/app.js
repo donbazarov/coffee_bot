@@ -448,6 +448,8 @@ let qualityDrinkCards = new Map();
 let qualitySelectedEmployee = 0;
 // Режим правки: id редактируемой оценки (null — создание новой).
 let qualityEditingId = null;
+// Исходная дата редактируемой оценки — чтобы не перезаписывать её без изменений.
+let qualityEditingCreatedAt = null;
 // Пагинация истории сессий: по 10 записей, догрузка кнопкой «Показать ещё».
 const qualitySessionsState = { offset: 0, limit: 10, items: [], hasMore: false, loading: false };
 
@@ -499,6 +501,12 @@ function resetQualityDialog() {
   document.querySelector('#evaluation-dialog .quality-staff')?.removeAttribute('hidden');
   const editingLabel = document.querySelector('#quality-editing-employee');
   if (editingLabel) editingLabel.hidden = true;
+  // Поля правки (смена сотрудника и даты) и кнопка удаления видны только в режиме правки.
+  const editFields = document.querySelector('#quality-edit-fields');
+  if (editFields) editFields.hidden = true;
+  const deleteButton = document.querySelector('#quality-delete');
+  if (deleteButton) deleteButton.hidden = true;
+  qualityEditingCreatedAt = null;
   const errorNode = document.querySelector('#evaluation-form-error');
   if (errorNode) { errorNode.hidden = true; errorNode.textContent = ''; }
   const preview = document.querySelector('#evaluation-photo-preview');
@@ -530,6 +538,24 @@ function setQualityType(type) {
 
 async function fillQualityEmployees() {
   const select = document.querySelector('#evaluation-employee');
+  if (!select) return;
+  try {
+    const users = await api('/api/users');
+    const me = Number(document.body.dataset.userId || 0);
+    const staff = users.filter((user) => user.is_active && user.role !== 'mentor' && Number(user.id) !== me);
+    select.innerHTML = staff.length
+      ? '<option value="">— выберите —</option>'
+        + staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name || user.role)}</option>`).join('')
+      : '<option value="">Нет сотрудников для оценки</option>';
+  } catch (error) {
+    select.innerHTML = '<option value="">Не удалось загрузить список</option>';
+    showToast(error.message);
+  }
+}
+
+/* Список сотрудников для смены владельца оценки: активные, без наставников и себя. */
+async function fillQualityEditEmployees() {
+  const select = document.querySelector('#evaluation-edit-employee');
   if (!select) return;
   try {
     const users = await api('/api/users');
@@ -1088,13 +1114,20 @@ function setupDevelopment() {
     submitQualityEvaluation(dialog, true);
   });
 
-  // Правка задним числом: кнопка «Изменить» в строке истории (делегирование).
+  // Правка и удаление задним числом: кнопки в строке истории (делегирование).
   document.querySelector('#quality-sessions')?.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-edit-id]');
-    if (!button) return;
-    const id = Number(button.dataset.editId);
+    const deleteButton = event.target.closest('[data-delete-id]');
+    if (deleteButton) { deleteQualityEvaluation(Number(deleteButton.dataset.deleteId)); return; }
+    const editButton = event.target.closest('[data-edit-id]');
+    if (!editButton) return;
+    const id = Number(editButton.dataset.editId);
     const item = qualitySessionsState.items.find((row) => Number(row.id) === id);
     if (item) openQualityEditor(item);
+  });
+
+  // Удаление оценки прямо из диалога правки.
+  document.querySelector('#quality-delete')?.addEventListener('click', () => {
+    deleteQualityEvaluation(qualityEditingId);
   });
   // Догрузка следующей страницы истории.
   document.querySelector('#quality-sessions-more')?.addEventListener('click', () => loadQualitySessions(false));
@@ -1177,19 +1210,20 @@ function renderQualitySessions() {
         <div class="session-meta">${point}<span>${escapeHtml(date)}</span><span>${escapeHtml(item.evaluator || '')}</span></div>
         <span class="session-score">${overall}</span>
         <span class="session-xp">+${Number(item.xp_awarded || 0)} XP</span>
-        ${canEdit ? `<button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button>` : ''}
+        ${canEdit ? `<div class="session-actions"><button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button><button class="icon-button session-delete" type="button" data-delete-id="${item.id}" aria-label="Удалить оценку" title="Удалить оценку"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button></div>` : ''}
       </article>`;
   }).join('');
   if (moreButton) moreButton.hidden = !qualitySessionsState.hasMore;
   if (countLabel) countLabel.textContent = qualitySessionsState.hasMore ? `${items.length}+` : String(items.length);
 }
 
-/* Открытие диалога оценки в режиме правки: баллы, комментарии, фото (и напиток). */
-function openQualityEditor(item) {
+/* Открытие диалога оценки в режиме правки: баллы, комментарии, фото, сотрудник и дата. */
+async function openQualityEditor(item) {
   const dialog = document.querySelector('#evaluation-dialog');
   if (!dialog) return;
   resetQualityDialog();
   qualityEditingId = item.id;
+  qualityEditingCreatedAt = item.created_at ? String(item.created_at).slice(0, 16) : null;
 
   setText('#evaluation-dialog .dialog-top h2', 'Редактировать оценку');
   const submit = document.querySelector('#evaluation-submit');
@@ -1199,9 +1233,20 @@ function openQualityEditor(item) {
   if (addAnother) addAnother.hidden = true;
   const editingLabel = document.querySelector('#quality-editing-employee');
   if (editingLabel) {
-    editingLabel.textContent = `Сотрудник: ${item.employee || ''}`;
+    editingLabel.textContent = `Оценка №${item.id} · наставник ${item.evaluator || ''}`;
     editingLabel.hidden = false;
   }
+
+  // Смена сотрудника и даты + удаление доступны только наставнику в режиме правки.
+  const editFields = document.querySelector('#quality-edit-fields');
+  if (editFields) editFields.hidden = false;
+  const deleteButton = document.querySelector('#quality-delete');
+  if (deleteButton) deleteButton.hidden = false;
+  const dateInput = document.querySelector('#evaluation-date');
+  if (dateInput) dateInput.value = qualityEditingCreatedAt || '';
+  await fillQualityEditEmployees();
+  const editEmployee = document.querySelector('#evaluation-edit-employee');
+  if (editEmployee) editEmployee.value = String(item.employee_id || '');
 
   const pointSelect = document.querySelector('#quality-point');
   if (pointSelect && item.shift_point) pointSelect.value = item.shift_point;
@@ -1248,6 +1293,26 @@ function applyQualityScores(params) {
   });
 }
 
+/* Удаление оценки с подтверждением: откатывает начисленный XP и обновляет списки. */
+async function deleteQualityEvaluation(id) {
+  if (!id) return;
+  if (typeof window.confirm === 'function'
+      && !window.confirm('Удалить оценку? Начисленный за неё опыт будет списан.')) return;
+  try {
+    await api(`/api/evaluations/${id}`, { method: 'DELETE' });
+    if (qualityEditingId === id) {
+      document.querySelector('#evaluation-dialog')?.close();
+      qualityEditingId = null;
+    }
+    showToast('Оценка удалена');
+    loadDevelopment();
+    loadQualitySessions(true);
+    loadEvaluationAnalytics();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 /* Отправка оценки. keepOpen — «Ещё оценка»: сохраняем без закрытия окна. */
 async function submitQualityEvaluation(dialog, keepOpen) {
   const type = qualityType;
@@ -1277,12 +1342,21 @@ async function submitQualityEvaluation(dialog, keepOpen) {
     payload.drink_id = drinkId;
     payload.bean_id = Number(document.querySelector('#evaluation-bean')?.value || 0) || null;
     payload.category = qualityDrinkCards.get(drinkId)?.category || null;
-    // При правке сотрудник зафиксирован — менять его нельзя.
+    // При создании сотрудник берётся с чипа смены или из фоллбек-селекта.
     if (!qualityEditingId) {
       const employeeId = qualitySelectedEmployee || Number(document.querySelector('#evaluation-employee')?.value || 0);
       if (!employeeId) { setError('Выберите бариста'); return; }
       payload.employee_id = employeeId;
     }
+  }
+
+  // Правка: можно перепривязать оценку к другому сотруднику и поменять дату.
+  if (qualityEditingId) {
+    const employeeId = Number(document.querySelector('#evaluation-edit-employee')?.value || 0);
+    if (!employeeId) { setError('Выберите бариста'); return; }
+    payload.employee_id = employeeId;
+    const dateValue = document.querySelector('#evaluation-date')?.value || '';
+    if (dateValue && dateValue !== qualityEditingCreatedAt) payload.created_at = dateValue;
   }
 
   const editingId = qualityEditingId;

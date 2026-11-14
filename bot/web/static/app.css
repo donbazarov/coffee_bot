@@ -2154,6 +2154,10 @@ body { transition: background-color .3s ease, color .3s ease; }
 .quality-staff-chip.is-selected span { color: var(--accent-contrast); }
 .quality-staff-empty { color: var(--muted); font-size: 11px; }
 .evaluation-dialog textarea { width: 100%; min-height: 52px; padding: 10px 12px; resize: vertical; }
+.quality-edit-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+.quality-delete { margin-right: auto; border-color: var(--danger-line); color: var(--danger-text); }
+.quality-delete:hover { border-color: var(--danger-text); background: var(--danger-soft); color: var(--danger-text); }
+@media (max-width: 560px) { .quality-edit-fields { grid-template-columns: 1fr; } }
 
 .session-list { display: grid; gap: 8px; }
 
@@ -2443,15 +2447,18 @@ body { transition: background-color .3s ease, color .3s ease; }
 .session-score { font: 700 15px var(--mono); }
 .session-xp { color: var(--accent); font: 11px var(--mono); text-align: right; }
 .session-edited { color: var(--accent); font-style: italic; }
-.session-edit { width: 40px; height: 40px; color: var(--muted); }
+.session-actions { display: flex; gap: 2px; }
+.session-edit, .session-delete { width: 40px; height: 40px; color: var(--muted); }
 .session-edit:hover { color: var(--accent); }
+.session-delete:hover { color: var(--danger-text); }
 .session-more { display: block; margin: 14px auto 0; }
 @media (max-width: 760px) {
   .session-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; }
   .session-meta { grid-area: 1 / 2 / 1 / 4; }
   .session-score { grid-area: 2 / 1; }
   .session-xp { grid-area: 2 / 2; }
-  .session-edit { grid-area: 2 / 3; width: 44px; height: 44px; }
+  .session-actions { grid-area: 2 / 3; }
+  .session-edit, .session-delete { width: 44px; height: 44px; }
 }
 
 /* --- Просмотр изображений (лайтбокс) ------------------------------------- */

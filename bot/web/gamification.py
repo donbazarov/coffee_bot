@@ -21,6 +21,7 @@ import math
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1145,14 +1146,17 @@ def update_evaluation(connection: Connection, evaluation_id: int, *,
                       scores: dict[str, float], photo_url: str | None = None,
                       comment: str | None = None, mentor_comment: str | None = None,
                       drink_id: int | None = None,
-                      bean_id: int | None = None) -> dict[str, Any]:
+                      bean_id: int | None = None,
+                      employee_id: int | None = None,
+                      created_at: datetime | None = None) -> dict[str, Any]:
     """Правка уже сохранённой оценки задним числом.
 
     Баллы пересобираются в ветки и XP так же, как при создании, а опыт
     корректируется дельтой: старые начисления остаются в append-only логе
     `xp_transactions`, рядом пишется компенсирующая транзакция, а свёрнутый
-    баланс `user_skills` меняется на разницу. Сотрудник и тип оценки
-    фиксированы — «перепривязать» запись нельзя.
+    баланс `user_skills` меняется на разницу. Дополнительно можно сменить
+    сотрудника (`employee_id`) — опыт переносится на нового бариста — и дату
+    оценки (`created_at`). Тип оценки фиксирован.
 
     Возвращает итоговый балл, суммарный XP и новые ачивки. Оценка не найдена →
     `ValueError`.
@@ -1163,7 +1167,8 @@ def update_evaluation(connection: Connection, evaluation_id: int, *,
     if not row:
         raise ValueError("Оценка не найдена")
 
-    employee_id = int(row["employee_id"])
+    current_employee_id = int(row["employee_id"])
+    target_employee_id = int(employee_id) if employee_id is not None else current_employee_id
     evaluation_type = row["evaluation_type"] or "drink"
 
     if evaluation_type == "cleanliness":
@@ -1185,16 +1190,30 @@ def update_evaluation(connection: Connection, evaluation_id: int, *,
         code: float(scores[code]) for code, *_ in spec if scores.get(code) is not None
     }
 
-    _reconcile_evaluation_xp(
-        connection, evaluation_id=evaluation_id, employee_id=employee_id,
-        awarded=awarded, evaluator_id=evaluator_id,
-    )
+    if target_employee_id != current_employee_id:
+        # Смена сотрудника: списываем прежние начисления и начисляем новые
+        # баллы на нового бариста — балансы веток обоих остаются корректными.
+        _reverse_evaluation_xp(
+            connection, evaluation_id=evaluation_id,
+            employee_id=current_employee_id, evaluator_id=evaluator_id,
+        )
+        _award_branch_xp(
+            connection, employee_id=target_employee_id, awarded=awarded,
+            evaluation_id=evaluation_id, evaluator_id=evaluator_id,
+        )
+    else:
+        _reconcile_evaluation_xp(
+            connection, evaluation_id=evaluation_id, employee_id=current_employee_id,
+            awarded=awarded, evaluator_id=evaluator_id,
+        )
 
     connection.execute(text("""
         UPDATE evaluations
         SET raw_scores = :raw_scores, xp_awarded = :xp_awarded, photo_url = :photo_url,
             comment = :comment, mentor_comment = :mentor_comment,
             drink_id = :drink_id, bean_id = :bean_id, drink_category = :drink_category,
+            employee_id = :employee_id,
+            created_at = COALESCE(:created_at, created_at),
             updated_at = CURRENT_TIMESTAMP
         WHERE id = :id
     """), {
@@ -1202,12 +1221,65 @@ def update_evaluation(connection: Connection, evaluation_id: int, *,
         "xp_awarded": total, "photo_url": photo_url,
         "comment": comment, "mentor_comment": mentor_comment,
         "drink_id": drink_id, "bean_id": bean_id, "drink_category": category,
+        "employee_id": target_employee_id,
+        "created_at": created_at.isoformat(sep=" ", timespec="seconds") if created_at else None,
         "id": evaluation_id,
     })
 
-    unlocked = check_user_achievements(connection, employee_id, "evaluation")
+    unlocked = check_user_achievements(connection, target_employee_id, "evaluation")
     return {"ok": True, "id": evaluation_id, "xp_awarded": awarded, "total_xp": total,
             "overall": overall, "branch_scores": branch_scores, "achievements": unlocked}
+
+
+def delete_evaluation(connection: Connection, evaluation_id: int, *,
+                      evaluator_id: int) -> dict[str, Any]:
+    """Удаляет оценку и списывает начисленный по ней опыт.
+
+    `xp_transactions` остаётся append-only: пишем компенсирующие отрицательные
+    транзакции и синхронно уменьшаем свёрнутый баланс `user_skills`, после чего
+    удаляем строку `evaluations`. Оценка не найдена → `ValueError`.
+    """
+    row = connection.execute(text("""
+        SELECT employee_id FROM evaluations WHERE id = :id
+    """), {"id": evaluation_id}).mappings().first()
+    if not row:
+        raise ValueError("Оценка не найдена")
+
+    employee_id = int(row["employee_id"])
+    _reverse_evaluation_xp(
+        connection, evaluation_id=evaluation_id,
+        employee_id=employee_id, evaluator_id=evaluator_id,
+    )
+    connection.execute(text("DELETE FROM evaluations WHERE id = :id"), {"id": evaluation_id})
+    return {"ok": True, "id": evaluation_id, "employee_id": employee_id}
+
+
+def _reverse_evaluation_xp(connection: Connection, *, evaluation_id: int, employee_id: int,
+                           evaluator_id: int) -> None:
+    """Списывает весь ранее начисленный по оценке опыт компенсирующими транзакциями.
+
+    Суммы берём из append-only лога `xp_transactions` по `source_id` этой оценки
+    и пишем обратные транзакции с одновременной правкой баланса `user_skills`.
+    """
+    rows = connection.execute(text("""
+        SELECT branch_id, COALESCE(SUM(amount), 0) AS amount
+        FROM xp_transactions
+        WHERE source_type = 'evaluation' AND source_id = :id
+        GROUP BY branch_id
+    """), {"id": evaluation_id}).mappings().all()
+    for item in rows:
+        amount = int(item["amount"])
+        if amount == 0:
+            continue
+        connection.execute(text("""
+            INSERT INTO xp_transactions (user_id, branch_id, amount, source_type, source_id, created_by)
+            VALUES (:user_id, :branch_id, :amount, 'evaluation', :source_id, :created_by)
+        """), {"user_id": employee_id, "branch_id": int(item["branch_id"]),
+               "amount": -amount, "source_id": evaluation_id, "created_by": evaluator_id})
+        connection.execute(text("""
+            UPDATE user_skills SET xp = xp + :amount, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = :user_id AND branch_id = :branch_id
+        """), {"user_id": employee_id, "branch_id": int(item["branch_id"]), "amount": -amount})
 
 
 def _reconcile_evaluation_xp(connection: Connection, *, evaluation_id: int, employee_id: int,

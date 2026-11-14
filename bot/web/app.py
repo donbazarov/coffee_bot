@@ -1536,7 +1536,8 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
     """Правка уже сохранённой оценки задним числом.
 
     Разрешены баллы, комментарии, фото, а для напитка — ещё напиток и зерно.
-    Сотрудник и тип оценки фиксированы; XP и баланс веток пересчитываются.
+    Дополнительно можно сменить сотрудника (`employee_id`) и дату оценки
+    (`created_at`); тип оценки фиксирован, XP и баланс веток пересчитываются.
     Изменять оценки может только наставник (`mentor`).
     """
     if evaluator["role"] != "mentor":
@@ -1548,6 +1549,22 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
     comment = _optional_text(payload, "comment")
     mentor_comment = _optional_text(payload, "mentor_comment")
 
+    new_employee_id = payload.get("employee_id")
+    if new_employee_id is not None and (
+        isinstance(new_employee_id, bool) or not isinstance(new_employee_id, int) or new_employee_id <= 0
+    ):
+        raise HTTPException(status_code=422, detail="Некорректный сотрудник")
+
+    raw_created_at = payload.get("created_at")
+    created_at = None
+    if raw_created_at is not None:
+        if not isinstance(raw_created_at, str):
+            raise HTTPException(status_code=422, detail="Некорректная дата оценки")
+        try:
+            created_at = datetime.fromisoformat(raw_created_at).replace(microsecond=0)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Некорректная дата оценки") from error
+
     with engine.begin() as connection:
         existing = connection.execute(
             text("SELECT evaluation_type FROM evaluations WHERE id = :id"),
@@ -1555,6 +1572,17 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
         ).mappings().first()
         if not existing:
             raise HTTPException(status_code=404, detail="Оценка не найдена")
+
+        if new_employee_id is not None:
+            employee = connection.execute(
+                text("SELECT role, is_active FROM users WHERE id = :id"), {"id": new_employee_id}
+            ).mappings().first()
+            if not employee or not employee["is_active"]:
+                raise HTTPException(status_code=404, detail="Сотрудник не найден или отключён")
+            if employee["role"] not in EVALUATED_ROLES:
+                raise HTTPException(status_code=400, detail="Оценивать можно только сотрудников")
+            if int(new_employee_id) == int(evaluator["id"]):
+                raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
 
         if existing["evaluation_type"] == "cleanliness":
             allowed = {code for code, *_ in gamification.CLEANLINESS_PARAMS}
@@ -1564,6 +1592,7 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
                     connection, evaluation_id, evaluator_id=int(evaluator["id"]),
                     category=None, scores=scores, photo_url=photo_url,
                     comment=comment, mentor_comment=mentor_comment,
+                    employee_id=new_employee_id, created_at=created_at,
                 )
             except ValueError as error:
                 raise HTTPException(status_code=404, detail=str(error)) from error
@@ -1589,6 +1618,27 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
                 category=category, scores=scores, photo_url=photo_url,
                 comment=comment, mentor_comment=mentor_comment,
                 drink_id=drink_id, bean_id=bean_id,
+                employee_id=new_employee_id, created_at=created_at,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.delete("/api/evaluations/{evaluation_id}")
+async def delete_evaluation_route(evaluation_id: int,
+                                  evaluator: dict[str, Any] = Depends(require_manager_csrf)):
+    """Удаление оценки с откатом начисленного по ней опыта.
+
+    Опыт не пропадает бесследно: в append-only логе `xp_transactions` пишутся
+    компенсирующие транзакции, а баланс веток синхронно уменьшается. Удалять
+    оценки может только наставник (`mentor`).
+    """
+    if evaluator["role"] != "mentor":
+        raise HTTPException(status_code=403, detail="Удалять оценки может только наставник")
+    with engine.begin() as connection:
+        try:
+            return gamification.delete_evaluation(
+                connection, evaluation_id, evaluator_id=int(evaluator["id"]),
             )
         except ValueError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

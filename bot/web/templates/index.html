@@ -831,6 +831,11 @@
         <label id="quality-staff-fallback" hidden>Сотрудник<select name="employee_id" id="evaluation-employee"><option value="">— выберите —</option></select></label>
       </div>
 
+      <div class="quality-edit-fields" id="quality-edit-fields" hidden>
+        <label>Сотрудник<select id="evaluation-edit-employee"><option value="">— выберите —</option></select></label>
+        <label>Дата оценки<input type="datetime-local" id="evaluation-date"></label>
+      </div>
+
       <p class="settings-hint" id="quality-hint">Выберите параметры и выставьте баллы. Ниже 4.0 опыт не начисляется.</p>
       <div class="evaluation-branches" id="evaluation-params"></div>
 
@@ -843,6 +848,7 @@
       </div>
       <p class="dialog-error" id="evaluation-form-error" role="alert" hidden></p>
       <div class="dialog-actions">
+        <button class="button button-quiet quality-delete" type="button" id="quality-delete" hidden><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg> Удалить</button>
         <button class="button button-quiet dialog-close" type="button">Отмена</button>
         <button class="button button-quiet" type="button" id="quality-add-another"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Ещё оценка</button>
         <button class="button button-primary" id="evaluation-submit" type="submit">Сохранить</button>
