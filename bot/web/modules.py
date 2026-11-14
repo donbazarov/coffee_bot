@@ -39,6 +39,10 @@ MODULES: tuple[dict[str, Any], ...] = (
      "admin": False, "settable": True},
     {"code": "development", "title": "Развитие", "icon": "i-spark", "view": "development",
      "admin": False, "settable": True},
+    # Контроль качества вынесен из «Развития» в отдельный экран: наставник ведёт
+    # оценки команды, бариста видит только свои сессии (read-only).
+    {"code": "quality", "title": "Контроль качества", "icon": "i-poll", "view": "quality",
+     "admin": False, "settable": True},
     {"code": "kb", "title": "База знаний", "icon": "i-book", "view": "kb",
      "admin": False, "settable": True},
     {"code": "drinks", "title": "Описание напитков", "icon": "i-latte", "view": "drinks",

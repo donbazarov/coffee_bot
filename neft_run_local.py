@@ -19,8 +19,12 @@
 
     netsh advfirewall firewall add rule name="neft local 8000" dir=in action=allow protocol=TCP localport=8000
 
-Остановить: Ctrl+C в этом окне, либо найти процесс, слушающий порт 8000,
-и остановить его через Task Manager.
+Остановить: Ctrl+C в этом окне либо скриптом (он найдёт процесс по порту):
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\\stop_local.ps1
+
+То же самое есть кнопками в VS Code: Terminal → Run Task → «Остановить
+локальный сервер» (и «Локальный сервер (LAN, порт 8000)» — для запуска).
 """
 
 import os

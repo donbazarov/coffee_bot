@@ -1096,11 +1096,33 @@ async function uploadEvaluationPhoto(file) {
   }
 }
 
-function setupDevelopment() {
+/* Контроль качества: список сессий доступен всем, редактор — senior/mentor. */
+function setupQuality() {
+  const list = document.querySelector('#quality-sessions');
+  if (list) {
+    // Делегирование по строке истории: «Подробнее» у бариста, правка/удаление у наставника.
+    list.addEventListener('click', (event) => {
+      const openButton = event.target.closest('[data-session-id]');
+      if (openButton) {
+        const row = qualitySessionsState.items.find((item) => Number(item.id) === Number(openButton.dataset.sessionId));
+        if (row) openSessionDetail(row);
+        return;
+      }
+      const deleteButton = event.target.closest('[data-delete-id]');
+      if (deleteButton) { deleteQualityEvaluation(Number(deleteButton.dataset.deleteId)); return; }
+      const editButton = event.target.closest('[data-edit-id]');
+      if (!editButton) return;
+      const row = qualitySessionsState.items.find((item) => Number(item.id) === Number(editButton.dataset.editId));
+      if (row) openQualityEditor(row);
+    });
+  }
+  // Догрузка следующей страницы истории.
+  document.querySelector('#quality-sessions-more')?.addEventListener('click', () => loadQualitySessions(false));
+
   const dialog = document.querySelector('#evaluation-dialog');
   const newButton = document.querySelector('#quality-new');
+  // Ниже — только интерфейс наставника/старшего: у бариста формы оценки нет.
   if (!dialog || !newButton) return;
-  setupDevelopmentTabs();
   // Старший ведёт только чистоту и порядок: прячем вариант «Напиток».
   if (!isMentor) {
     document.querySelector('#evaluation-dialog [data-quality-type="drink"]')?.setAttribute('hidden', '');
@@ -1188,47 +1210,64 @@ function setupDevelopment() {
     submitQualityEvaluation(dialog, true);
   });
 
-  // Правка и удаление задним числом: кнопки в строке истории (делегирование).
-  document.querySelector('#quality-sessions')?.addEventListener('click', (event) => {
-    const deleteButton = event.target.closest('[data-delete-id]');
-    if (deleteButton) { deleteQualityEvaluation(Number(deleteButton.dataset.deleteId)); return; }
-    const editButton = event.target.closest('[data-edit-id]');
-    if (!editButton) return;
-    const id = Number(editButton.dataset.editId);
-    const item = qualitySessionsState.items.find((row) => Number(row.id) === id);
-    if (item) openQualityEditor(item);
-  });
-
   // Удаление оценки прямо из диалога правки.
   document.querySelector('#quality-delete')?.addEventListener('click', () => {
     deleteQualityEvaluation(qualityEditingId);
   });
-  // Догрузка следующей страницы истории.
-  document.querySelector('#quality-sessions-more')?.addEventListener('click', () => loadQualitySessions(false));
 }
 
-/* Вкладки раздела «Развитие»: «Мой прогресс» / «Контроль качества». */
-function setDevelopmentTab(tab) {
-  const quality = tab === 'quality';
-  document.querySelectorAll('#development-view [data-development-tab]').forEach((button) => {
-    button.classList.toggle('is-selected', button.dataset.developmentTab === (quality ? 'quality' : 'progress'));
-  });
-  const progress = document.querySelector('#development-progress-panel');
-  const qualityPanel = document.querySelector('#quality-panel');
-  if (progress) progress.hidden = quality;
-  if (qualityPanel) qualityPanel.hidden = !quality;
-  setText('#development-eyebrow', quality ? 'КОНТРОЛЬ КАЧЕСТВА' : 'ПРОКАЧКА');
-  setText('#development-title', quality ? 'Оценка качества' : 'Развитие');
-  if (quality) { loadQualitySessions(); loadEvaluationAnalytics(); }
+/* Набор параметров сессии для детальной карточки: чистота или категория напитка. */
+function sessionParamSpec(item) {
+  if (item.evaluation_type === 'cleanliness') return CLEANLINESS_PARAMS;
+  return DRINK_PARAMS[item.category] || DEFAULT_DRINK_PARAMS;
 }
 
-function setupDevelopmentTabs() {
-  const tabs = document.querySelector('#development-view .development-tabs');
-  if (!tabs) return;
-  tabs.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-development-tab]');
-    if (button) setDevelopmentTab(button.dataset.developmentTab);
-  });
+/* Детальная карточка оценки (read-only): баллы по критериям и пояснение наставника. */
+function openSessionDetail(item) {
+  const dialog = document.querySelector('#session-detail-dialog');
+  if (!dialog || !item) return;
+  const multiline = (value) => escapeHtml(value).replace(/\n/g, '<br>');
+  const date = item.created_at ? String(item.created_at).slice(0, 16).replace('T', ' ') : '—';
+  const overall = item.overall == null ? '—' : Number(item.overall).toFixed(1);
+  const cleanliness = item.evaluation_type === 'cleanliness';
+  const subject = cleanliness
+    ? 'Порядок и чистота'
+    : [item.drink || 'Напиток', item.category].filter(Boolean).map(escapeHtml).join(' · ');
+
+  setText('#session-detail-title', cleanliness ? 'Порядок и чистота' : 'Оценка напитка');
+  const meta = document.querySelector('#session-detail-meta');
+  if (meta) {
+    meta.innerHTML = `
+      <div class="session-detail-fact"><span>Дата</span><strong>${escapeHtml(date)}</strong></div>
+      <div class="session-detail-fact"><span>Наставник</span><strong>${escapeHtml(item.evaluator || '—')}</strong></div>
+      ${item.shift_point ? `<div class="session-detail-fact"><span>Точка</span><strong>${escapeHtml(item.shift_point)}</strong></div>` : ''}
+      <div class="session-detail-fact"><span>Предмет</span><strong>${subject}</strong></div>
+      <div class="session-detail-fact"><span>Итог</span><strong class="session-detail-overall">${overall}</strong></div>
+      <div class="session-detail-fact"><span>Опыт</span><strong>+${Number(item.xp_awarded || 0)} XP</strong></div>`;
+  }
+
+  const scores = document.querySelector('#session-detail-scores');
+  if (scores) {
+    const params = item.params || {};
+    const rows = sessionParamSpec(item).filter((param) => params[param.code] != null);
+    scores.innerHTML = rows.length
+      ? rows.map((param) => {
+          const value = Number(params[param.code]);
+          const width = Math.max(0, Math.min(100, (value / 5) * 100));
+          return `<div class="session-detail-score"><span>${escapeHtml(param.label)}</span><i><b style="width:${width}%"></b></i><strong>${value.toFixed(1)}</strong></div>`;
+        }).join('')
+      : '<p class="empty-state">Детализация баллов недоступна</p>';
+  }
+
+  const comments = document.querySelector('#session-detail-comments');
+  if (comments) {
+    const parts = [];
+    if (item.comment) parts.push(`<div class="session-detail-note"><span>Описание от бариста</span><p>${multiline(item.comment)}</p></div>`);
+    if (item.mentor_comment) parts.push(`<div class="session-detail-note is-mentor"><span>Пояснение наставника</span><p>${multiline(item.mentor_comment)}</p></div>`);
+    if (item.photo_url) parts.push(`<p class="session-detail-photo"><a href="${escapeHtml(item.photo_url)}" target="_blank" rel="noopener">Открыть фото оценки</a></p>`);
+    comments.innerHTML = parts.length ? parts.join('') : '<p class="empty-state">Комментариев нет</p>';
+  }
+  dialog.showModal();
 }
 
 /* История сессий контроля качества: по 10 записей, догрузка кнопкой «Показать ещё». */
@@ -1264,7 +1303,7 @@ function renderQualitySessions() {
   // Правка доступна только наставнику.
   const canEdit = isMentor;
   if (!items.length) {
-    container.innerHTML = '<p class="empty-state">Оценочных сессий пока нет</p>';
+    container.innerHTML = `<p class="empty-state">${managerRole ? 'Оценочных сессий пока нет' : 'Оценок пока нет'}</p>`;
     if (moreButton) moreButton.hidden = true;
     if (countLabel) countLabel.textContent = 'ПО 10';
     return;
@@ -1278,13 +1317,17 @@ function renderQualitySessions() {
     const category = item.category ? ` · ${escapeHtml(item.category)}` : '';
     const edited = item.updated_at ? ' · <span class="session-edited">изменено</span>' : '';
     const point = item.shift_point ? `<span class="session-point">${escapeHtml(item.shift_point)}</span>` : '';
+    // Наставник правит и удаляет; бариста открывает детальную карточку (read-only).
+    const actions = canEdit
+      ? `<div class="session-actions"><button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button><button class="icon-button session-delete" type="button" data-delete-id="${item.id}" aria-label="Удалить оценку" title="Удалить оценку"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button></div>`
+      : `<div class="session-actions"><button class="button button-quiet session-open" type="button" data-session-id="${item.id}">Подробнее</button></div>`;
     return `
       <article class="session-row">
         <div class="session-main"><strong>${escapeHtml(item.employee || '')}</strong><span>${subject}${category}${edited}</span></div>
         <div class="session-meta">${point}<span>${escapeHtml(date)}</span><span>${escapeHtml(item.evaluator || '')}</span></div>
         <span class="session-score">${overall}</span>
         <span class="session-xp">+${Number(item.xp_awarded || 0)} XP</span>
-        ${canEdit ? `<div class="session-actions"><button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button><button class="icon-button session-delete" type="button" data-delete-id="${item.id}" aria-label="Удалить оценку" title="Удалить оценку"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button></div>` : ''}
+        ${actions}
       </article>`;
   }).join('');
   if (moreButton) moreButton.hidden = !qualitySessionsState.hasMore;
@@ -3003,6 +3046,7 @@ function setView(name) {
         name === 'team' ? 'Управление командой' :
         name === 'calendar' ? 'График смен' :
         name === 'development' ? 'Развитие' :
+        name === 'quality' ? 'Контроль качества' :
         name === 'control' ? 'Панель управления' :
         name === 'analytics' ? 'Аналитика команды' :
         name === 'announcements' ? 'Анонсы' :
@@ -3014,10 +3058,11 @@ function setView(name) {
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
     // Прогресс мог измениться, пока сотрудник был в другом разделе.
-    if (name === 'development') {
-      loadDevelopment();
-      loadEvaluationAnalytics();
-      if (managerRole && document.querySelector('#quality-panel')?.hidden === false) loadQualitySessions();
+    if (name === 'development') loadDevelopment();
+    // Контроль качества: список сессий у всех, аналитика — только у менеджеров.
+    if (name === 'quality') {
+      loadQualitySessions();
+      if (managerRole) loadEvaluationAnalytics();
     }
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -8313,7 +8358,7 @@ function setupDashboard() {
   setupMediaViewer();
   setupFormDrafts();
   loadDrinksWidget();
-  setupDevelopment();
+  setupQuality();
   setupAchievements();
   loadDevelopment();
   loadEvaluationAnalytics();

@@ -2133,8 +2133,7 @@ body { transition: background-color .3s ease, color .3s ease; }
   .control-tree-fold, .control-nav-toggle .icon, .control-tree-fab, .control-nav-item { transition: none; }
 }
 
-/* --- Контроль качества: вкладки, тип, чипы, сессии ---------------------- */
-.development-tabs { margin-bottom: 16px; }
+/* --- Контроль качества: тип, чипы, сессии -------------------------------- */
 .quality-type { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 14px; }
 .quality-type button { min-height: 44px; border: 1px solid var(--line-strong); background: transparent; color: var(--text-soft); font: 600 12px var(--sans); cursor: pointer; transition: border-color .18s ease, background-color .18s ease, color .18s ease; }
 .quality-type button:hover { border-color: var(--accent-line); color: var(--text); }
@@ -2452,6 +2451,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .session-edit:hover { color: var(--accent); }
 .session-delete:hover { color: var(--danger-text); }
 .session-more { display: block; margin: 14px auto 0; }
+.session-open { min-height: 40px; padding: 0 14px; font-size: 12px; }
 @media (max-width: 760px) {
   .session-row { grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 12px; }
   .session-meta { grid-area: 1 / 2 / 1 / 4; }
@@ -2459,6 +2459,32 @@ body { transition: background-color .3s ease, color .3s ease; }
   .session-xp { grid-area: 2 / 2; }
   .session-actions { grid-area: 2 / 3; }
   .session-edit, .session-delete { width: 44px; height: 44px; }
+  .session-open { min-height: 44px; }
+}
+
+/* --- Детальная карточка оценки для бариста (read-only) ------------------- */
+.session-detail-dialog { width: min(520px, 94vw); }
+.session-detail-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px 16px; margin: 4px 0 16px; }
+.session-detail-fact { display: grid; gap: 2px; min-width: 0; }
+.session-detail-fact span { color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.session-detail-fact strong { font-size: 13px; }
+.session-detail-overall { color: var(--accent); font: 700 16px var(--mono); }
+.session-detail-scores { display: grid; gap: 10px; margin: 0 0 16px; }
+.session-detail-score { display: grid; grid-template-columns: minmax(0, 1fr) 116px 34px; align-items: center; gap: 10px; }
+.session-detail-score span { font-size: 12px; }
+.session-detail-score i { height: 6px; border-radius: 999px; background: var(--line-faint); overflow: hidden; }
+.session-detail-score i b { display: block; height: 100%; background: var(--accent); }
+.session-detail-score strong { font: 700 13px var(--mono); text-align: right; }
+.session-detail-comments { display: grid; gap: 10px; }
+.session-detail-note { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; }
+.session-detail-note span { color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+.session-detail-note p { margin: 0; font-size: 13px; line-height: 1.5; }
+.session-detail-note.is-mentor { border-color: var(--accent-line); background: var(--accent-soft); }
+.session-detail-photo { margin: 0; }
+.session-detail-photo a { color: var(--accent); font-size: 12px; }
+@media (max-width: 560px) {
+  .session-detail-score { grid-template-columns: minmax(0, 1fr) 34px; }
+  .session-detail-score i { display: none; }
 }
 
 /* --- Просмотр изображений (лайтбокс) ------------------------------------- */

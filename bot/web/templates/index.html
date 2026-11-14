@@ -236,14 +236,6 @@
         <div class="section-heading">
           <div><p class="eyebrow" id="development-eyebrow">ПРОКАЧКА</p><h2 id="development-title">Развитие</h2></div>
         </div>
-        {% if user.role in ['senior', 'mentor'] %}
-        <div class="theme-switch development-tabs" role="group" aria-label="Разделы развития">
-          <button type="button" data-development-tab="progress" class="is-selected">Мой прогресс</button>
-          <button type="button" data-development-tab="quality">Контроль качества</button>
-        </div>
-        {% endif %}
-        <div id="development-progress-panel">
-
         <section class="panel level-panel" id="level-panel">
           <div class="level-ring" id="level-ring" aria-hidden="true">
             <svg viewBox="0 0 120 120" class="level-ring-svg">
@@ -285,26 +277,22 @@
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Последние оценки</h3></div><span class="panel-index">ДО 5</span></div>
           <div class="review-list" id="my-evaluations"></div>
         </section>
+      </section>{% endif %}
 
+      {% if modules['quality'].enabled %}<section class="view" id="quality-view" hidden>
+        <div class="section-heading">
+          <div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h2>Оценочные сессии</h2></div>
+          {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>{% endif %}
         </div>
-
-        {% if user.role in ['senior', 'mentor'] %}
-        <div id="quality-panel" hidden>
-          <div class="section-heading">
-            <div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Оценочные сессии</h3></div>
-            <button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>
-          </div>
-          <section class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>Проведённые сессии</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
-            <div class="session-list" id="quality-sessions"></div>
-            <button class="button button-quiet session-more" type="button" id="quality-sessions-more" hidden>Показать ещё</button>
-          </section>
-          <section class="panel analytics-panel" id="evaluation-analytics-panel">
-            <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
-            <div class="analytics-body" id="evaluation-analytics"></div>
-          </section>
-        </div>
-        {% endif %}
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>{% if user.role in ['senior', 'mentor'] %}Проведённые сессии{% else %}Мои оценки{% endif %}</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
+          <div class="session-list" id="quality-sessions"></div>
+          <button class="button button-quiet session-more" type="button" id="quality-sessions-more" hidden>Показать ещё</button>
+        </section>
+        {% if user.role in ['senior', 'mentor'] %}<section class="panel analytics-panel" id="evaluation-analytics-panel">
+          <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
+          <div class="analytics-body" id="evaluation-analytics"></div>
+        </section>{% endif %}
       </section>{% endif %}
 
       {% if modules['announcements'].enabled %}<section class="view" id="announcements-view" hidden>
@@ -779,15 +767,18 @@
       <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
       {% if modules['calendar'].enabled %}<button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>{% endif %}
       {% if modules['announcements'].enabled %}<button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>{% endif %}
-      {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>{% endif %}
-      {% if modules['development'].enabled %}<button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>{% endif %}
       {% if modules['kb'].enabled %}<button class="nav-item" type="button" data-view="kb"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg></span><span>База знаний</span></button>{% endif %}
+      <div class="drawer-divider"></div>
+      {% if modules['development'].enabled %}<button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>{% endif %}
+      {% if modules['quality'].enabled %}<button class="nav-item" type="button" data-view="quality"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg></span><span>Контроль качества</span></button>{% endif %}
       {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg></span><span>Описание напитков</span></button>{% endif %}
+      <div class="drawer-divider"></div>
+      {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] and modules['analytics'].enabled %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
-      {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
       <div class="drawer-divider"></div>
       <button class="nav-item" type="button" data-view="profile"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg></span><span>Личный кабинет</span></button>
+      {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
     </nav>
     <div class="drawer-account">
       <div class="account-mark">{% if user.avatar_rev %}<img src="/avatars/{{ user.id }}.jpg?v={{ user.avatar_rev }}" alt="">{% else %}{{ (user.display_name or user.name)[:1] | upper }}{% endif %}</div>
@@ -795,6 +786,18 @@
       <button class="button button-quiet drawer-logout" type="button" id="drawer-logout">Выйти</button>
     </div>
   </aside>
+  {# Детальная оценка для бариста: read-only, без формы правки. Открывается
+     кнопкой «Подробнее» в списке сессий контроля качества. #}
+  <dialog class="user-dialog session-detail-dialog" id="session-detail-dialog">
+    <div class="dialog-top">
+      <div><p class="eyebrow" id="session-detail-kicker">КОНТРОЛЬ КАЧЕСТВА</p><h2 id="session-detail-title">Оценочная сессия</h2></div>
+      <button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
+    </div>
+    <div class="session-detail-meta" id="session-detail-meta"></div>
+    <div class="session-detail-scores" id="session-detail-scores"></div>
+    <div class="session-detail-comments" id="session-detail-comments"></div>
+    <div class="dialog-actions"><button class="button button-primary dialog-close" type="button">Закрыть</button></div>
+  </dialog>
   {% if user.role in ['senior', 'mentor'] %}
   <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="newbie">Стажёр</option><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
   <dialog class="user-dialog evaluation-dialog" id="evaluation-dialog">

@@ -9,6 +9,15 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "cwd": "${workspaceFolder}"
+        },
+        {
+            "name": "Run Local (LAN 8000)",
+            "type": "python",
+            "request": "launch",
+            "program": "neft_run_local.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}"
         }
     ]
 }

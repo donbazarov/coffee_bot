@@ -1524,10 +1524,24 @@ def evaluation_drinks(_: dict[str, Any] = Depends(require_user)):
 
 
 @app.get("/api/evaluations/sessions")
-def evaluation_sessions(limit: int = 10, offset: int = 0,
-                        _: dict[str, Any] = Depends(require_manager)):
-    """Страница сессий контроля качества для интерфейса наставника (по 10)."""
-    return gamification.evaluation_sessions(engine, limit=limit, offset=offset)
+def evaluation_sessions(request: Request, limit: int = 10, offset: int = 0,
+                        user: dict[str, Any] = Depends(require_user)):
+    """Страница сессий контроля качества (по 10).
+
+    Наставник и старший видят всю команду; бариста и стажёр — только свои сессии,
+    чтобы читать детальную оценку и пояснения наставника. Область видимости
+    вычисляется на сервере, поэтому запросить чужие оценки нельзя. В режиме
+    предпросмотра «как бариста» менеджер тоже видит только свои сессии.
+    """
+    preview_active = bool(
+        user["role"] in {"senior", "mentor"}
+        and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+    )
+    is_manager = user["role"] in {"senior", "mentor"} and not preview_active
+    employee_id = None if is_manager else int(user["id"])
+    return gamification.evaluation_sessions(
+        engine, limit=limit, offset=offset, employee_id=employee_id,
+    )
 
 
 @app.patch("/api/evaluations/{evaluation_id}")

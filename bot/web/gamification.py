@@ -1081,8 +1081,14 @@ def drinks_for_evaluation(engine: Engine, limit: int = 5, window_days: int = 180
     return {"top": drinks[:max(0, int(limit))], "all": drinks}
 
 
-def evaluation_sessions(engine: Engine, limit: int = 10, offset: int = 0) -> dict[str, Any]:
-    """Страница проведённых сессий контроля качества (для интерфейса наставника).
+def evaluation_sessions(engine: Engine, limit: int = 10, offset: int = 0,
+                        employee_id: int | None = None) -> dict[str, Any]:
+    """Страница проведённых сессий контроля качества.
+
+    Для наставника — вся команда (`employee_id=None`); для бариста — только свои
+    сессии. Фильтр по сотруднику применяется **на сервере**: клиент не может
+    запросить чужие оценки. Чистота пишется построчно на каждого бариста смены,
+    поэтому фильтр по `employee_id` покрывает и такие сессии.
 
     Постранично (новые сверху): берём `limit + 1` строку, чтобы без COUNT понять,
     есть ли ещё записи (`has_more`), и отдать клиенту ровно `limit`. Порядок
@@ -1090,6 +1096,7 @@ def evaluation_sessions(engine: Engine, limit: int = 10, offset: int = 0) -> dic
     """
     limit = max(1, min(int(limit), 50))
     offset = max(0, int(offset))
+    scope_employee_id = int(employee_id) if employee_id is not None else None
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT e.id, e.created_at, e.updated_at, e.evaluation_type,
@@ -1104,9 +1111,11 @@ def evaluation_sessions(engine: Engine, limit: int = 10, offset: int = 0) -> dic
             JOIN users emp ON emp.id = e.employee_id
             JOIN users ev ON ev.id = e.evaluator_id
             LEFT JOIN menu_drinks d ON d.id = e.drink_id
+            WHERE (:employee_id IS NULL OR e.employee_id = :employee_id)
             ORDER BY e.created_at DESC, e.id DESC
             LIMIT :limit OFFSET :offset
-        """), {"limit": limit + 1, "offset": offset}).mappings().all()
+        """), {"limit": limit + 1, "offset": offset,
+               "employee_id": scope_employee_id}).mappings().all()
 
     has_more = len(rows) > limit
     sessions = []
