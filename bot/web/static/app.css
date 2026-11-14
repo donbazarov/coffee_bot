@@ -857,6 +857,16 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
   .announcement-list.is-compact .announcement:nth-child(n+6) { display: none; }
 }
 
+/* Виджет «Мои задачи» на «Обзоре»: до пяти карточек в стиле ленты анонсов.
+   Клэмпы свои, а не `.announcement-list.is-compact`: там 4-я и 5-я карточки
+   скрываются на узких экранах, а здесь нужны все пять. */
+.tasks-widget-list { display: grid; gap: 8px; }
+.tasks-widget-list .announcement { padding: 11px 13px; }
+.tasks-widget-list .announcement-title,
+.tasks-widget-list .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
+.tasks-widget-list .announcement-title { -webkit-line-clamp: 1; margin-top: 6px; font-size: 14px; }
+.tasks-widget-list .announcement-body { -webkit-line-clamp: 2; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
+
 /* Категории в панели управления */
 .announcement-categories { display: grid; gap: 8px; margin-bottom: 12px; }
 .announcement-category { display: flex; align-items: center; gap: 10px; padding: 10px 13px; border: 1px solid var(--line); background: var(--surface); font-size: 13px; }

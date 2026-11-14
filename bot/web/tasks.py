@@ -426,6 +426,26 @@ def list_active(engine: Engine, user: dict[str, Any], assignee: str = "all",
     return [_task_payload(row) for row in rows]
 
 
+def list_overview(engine: Engine, user: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
+    """Виджет на «Обзоре»: до пяти свежих незакрытых задач.
+
+    Видимость — та же, что у режима «Все» на доске: задача касается меня, если
+    она общая, адресована моей должности, лично мне или создана мной. Этапы
+    `done` и архив в виджет не попадают: актуально то, что ещё не закрыто.
+    """
+    visible = _visibility(user, "all")
+    params = _params(user, limit)
+    with engine.connect() as connection:
+        rows = connection.execute(text(f"""
+            {_TASK_SELECT}
+            WHERE t.is_deleted = 0 AND t.status IN ('todo', 'in_progress')
+              AND {visible}
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT :limit
+        """), params).mappings().all()
+    return [_task_payload(row) for row in rows]
+
+
 def list_archive(engine: Engine, user: dict[str, Any], assignee: str = "all",
                  category: str | None = None, limit: int = MAX_LIST) -> list[dict[str, Any]]:
     """Архив: выполненные, отменённые и мягко удалённые задачи, свежие сверху.

@@ -208,6 +208,10 @@
           </div>
           <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg> Сохранить календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
         </section>{% endif %}
+        {% if modules['tasks'].enabled %}<section class="panel announcements-panel tasks-widget" id="tasks-widget">
+          <div class="panel-heading"><div><p class="eyebrow">СМЕНА / ЗАДАЧИ</p><h3>Мои задачи</h3></div><button class="button button-quiet" type="button" data-view="tasks">Все задачи <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
+          <div class="tasks-widget-list" id="tasks-widget-list"></div>
+        </section>{% endif %}
         {% if modules['drinks'].enabled %}<section class="panel drinks-widget" id="drinks-widget">
           <div class="panel-heading"><div><p class="eyebrow">СМЕНА</p><h3>Описание напитков</h3></div><button class="button button-quiet" type="button" data-view="drinks">Все описания <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="drinks-widget-list" id="drinks-widget-list"></div>

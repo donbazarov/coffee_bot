@@ -1250,6 +1250,14 @@ def list_tasks(assignee: str = "all", category: str | None = None,
     }
 
 
+@app.get("/api/tasks/overview")
+def tasks_overview(limit: int = 5,
+                   user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Виджет «Обзор»: свежие задачи, которые касаются меня или моей должности."""
+    limit = max(1, min(int(limit), 10))
+    return {"items": _with_permissions(tasks.list_overview(engine, user, limit), user)}
+
+
 @app.get("/api/tasks/archive")
 def list_tasks_archive(assignee: str = "all", category: str | None = None,
                        user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:

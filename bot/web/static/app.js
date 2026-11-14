@@ -2352,6 +2352,8 @@ function applyModuleVisibility() {
     if (!module.enabled && document.querySelector(`#${module.view}-view`)?.classList.contains('is-visible')) setView('profile');
   }
   const summary = document.querySelector('#calendar-summary');
+  const tasksWidget = document.querySelector('#tasks-widget');
+  if (tasksWidget && modulesState.tasks) tasksWidget.hidden = !modulesState.tasks.enabled;
   if (summary && modulesState.calendar) summary.hidden = !modulesState.calendar.enabled;
 }
 
@@ -7485,6 +7487,60 @@ async function loadDrinksWidget() {
   }
 }
 
+/* --- Виджет «Мои задачи» на «Обзоре» -------------------------------------
+   Компактный список до пяти свежих незакрытых задач, которые касаются меня или
+   моей должности (та же видимость, что у режима «Все» на доске). Визуал — те же
+   карточки, что в ленте анонсов (`.announcement`), панель — `.announcements-panel`. */
+function taskWidgetMarkup(task) {
+  const stage = TASK_STAGE[task.status] || TASK_STAGE.todo;
+  const chip = task.category_label
+    ? `<span class="announcement-chip">#${escapeHtml(task.category_label)}</span>`
+    : '<span class="announcement-chip">БЕЗ КАТЕГОРИИ</span>';
+  const due = taskDueInfo(task);
+  const when = due
+    ? `<span class="announcement-when"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>`
+    : '';
+  const who = task.assignee.type === 'role'
+    ? (task.assignee.role_label || 'Должность')
+    : (task.assignee.name || task.author_name || 'Общая');
+  const meta = `${escapeHtml(stage.label)} · ${escapeHtml(who)}`;
+  return `<article class="announcement${due && due.overdue ? ' is-unread' : ''}" data-task-id="${task.id}" role="button" tabindex="0" style="--announcement-color: ${escapeHtml(task.category_color || '#7b8794')}">
+    <header class="announcement-top">${chip}<h4 class="announcement-title">${escapeHtml(task.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
+    ${task.description ? `<p class="announcement-body">${escapeHtml(task.description.slice(0, 160))}</p>` : ''}
+    <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span></footer>
+  </article>`;
+}
+
+/* Клик, Enter и Space по карточке ведут на доску: виджет — только витрина. */
+function bindTasksWidget() {
+  const list = document.querySelector('#tasks-widget-list');
+  if (!list || list.dataset.bound) return;
+  list.dataset.bound = '1';
+  const open = (event) => {
+    if (!event.target.closest('.announcement[data-task-id]')) return;
+    setView('tasks');
+  };
+  list.addEventListener('click', open);
+  list.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); open(event); }
+  });
+}
+
+async function loadTasksWidget() {
+  const list = document.querySelector('#tasks-widget-list');
+  if (!list) return;
+  try {
+    const data = await api('/api/tasks/overview?limit=5');
+    const items = data.items || [];
+    list.innerHTML = items.length
+      ? items.map(taskWidgetMarkup).join('')
+      : '<p class="empty-state">Актуальных задач нет</p>';
+    bindTasksWidget();
+  } catch (error) {
+    list.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
+  }
+}
+
 const DRINK_FALLBACK_SCALES = {
   balance: ['низкая', 'ниже среднего', 'средняя', 'выше среднего', 'высокая'],
   body: ['легкое', 'среднее', 'плотное'],
@@ -8447,6 +8503,7 @@ function renderTasks() {
   });
   renderTaskArchive();
   renderTaskDoneHint();
+  loadTasksWidget();
   const status = document.querySelector('#tasks-status');
   if (status) {
     const counts = tasksState.counts || {};
@@ -9344,6 +9401,7 @@ function setupDashboard() {
   setupMediaViewer();
   setupFormDrafts();
   loadDrinksWidget();
+  loadTasksWidget();
   setupQuality();
   setupAchievements();
   loadDevelopment();
