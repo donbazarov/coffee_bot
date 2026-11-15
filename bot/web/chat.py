@@ -39,7 +39,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from bot.database.models import engine
-from bot.web import push
+from bot.web import notifications, push
 from bot.web.auth import COOKIE_NAME, read_session
 from bot.web.calendar_service import get_user_preferences
 from bot.web.deps import require_csrf, require_manager, require_manager_csrf, require_user
@@ -785,7 +785,13 @@ def _chat_push_candidates() -> set[int]:
 
 
 def _notify_chat_push(author: dict[str, Any], message: dict[str, Any]) -> None:
-    """Шлёт push офлайн-получателям: ЛС — всегда, общий чат — упоминаниям и «все»."""
+    """Шлёт push офлайн-получателям: ЛС — всегда, общий чат — упоминаниям и «все».
+
+    Параллельно пишет строки в Единый центр уведомлений: личные сообщения и
+    упоминания попадают в колокольчик и в бейдж чата, даже если человек был
+    онлайн. Push для этих событий дополнительно гасится тумблером «Push» в
+    личном кабинете (режим уведомлений чата остаётся первым заслоном).
+    """
     try:
         author_id = int(author["id"])
         author_name = author.get("display_name") or author.get("name") or "Сотрудник"
@@ -805,6 +811,28 @@ def _notify_chat_push(author: dict[str, Any], message: dict[str, Any]) -> None:
             mentioned = match_mentions(message.get("text") or "", exclude=author_id)
             targets = _chat_push_candidates()
 
+        if is_dm:
+            title = f"{author_name} · Личное сообщение"
+            url = f"/?view=chat&peer={author_id}"
+        else:
+            title = f"{author_name} · {_room_name(message.get('room_id'))}"
+            url = f"/?view=chat&room={message.get('room_id')}"
+
+        # Лента центра без push: push ниже уходит по правилам чата.
+        if is_dm:
+            notifications.notify_async(
+                engine, targets, "chat_message", title, preview, url,
+                entity_type="chat", entity_id=message.get("id"), actor_id=author_id,
+                channels=("in_app",),
+            )
+        elif mentioned:
+            notifications.notify_async(
+                engine, mentioned, "chat_mention", title, preview, url,
+                entity_type="chat", entity_id=message.get("id"), actor_id=author_id,
+                channels=("in_app",),
+            )
+
+        center_settings: dict[int, dict[str, bool]] = {}
         for user_id in targets:
             if user_id == author_id or manager.is_online(user_id):
                 continue
@@ -815,12 +843,12 @@ def _notify_chat_push(author: dict[str, Any], message: dict[str, Any]) -> None:
                 continue
             if not is_dm and user_id not in mentioned and mode != "all":
                 continue
-            if is_dm:
-                title = f"{author_name} · Личное сообщение"
-                url = f"/?view=chat&peer={author_id}"
-            else:
-                title = f"{author_name} · {_room_name(message.get('room_id'))}"
-                url = f"/?view=chat&room={message.get('room_id')}"
+            settings = center_settings.get(user_id)
+            if settings is None:
+                settings = notifications.get_settings(engine, user_id)
+                center_settings[user_id] = settings
+            if not settings["chat_message" if is_dm else "chat_mention"]["push"]:
+                continue
             push.send_to_user(engine, user_id, {
                 "title": title,
                 "body": preview,

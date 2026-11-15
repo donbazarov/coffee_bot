@@ -4013,11 +4013,9 @@ function visibleAnnouncements(limit) {
 }
 
 function renderAnnouncementBadge() {
+  // Бейджи разделов здесь намеренно не трогаем: их ведёт Единый центр
+  // уведомлений (`renderNotificationBadges`) — иначе счётчики перекрывались бы.
   const total = Number((announcementsState.unread || {}).total || 0);
-  document.querySelectorAll('.nav-badge').forEach((badge) => {
-    badge.hidden = total === 0;
-    badge.textContent = total > 99 ? '99+' : String(total);
-  });
   const label = document.querySelector('#announcements-unread-label');
   if (label) label.textContent = total ? `Непрочитанных: ${total}` : 'Всё прочитано';
   const enabled = (announcementsState.unread || {}).enabled || [];
@@ -4316,6 +4314,302 @@ async function markAnnouncementsRead() {
   } catch (error) { showToast(error.message); }
 }
 
+/* --- Единый центр уведомлений -------------------------------------------
+   Лента, бейджи разделов и персональные настройки каналов. Данные —
+   /api/notifications* (см. bot/web/notifications.py и notification_registry.py). */
+
+const notificationsState = {
+  items: [],
+  summary: { total: 0, by_module: {} },
+  modules: [],
+  loaded: false,
+  loading: false,
+  panelOpen: false,
+};
+
+/* Модуль события → иконка спрайта: тот же код, что в notification_registry. */
+const NOTIF_MODULE_ICONS = {
+  qc: 'i-poll', shifts: 'i-calendar', tasks: 'i-kanban', kb: 'i-book',
+  announcements: 'i-bell', chat: 'i-chat',
+};
+
+function renderNotificationBadges() {
+  const byModule = (notificationsState.summary || {}).by_module || {};
+  document.querySelectorAll('[data-badge-module]').forEach((badge) => {
+    const value = Number(byModule[badge.dataset.badgeModule] || 0);
+    badge.hidden = value === 0;
+    badge.textContent = value > 99 ? '99+' : String(value);
+  });
+  const total = Number((notificationsState.summary || {}).total || 0);
+  const bell = document.querySelector('#notif-bell-badge');
+  if (bell) {
+    bell.hidden = total === 0;
+    bell.textContent = total > 99 ? '99+' : String(total);
+  }
+  const caption = document.querySelector('#notif-panel-total');
+  if (caption) caption.textContent = total ? `Непрочитанных: ${total}` : 'Всё прочитано';
+  const button = document.querySelector('#notif-bell');
+  if (button) {
+    button.classList.toggle('has-unread', total > 0);
+    button.setAttribute('aria-label', total ? `Центр уведомлений: непрочитанных ${total}` : 'Центр уведомлений');
+  }
+}
+
+/* Счётчик непрочитанных нужен и без открытой шторки — бейджи в сайдбаре.
+   Ошибку глотаем: офлайн не должен шуметь тостами из-за бейджа. */
+async function loadNotificationSummary() {
+  try {
+    notificationsState.summary = await api('/api/notifications/unread-summary');
+    renderNotificationBadges();
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function notifTimeLabel(value) {
+  const stamp = Date.parse(value || '');
+  if (!Number.isFinite(stamp)) return 'Ранее';
+  const date = new Date(stamp);
+  const now = new Date();
+  const dayStart = (source) => new Date(source.getFullYear(), source.getMonth(), source.getDate()).getTime();
+  const days = Math.round((dayStart(now) - dayStart(date)) / 86400000);
+  if (days <= 0) return 'Сегодня';
+  if (days === 1) return 'Вчера';
+  return 'Ранее';
+}
+
+function notifMoment(value) {
+  const stamp = Date.parse(value || '');
+  if (!Number.isFinite(stamp)) return '';
+  return new Date(stamp).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+}
+
+function renderNotificationList() {
+  const list = document.querySelector('#notif-list');
+  const empty = document.querySelector('#notif-empty');
+  if (!list) return;
+  const items = notificationsState.items || [];
+  if (empty) empty.hidden = items.length > 0;
+  const chunks = [];
+  let group = '';
+  items.forEach((item) => {
+    const label = notifTimeLabel(item.created_at);
+    if (label !== group) {
+      group = label;
+      chunks.push(`<p class="notif-group">${escapeHtml(label)}</p>`);
+    }
+    const icon = NOTIF_MODULE_ICONS[item.module] || 'i-bell';
+    const entityId = item.entity_id === null || item.entity_id === undefined ? '' : item.entity_id;
+    chunks.push(`<button class="notif-item${item.is_read ? '' : ' is-unread'}" type="button" role="listitem" data-notif-id="${item.id}" data-notif-url="${escapeHtml(item.target_url)}" data-notif-entity="${escapeHtml(item.entity_type || '')}" data-notif-entity-id="${entityId}">
+      <span class="notif-item-icon"><svg class="icon" aria-hidden="true"><use href="#${icon}"></use></svg></span>
+      <span class="notif-item-copy">
+        <span class="notif-item-top"><b>${escapeHtml(item.title)}</b><span class="notif-item-when">${escapeHtml(item.module_title)} · ${escapeHtml(notifMoment(item.created_at))}</span></span>
+        ${item.body ? `<span class="notif-item-body">${escapeHtml(item.body)}</span>` : ''}
+      </span>
+    </button>`);
+  });
+  list.innerHTML = chunks.join('');
+}
+
+async function loadNotifications() {
+  if (notificationsState.loading) return false;
+  notificationsState.loading = true;
+  try {
+    const data = await api('/api/notifications?limit=30');
+    notificationsState.items = data.items || [];
+    notificationsState.summary = data.unread || notificationsState.summary;
+    notificationsState.loaded = true;
+    renderNotificationList();
+    renderNotificationBadges();
+    return true;
+  } catch (error) {
+    if (!error.isOffline) showToast(error.message);
+    return false;
+  } finally {
+    notificationsState.loading = false;
+  }
+}
+
+async function markNotificationsRead(payload) {
+  try {
+    const data = await api('/api/notifications/mark-read', { method: 'POST', body: JSON.stringify(payload) });
+    if (data.unread) notificationsState.summary = data.unread;
+    renderNotificationBadges();
+    return data;
+  } catch (error) {
+    showToast(error.message);
+    return null;
+  }
+}
+
+function openNotificationPanel() {
+  const panel = document.querySelector('#notif-panel');
+  const backdrop = document.querySelector('#notif-backdrop');
+  if (!panel) return;
+  notificationsState.panelOpen = true;
+  panel.hidden = false;
+  if (backdrop) backdrop.classList.add('is-visible');
+  document.querySelector('#notif-bell')?.setAttribute('aria-expanded', 'true');
+  loadNotifications();
+}
+
+function closeNotificationPanel() {
+  const panel = document.querySelector('#notif-panel');
+  const backdrop = document.querySelector('#notif-backdrop');
+  if (!panel || !notificationsState.panelOpen) return;
+  notificationsState.panelOpen = false;
+  panel.hidden = true;
+  if (backdrop) backdrop.classList.remove('is-visible');
+  document.querySelector('#notif-bell')?.setAttribute('aria-expanded', 'false');
+}
+
+/* Переход по ссылке уведомления: раздел открывается сразу, задача — с
+   подсветкой карточки (deep-link `/?view=tasks&task=<id>`). */
+async function openTaskFromLink(id) {
+  setView('tasks');
+  await loadTasks();
+  const card = document.querySelector(`#tasks-board [data-task-id="${id}"]`)
+    || document.querySelector(`#tasks-archive [data-task-open="${id}"]`);
+  if (card) {
+    card.scrollIntoView({ behavior: prefersReducedMotion() ? 'auto' : 'smooth', block: 'center' });
+    card.classList.add('is-highlighted');
+    setTimeout(() => card.classList.remove('is-highlighted'), 2200);
+    return;
+  }
+  try { openTaskViewDialog(id); } catch (error) { /* карточка могла уйти в архив */ }
+}
+
+/* --- Настройки центра в личном кабинете --------------------------------- */
+
+function renderNotificationSettings(modules) {
+  const node = document.querySelector('#notif-settings');
+  notificationsState.modules = modules || [];
+  if (!node) return;
+  if (!notificationsState.modules.length) {
+    node.innerHTML = '<p class="empty-state">Настройки недоступны</p>';
+    return;
+  }
+  node.innerHTML = notificationsState.modules.map((module) => `
+    <div class="notif-settings-group">
+      <p class="notif-settings-title"><svg class="icon" aria-hidden="true"><use href="#${escapeHtml(module.icon)}"></use></svg>${escapeHtml(module.title)}</p>
+      ${(module.events || []).map((item) => `
+      <div class="notif-setting-row">
+        <span class="notif-setting-copy"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.hint || '')}</small></span>
+        <span class="notif-setting-toggles">
+          <label class="notif-toggle" title="Показывать в приложении"><input type="checkbox" data-notif-event="${escapeHtml(item.code)}" data-notif-channel="in_app"${item.in_app ? ' checked' : ''}><i></i><span>В приложении</span></label>
+          <label class="notif-toggle" title="Дублировать push-уведомлением"><input type="checkbox" data-notif-event="${escapeHtml(item.code)}" data-notif-channel="push"${item.push ? ' checked' : ''}><i></i><span>Push</span></label>
+        </span>
+      </div>`).join('')}
+    </div>`).join('');
+}
+
+async function loadNotificationSettings() {
+  const node = document.querySelector('#notif-settings');
+  if (!node) return;
+  try {
+    const data = await api('/api/notifications/settings');
+    renderNotificationSettings(data.modules || []);
+  } catch (error) {
+    node.innerHTML = '';
+  }
+}
+
+function setNotificationNote(message) {
+  const note = document.querySelector('#notif-settings-note');
+  if (note) note.textContent = message;
+}
+
+async function saveNotificationSetting(code, channel, enabled) {
+  try {
+    const data = await api('/api/notifications/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ event_type: code, [channel]: enabled }),
+    });
+    renderNotificationSettings(data.modules || notificationsState.modules);
+    setNotificationNote('Настройки сохранены');
+  } catch (error) {
+    setNotificationNote(error.message);
+    loadNotificationSettings();
+  }
+}
+
+async function resetNotificationSettings() {
+  try {
+    const data = await api('/api/notifications/settings', {
+      method: 'POST', body: JSON.stringify({ reset: true }),
+    });
+    renderNotificationSettings(data.modules || []);
+    setNotificationNote('Настройки возвращены к стандартным');
+  } catch (error) {
+    setNotificationNote(error.message);
+  }
+}
+
+/* Колокольчик, шторка и тумблеры профиля. Поллинг — раз в минуту и при
+   возвращении на вкладку: бейджи не должны «залипать» после действий коллег. */
+function setupNotifications() {
+  document.querySelector('#notif-bell')?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (notificationsState.panelOpen) closeNotificationPanel(); else openNotificationPanel();
+  });
+  document.querySelector('#notif-backdrop')?.addEventListener('click', closeNotificationPanel);
+  document.addEventListener('click', (event) => {
+    if (!notificationsState.panelOpen) return;
+    if (event.target.closest('#notif-panel') || event.target.closest('#notif-bell')) return;
+    closeNotificationPanel();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeNotificationPanel();
+  });
+  document.querySelector('#notif-read-all')?.addEventListener('click', async () => {
+    const data = await markNotificationsRead({ all: true });
+    if (!data) return;
+    notificationsState.items = (notificationsState.items || []).map((item) => ({ ...item, is_read: true }));
+    renderNotificationList();
+  });
+  // Клик по уведомлению: помечаем прочитанным (по сущности, если она есть) и
+  // уходим по deep-link — раздел, анонс, страница БЗ, задача или чат.
+  document.querySelector('#notif-list')?.addEventListener('click', async (event) => {
+    const card = event.target.closest('[data-notif-id]');
+    if (!card) return;
+    const id = Number(card.dataset.notifId);
+    const entityType = card.dataset.notifEntity;
+    const entityId = card.dataset.notifEntityId;
+    const url = card.dataset.notifUrl || '/';
+    closeNotificationPanel();
+    if (!card.classList.contains('is-read')) {
+      const payload = entityType && entityId
+        ? { entity_type: entityType, entity_id: Number(entityId) }
+        : { ids: [id] };
+      await markNotificationsRead(payload);
+      notificationsState.items = (notificationsState.items || []).map((item) => (
+        (item.id === id
+          || (entityType && item.entity_type === entityType && String(item.entity_id) === String(entityId)))
+          ? { ...item, is_read: true } : item
+      ));
+      renderNotificationList();
+    }
+    applyDeepLink(url);
+  });
+  document.querySelector('#notif-settings')?.addEventListener('change', (event) => {
+    const input = event.target.closest('[data-notif-event]');
+    if (!input) return;
+    saveNotificationSetting(input.dataset.notifEvent, input.dataset.notifChannel, input.checked);
+  });
+  document.querySelector('#notif-settings-reset')?.addEventListener('click', resetNotificationSettings);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadNotificationSummary();
+  });
+  window.setInterval(() => {
+    if (!document.hidden) loadNotificationSummary();
+  }, 60000);
+  loadNotificationSettings();
+  loadNotificationSummary();
+}
+
 /* --- Push на устройстве -------------------------------------------------
    Ключ VAPID берём у сервера, подписку отдаём туда же. На телефоне уведомления
    приходят только в установленное приложение (iOS 16.4+), поэтому про это честно
@@ -4491,6 +4785,7 @@ function applyDeepLink(url) {
     const params = new URL(url, window.location.origin).searchParams;
     const announcement = params.get('announcement');
     const page = params.get('page');
+    const task = params.get('task');
     const view = params.get('view');
     const share = params.get('share');
     const shareError = params.get('share_error');
@@ -4507,6 +4802,7 @@ function applyDeepLink(url) {
       };
     }
     if (announcement) openAnnouncementCard(Number(announcement));
+    else if (task) openTaskFromLink(Number(task));
     else if (page) openKbPageFromLink(Number(page));
     else if (view) setView(view);
     else if (!share && !shareError) return;
@@ -10406,6 +10702,7 @@ function setupDashboard() {
   setupWorkloadForm();
   setupAnalytics();
   setupAnnouncements();
+  setupNotifications();
   setupTasks();
   setupMaintenance();
   loadAnnouncements();
@@ -10808,6 +11105,8 @@ function setupServiceWorker() {
     if (event.data === 'reload') window.location.reload();
     // Тап по push-уведомлению просит открыть раздел или конкретный анонс.
     if (event.data && event.data.type === 'navigate') applyDeepLink(event.data.url);
+    // Push о любом событии центра: обновляем бейджи в уже открытом окне.
+    if (event.data && event.data.type === 'notifications_updated') loadNotificationSummary();
   });
   navigator.serviceWorker.register(`/sw.js?v=${version}`, { scope: '/' }).catch(() => {
     // Не получилось — сайт работает как раньше, просто без мгновенного старта.

@@ -782,6 +782,70 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .push-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0 0 10px; }
 .push-status { color: var(--muted); font-size: 11px; }
 
+/* --- Единый центр уведомлений ------------------------------------------- */
+/* Колокольчик в шапке: счётчик непрочитанных и выпадающая шторка с лентой.
+   Шторка живёт внутри `.notif-wrap`, поэтому позиционируется от кнопки. */
+.notif-wrap { position: relative; flex: 0 0 auto; }
+.notif-bell { position: relative; }
+.notif-bell.has-unread { border-color: var(--accent-line); color: var(--text); }
+.notif-bell-badge { position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent); color: var(--accent-contrast); font: 10px/16px var(--mono); text-align: center; }
+.notif-panel { position: absolute; z-index: 44; top: calc(100% + 10px); right: 0; display: flex; width: min(420px, calc(100vw - 32px)); max-height: min(70vh, 560px); flex-direction: column; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-2); }
+.notif-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.notif-panel-copy { display: grid; gap: 4px; }
+.notif-panel-copy .eyebrow { margin: 0; }
+.notif-panel-copy strong { font-size: 13px; font-weight: 600; }
+.notif-list { display: flex; flex-direction: column; gap: 2px; padding: 8px; overflow-y: auto; }
+.notif-group { margin: 10px 8px 4px; color: var(--dim); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.notif-item { display: flex; gap: 10px; padding: 10px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background-color .18s; }
+.notif-item:hover { background: rgba(var(--hl), .05); }
+.notif-item.is-unread { background: var(--accent-faint); }
+.notif-item-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--surface-sunken); color: var(--accent); }
+.notif-item-icon .icon { width: 16px; height: 16px; }
+.notif-item-copy { display: grid; min-width: 0; gap: 3px; }
+.notif-item-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.notif-item-top b { font-size: 13px; font-weight: 600; }
+.notif-item-when { color: var(--muted); font-size: 10px; }
+.notif-item-body { color: var(--text-soft); font-size: 12px; line-height: 1.5; }
+.notif-empty { margin: 0; padding: 22px 16px; color: var(--muted); font-size: 12px; text-align: center; }
+.notif-backdrop { position: fixed; z-index: 43; inset: 0; display: none; background: var(--overlay); }
+.notif-backdrop.is-visible { display: block; }
+
+/* Настройки в личном кабинете: группы по модулям, на событие — два тумблера.
+   Тумблер собран по тому же принципу, что `.module-setting` (скрытый input + i). */
+.notif-settings { display: grid; gap: 18px; padding: 4px 0 0; }
+.notif-settings-group { display: grid; gap: 8px; }
+.notif-settings-title { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+.notif-settings-title .icon { width: 14px; height: 14px; color: var(--accent); }
+.notif-setting-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-sunken); }
+.notif-setting-copy { display: grid; min-width: 170px; gap: 3px; }
+.notif-setting-copy strong { font-size: 12px; font-weight: 600; }
+.notif-setting-copy small { color: var(--muted); font-size: 10px; }
+.notif-setting-toggles { display: flex; flex-wrap: wrap; gap: 8px; }
+.notif-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 12px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; cursor: pointer; transition: border-color .18s, color .18s, background-color .18s; }
+.notif-toggle input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.notif-toggle i { position: relative; width: 34px; height: 19px; flex: 0 0 auto; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--switch-track); transition: background .2s, border-color .2s; }
+.notif-toggle i::after { position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--switch-knob); content: ""; transition: transform .2s, background .2s; }
+.notif-toggle input:checked + i { border-color: color-mix(in srgb, var(--mint) 55%, transparent); background: color-mix(in srgb, var(--mint) 42%, transparent); }
+.notif-toggle input:checked + i::after { background: var(--mint); transform: translateX(15px); }
+.notif-toggle input:checked ~ span { color: var(--text-soft); }
+.notif-toggle:focus-within { border-color: var(--accent-line); }
+.notif-toggle input:focus-visible + i { outline: 2px solid var(--mint); outline-offset: 3px; }
+.notif-settings-actions { display: flex; justify-content: flex-end; padding: 14px 0 4px; }
+
+/* Тумблер — пружинистый ход, как у остальных переключателей проекта. */
+.notif-toggle i, .notif-toggle i::after { transition-timing-function: cubic-bezier(.34,1.56,.64,1); }
+
+@media (max-width: 720px) {
+  /* На телефоне шторка превращается в лист: панель от края до края. */
+  .notif-panel { position: fixed; top: 72px; right: 12px; left: 12px; width: auto; max-height: 72vh; }
+  .notif-setting-row { align-items: flex-start; }
+  .notif-setting-copy { min-width: 0; }
+  .notif-panel-head { position: sticky; top: 0; background: var(--surface); }
+}
+
+/* Подсветка карточки задачи при переходе из уведомления. */
+.task-card.is-highlighted { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .announcements-panel { margin: 0 0 34px; padding: 19px 21px 16px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .announcement-list { display: grid; gap: 10px; }
 .announcement { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 2px solid var(--announcement-color, var(--line)); background: var(--surface); cursor: pointer; }

@@ -187,6 +187,21 @@
       <header class="topbar">
         <button class="icon-button topbar-menu" type="button" id="drawer-open" aria-label="Открыть меню" aria-expanded="false" title="Меню"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>
         <div class="topbar-title"><span class="eyebrow">CREW DESK/</span><h1 id="page-title" data-name="{{ user.display_name or user.name }}">Добрый день, {{ user.display_name or user.name }}</h1></div>
+        {# Центр уведомлений: колокольчик в шапке и выпадающая шторка с лентой.
+           Бейджи разделов (`.nav-badge[data-badge-module]`) обновляет app.js из
+           ответа /api/notifications/unread-summary. #}
+        <div class="notif-wrap" id="notif-wrap">
+          <button class="icon-button notif-bell" type="button" id="notif-bell" aria-label="Центр уведомлений" aria-haspopup="true" aria-expanded="false" aria-controls="notif-panel"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="notif-bell-badge" id="notif-bell-badge" hidden></span></button>
+          <div class="notif-panel" id="notif-panel" hidden role="dialog" aria-label="Уведомления">
+            <div class="notif-panel-head">
+              <div class="notif-panel-copy"><p class="eyebrow">ЦЕНТР УВЕДОМЛЕНИЙ</p><strong id="notif-panel-total">Всё прочитано</strong></div>
+              <button class="button button-quiet" type="button" id="notif-read-all">Прочитать всё</button>
+            </div>
+            <div class="notif-list" id="notif-list" role="list"></div>
+            <p class="notif-empty" id="notif-empty" hidden>Пока ничего нового</p>
+          </div>
+        </div>
+        <div class="notif-backdrop" id="notif-backdrop"></div>
         <div class="app-status" id="app-network-status">
           <span class="status-light" id="app-network-light"></span>
           <span class="status-text" id="app-network-text">СЕРВИС АКТИВЕН</span>
@@ -635,6 +650,15 @@
           </div>
           <p class="account-note" id="chat-notify-note" role="status"></p>
         </section>
+        {# Центр уведомлений: тумблеры «В приложении» и «Push» на каждое событие.
+           Список строит app.js из GET /api/notifications/settings. #}
+        <section class="panel settings-panel" id="notification-center-panel">
+          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Центр уведомлений и Push</h3></div></div>
+          <p class="settings-hint">Что показывать в приложении (колокольчик и бейджи разделов) и что дублировать системным push-уведомлением. «Push» работает только на устройствах, где включены уведомления.</p>
+          <div class="notif-settings" id="notif-settings"></div>
+          <div class="notif-settings-actions"><button class="button button-quiet" type="button" id="notif-settings-reset">Сбросить к стандартным</button></div>
+          <p class="account-note" id="notif-settings-note" role="status"></p>
+        </section>
         {% if real_role in ['senior', 'mentor'] %}
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
           <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"{% if preview_active %} checked{% endif %}><i></i></label>
@@ -931,17 +955,17 @@
     </div>
     <nav class="drawer-nav" aria-label="Меню">
       <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-overview"></use></svg></span><span>Обзор</span></button>
-      {% if modules['calendar'].enabled %}<button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg></span><span>График смен</span></button>{% endif %}
-      {% if modules['announcements'].enabled %}<button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" id="announcements-badge" hidden></span></span><span>Анонсы</span></button>{% endif %}
-      {% if modules['tasks'].enabled %}<button class="nav-item" type="button" data-view="tasks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-kanban"></use></svg></span><span>Задачи</span></button>{% endif %}
+      {% if modules['calendar'].enabled %}<button class="nav-item" type="button" data-view="calendar"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar"></use></svg><span class="nav-badge" data-badge-module="shifts" hidden></span></span><span>График смен</span></button>{% endif %}
+      {% if modules['announcements'].enabled %}<button class="nav-item" type="button" data-view="announcements"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg><span class="nav-badge" data-badge-module="announcements" hidden></span></span><span>Анонсы</span></button>{% endif %}
+      {% if modules['tasks'].enabled %}<button class="nav-item" type="button" data-view="tasks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-kanban"></use></svg><span class="nav-badge" data-badge-module="tasks" hidden></span></span><span>Задачи</span></button>{% endif %}
       {% if modules['maintenance'].enabled %}<button class="nav-item" type="button" data-view="maintenance"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-tune"></use></svg></span><span>Тех. обслуживание</span></button>{% endif %}
-      {% if modules['kb'].enabled %}<button class="nav-item" type="button" data-view="kb"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg></span><span>База знаний</span></button>{% endif %}
+      {% if modules['kb'].enabled %}<button class="nav-item" type="button" data-view="kb"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg><span class="nav-badge" data-badge-module="kb" hidden></span></span><span>База знаний</span></button>{% endif %}
       <div class="drawer-divider"></div>
       {% if modules['development'].enabled %}<button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>{% endif %}
-      {% if modules['quality'].enabled %}<button class="nav-item" type="button" data-view="quality"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg></span><span>Контроль качества</span></button>{% endif %}
+      {% if modules['quality'].enabled %}<button class="nav-item" type="button" data-view="quality"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg><span class="nav-badge" data-badge-module="qc" hidden></span></span><span>Контроль качества</span></button>{% endif %}
       {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg></span><span>Описание напитков</span></button>{% endif %}
       <div class="drawer-divider"></div>
-      {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" id="chat-badge" hidden></span></span><span>Чат</span></button>{% endif %}
+      {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" data-badge-module="chat" hidden></span></span><span>Чат</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] and modules['analytics'].enabled %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
       <div class="drawer-divider"></div>

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import os
 import re
 import uuid
@@ -43,8 +44,10 @@ from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import maintenance, modules, page_links
+from bot.web import maintenance, modules, notifications, page_links
 from bot.web.deps import require_manager_csrf, require_user
+
+logger = logging.getLogger("bot.web.knowledge_base")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -888,6 +891,32 @@ def kb_page_recipes(page_id: int, limit: int = 20, offset: int = 0,
     }
 
 
+def _notify_kb_change(page_id: int, actor: dict[str, Any], created: bool) -> None:
+    """Единый центр уведомлений: «в базе знаний появилась/обновилась страница».
+
+    Справочники зерна и напитков отдаём отдельным событием: правки в них важно
+    видеть бариста, а не только наставникам.
+    """
+    try:
+        with engine.connect() as connection:
+            row = connection.execute(
+                text("SELECT title, category FROM kb_pages WHERE id = :id"), {"id": page_id}
+            ).mappings().first()
+        if not row:
+            return
+        category = str(row["category"] or "")
+        event = "kb_drink_updated" if category in {"beans", "drinks"} else "kb_page_updated"
+        who = actor.get("display_name") or actor.get("name") or "Коллега"
+        verb = "добавил" if created else "обновил"
+        notifications.notify_audience_async(
+            engine, event, str(row["title"] or "Страница базы знаний"),
+            f"{who} {verb} страницу базы знаний", f"/?view=kb&page={page_id}",
+            entity_type="kb_page", entity_id=page_id, actor_id=int(actor["id"]),
+        )
+    except Exception as error:  # noqa: BLE001 — уведомление не должно ломать правку
+        logger.warning("База знаний: уведомление не отправлено: %s", error)
+
+
 @kb_router.post("/pages")
 async def kb_create_page(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
     """Создаёт страницу. Для beans/drinks автоматически заводит запись справочника."""
@@ -896,12 +925,13 @@ async def kb_create_page(request: Request, user: dict[str, Any] = Depends(requir
         page_id = create_page(engine, int(user["id"]), payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+    _notify_kb_change(page_id, user, True)
     return {"ok": True, "id": page_id}
 
 
 @kb_router.put("/pages/{page_id}")
 async def kb_update_page(page_id: int, request: Request,
-                         _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                         user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
     """Правка страницы и синхронизация полей связанного справочника."""
     payload = await _json_object(request)
     try:
@@ -910,6 +940,7 @@ async def kb_update_page(page_id: int, request: Request,
         raise HTTPException(status_code=422, detail=str(error)) from error
     if not updated:
         raise HTTPException(status_code=404, detail="Страница не найдена")
+    _notify_kb_change(page_id, user, False)
     return {"ok": True}
 
 

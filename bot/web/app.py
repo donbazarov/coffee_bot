@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
+from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -80,6 +80,9 @@ LOGIN_ERRORS = {
 }
 ACCENT_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 MAX_AVATAR_BYTES = 4 * 1024 * 1024
+# Категория анонса → тип события Единого центра уведомлений: публикация графика и
+# замены относятся к модулю «График смен», остальные категории — к «Анонсам».
+ANNOUNCEMENT_EVENT_TYPES = {"schedule": "shift_published", "swap": "shift_swapped"}
 
 # Логи домена "bot.web" uvicorn по умолчанию не показывает: он настраивает только
 # свои логгеры, а корневой остаётся на WARNING. Заводим собственный обработчик,
@@ -228,6 +231,8 @@ def migrate_database():
     tasks.auto_archive(engine)
     tasks.prune_deleted(engine)
     push.initialize_schema(engine)
+    # Единый центр уведомлений: лента, персональные настройки каналов и push.
+    notifications.initialize_schema(engine)
     chat.initialize_schema(engine)
     # Справочники базы знаний (menu_drinks/coffee_beans) создаём до таблиц
     # геймификации: `evaluations` ссылается на них через drink_id/bean_id, и на
@@ -988,6 +993,47 @@ def notify_announcement_push(announcement: dict[str, Any], author_id: int | None
         ).start()
     except RuntimeError:
         pass
+    # Единый центр: та же публикация попадает в ленту и в бейджи сайдбара, а тип
+    # события зависит от категории (график/замены — события модуля «Смены»).
+    try:
+        payload = push.notification_payload(announcement, work_points.project_name(engine))
+        category = str(announcement.get("category") or "")
+        notifications.notify_audience_async(
+            engine, ANNOUNCEMENT_EVENT_TYPES.get(category, "announcement_new"),
+            payload["title"], payload["body"], payload["url"],
+            entity_type="announcement", entity_id=announcement.get("id"), actor_id=author_id,
+        )
+    except Exception as error:  # noqa: BLE001 — лента не должна ломать публикацию
+        logger.warning("Центр уведомлений: анонс не разослан: %s", error)
+
+
+def _notify_quality_evaluation(evaluator: dict[str, Any], employee_ids: list[int],
+                               result: dict[str, Any], kind: str) -> None:
+    """Центр уведомлений: сообщаем бариста о свежей оценке наставника.
+
+    Вызывается после коммита оценки: две одновременные транзакции на SQLite
+    упрутся в блокировку, поэтому отправка идёт в фоном потоке уже после записи.
+    """
+    try:
+        store = [int(value) for value in employee_ids if value]
+        if not store:
+            return
+        raw_ids = result.get("ids")
+        if not isinstance(raw_ids, list):
+            raw_ids = [result.get("id")]
+        entity_id = next((int(value) for value in raw_ids if isinstance(value, int)), None)
+        author = evaluator.get("display_name") or evaluator.get("name") or "Наставник"
+        title = "Новая оценка напитка" if kind == "drink" else "Новая оценка чистоты и порядка"
+        body = f"{author} выставил вам оценку"
+        overall = result.get("overall")
+        if isinstance(overall, (int, float)):
+            body += f" · итог {round(float(overall), 1)}"
+        notifications.notify_async(
+            engine, store, "qc_scored", title, body, "/?view=quality",
+            entity_type="qc_eval", entity_id=entity_id, actor_id=int(evaluator["id"]),
+        )
+    except Exception as error:  # noqa: BLE001 — лента не должна ломать оценку
+        logger.warning("Центр уведомлений: оценка не разослана: %s", error)
 
 
 @app.get("/api/push/key")
@@ -1029,6 +1075,95 @@ def push_test(user: dict[str, Any] = Depends(require_csrf)):
     if not delivered:
         raise HTTPException(status_code=502, detail="Push-сервис не принял уведомление — проверьте логи сервиса")
     return {"ok": True, "delivered": delivered}
+
+
+@app.get("/api/notifications")
+def list_notifications(limit: int = 20, offset: int = 0, module: str | None = None,
+                       unread: int = 0, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Лента текущего сотрудника: страница + непрочитанное по модулям."""
+    if module and not notification_registry.get_module(module):
+        raise HTTPException(status_code=422, detail="Неизвестный модуль уведомлений")
+    return notifications.list_for_user(
+        engine, int(user["id"]), limit=limit, offset=offset, module=module,
+        unread_only=bool(unread),
+    )
+
+
+@app.get("/api/notifications/unread-summary")
+def notifications_unread_summary(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Непрочитанные суммарно и по модулям — для бейджей в сайдбаре."""
+    return notifications.unread_summary(engine, int(user["id"]))
+
+
+@app.post("/api/notifications/mark-read")
+async def mark_notifications_read(request: Request,
+                                  user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Пометка прочитанным: список id, сущность (авто при открытии) или всё сразу."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"ids", "all", "entity_type", "entity_id"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля")
+    ids = payload.get("ids")
+    if ids is not None and (not isinstance(ids, list)
+                            or any(isinstance(value, bool) or not isinstance(value, int) for value in ids)):
+        raise HTTPException(status_code=422, detail="ids должен быть списком чисел")
+    entity_type = payload.get("entity_type")
+    if entity_type is not None and not isinstance(entity_type, str):
+        raise HTTPException(status_code=422, detail="Некорректный entity_type")
+    entity_id = payload.get("entity_id")
+    if entity_id is not None and (isinstance(entity_id, bool) or not isinstance(entity_id, int)):
+        raise HTTPException(status_code=422, detail="Некорректный entity_id")
+    count = notifications.mark_read(
+        engine, int(user["id"]), ids, everything=bool(payload.get("all")),
+        entity_type=entity_type or None, entity_id=entity_id,
+    )
+    return {"ok": True, "count": count,
+            "unread": notifications.unread_summary(engine, int(user["id"]))}
+
+
+@app.get("/api/notifications/settings")
+def notification_settings(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """События по модулям с текущими тумблерами — секция личного кабинета."""
+    return {"modules": notifications.settings_view(engine, int(user["id"]))}
+
+
+@app.patch("/api/notifications/settings")
+async def update_notification_settings(request: Request,
+                                       user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Частичное обновление тумблеров: `{events: {код: {in_app, push}}}`."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"events", "event_type", "in_app", "push"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля")
+    events = payload.get("events")
+    if events is None:
+        code = str(payload.get("event_type") or "").strip()
+        if not code or not notification_registry.is_event(code):
+            raise HTTPException(status_code=422, detail="Неизвестное событие")
+        single = {key: payload[key] for key in ("in_app", "push")
+                  if isinstance(payload.get(key), bool)}
+        if not single:
+            raise HTTPException(status_code=422, detail="Нужен in_app или push")
+        events = {code: single}
+    if not isinstance(events, dict):
+        raise HTTPException(status_code=422, detail="events должен быть объектом")
+    notifications.set_settings(engine, int(user["id"]), events)
+    return {"ok": True, "modules": notifications.settings_view(engine, int(user["id"]))}
+
+
+@app.post("/api/notifications/settings")
+async def save_notification_settings(request: Request,
+                                     user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
+    """Массовое сохранение (список событий) или сброс к дефолтам (`reset`)."""
+    payload = await _read_json_object(request)
+    if set(payload) - {"events", "reset"}:
+        raise HTTPException(status_code=422, detail="Неизвестные поля")
+    if payload.get("reset"):
+        notifications.reset_settings(engine, int(user["id"]))
+    else:
+        events = payload.get("events")
+        if not isinstance(events, list):
+            raise HTTPException(status_code=422, detail="events должен быть списком")
+        notifications.set_settings(engine, int(user["id"]), events)
+    return {"ok": True, "modules": notifications.settings_view(engine, int(user["id"]))}
 
 
 @app.get("/api/announcements")
@@ -1687,11 +1822,13 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
         with engine.begin() as connection:
             allowed = {code for code, *_ in gamification.CLEANLINESS_PARAMS}
             scores = _validate_param_scores(payload.get("scores"), allowed)
-            return gamification.apply_cleanliness_evaluation(
+            return_result = gamification.apply_cleanliness_evaluation(
                 connection, int(evaluator["id"]), employee_ids, scores,
                 shift_point=point, photo_url=photo_url, comment=comment,
                 mentor_comment=mentor_comment,
             )
+        _notify_quality_evaluation(evaluator, employee_ids, return_result, "cleanliness")
+        return return_result
 
     employee_id = payload.get("employee_id")
     if isinstance(employee_id, bool) or not isinstance(employee_id, int):
@@ -1724,11 +1861,13 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
                 category = row[0]
         spec = gamification.params_for_category(category)
         scores = _validate_param_scores(payload.get("scores"), {code for code, *_ in spec})
-        return gamification.apply_drink_evaluation(
+        return_result = gamification.apply_drink_evaluation(
             connection, int(evaluator["id"]), int(employee_id), category, scores,
             photo_url=photo_url, drink_id=drink_id, bean_id=bean_id,
             shift_point=point, comment=comment, mentor_comment=mentor_comment,
         )
+    _notify_quality_evaluation(evaluator, [int(employee_id)], return_result, "drink")
+    return return_result
 
 
 @app.get("/api/evaluations/options")

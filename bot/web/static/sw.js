@@ -223,8 +223,9 @@ function withTimeout(promise, ms) {
 
 /* — push-уведомления ———————————————————————————————————————————————————— */
 
-/* Показываем уведомление о новом анонсе. Payload приходит от сервера
-   (см. bot/web/push.py::notification_payload). */
+/* Показываем уведомление о событии и просим открытые окна перечитать счётчик
+   непрочитанных: payload приходит из Единого центра уведомлений
+   (bot/web/notifications.py::notify). */
 self.addEventListener('push', (event) => {
   let payload = {};
   try {
@@ -239,7 +240,12 @@ self.addEventListener('push', (event) => {
     tag: payload.tag || 'neft-announcement',
     data: { url: payload.url || '/?view=announcements' },
   };
-  event.waitUntil(self.registration.showNotification(payload.title || 'Анонс', options));
+  event.waitUntil((async () => {
+    await self.registration.showNotification(payload.title || 'Crew Desk', options);
+    // Мгновенное обновление бейджей: окно уже открыто, ждать опроса не нужно.
+    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    clients.forEach((client) => client.postMessage({ type: 'notifications_updated' }));
+  })());
 });
 
 /* Тап по уведомлению: фокусируем уже открытое окно и просим его открыть
@@ -253,6 +259,7 @@ self.addEventListener('notificationclick', (event) => {
       if (client.url.startsWith(self.location.origin)) {
         await client.focus();
         client.postMessage({ type: 'navigate', url: target });
+        client.postMessage({ type: 'notifications_updated' });
         return;
       }
     }

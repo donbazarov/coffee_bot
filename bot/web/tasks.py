@@ -34,7 +34,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, page_links
+from bot.web import modules, notifications, page_links
 from bot.web.announcements import COLOR_RE, TRANSLIT
 from bot.web.calendar_service import ROLE_NAMES as ROLE_LABELS, _ensure_columns
 
@@ -573,6 +573,53 @@ def _validate_assignee(engine: Engine, payload: dict[str, Any],
     return {"assignee_type": "all", "assignee_role": None, "assignee_user_id": None}
 
 
+def _notify_task_assigned(engine: Engine, task_id: int, title: str,
+                          assignee: dict[str, Any], actor: dict[str, Any]) -> None:
+    """Единый центр уведомлений: «вам поставили задачу» (по адресации).
+
+    Адресация повторяет видимость задачи: лично — одному сотруднику, на
+    должность — роли, общая — всей команде. Автор действия уведомление не
+    получает (его отсекает сам центр).
+    """
+    try:
+        url = f"/?view=tasks&task={task_id}"
+        body = f"{actor.get('display_name') or actor.get('name') or 'Коллега'} поставил задачу"
+        kind = str(assignee.get("assignee_type") or "all")
+        actor_id = int(actor["id"])
+        if kind == "user" and assignee.get("assignee_user_id"):
+            notifications.notify_async(
+                engine, [int(assignee["assignee_user_id"])], "task_assigned", title, body, url,
+                entity_type="task", entity_id=task_id, actor_id=actor_id,
+            )
+            return
+        roles = (str(assignee["assignee_role"]),) if kind == "role" and assignee.get("assignee_role") else None
+        # Общая задача на всю команду идёт только в ленту: push на каждый
+        # «для всех» был бы спамом, а персональные и должностные — со push.
+        notifications.notify_audience_async(
+            engine, "task_assigned", title, body, url,
+            entity_type="task", entity_id=task_id, actor_id=actor_id, roles=roles,
+            **({} if roles else {"channels": ("in_app",)}),
+        )
+    except Exception as error:  # noqa: BLE001 — уведомление не должно ломать задачу
+        logger.warning("Задачи: уведомление не отправлено: %s", error)
+
+
+def _notify_task_completed(engine: Engine, task: dict[str, Any], actor: dict[str, Any]) -> None:
+    """«Задача выполнена»: сообщаем автору, если закрыл её кто-то другой."""
+    try:
+        author_id = task.get("author_id")
+        if not author_id:
+            return
+        url = f"/?view=tasks&task={task['id']}"
+        body = f"{actor.get('display_name') or actor.get('name') or 'Коллега'} перевёл задачу в «Готово»"
+        notifications.notify_async(
+            engine, [int(author_id)], "task_completed", str(task.get("title") or "Задача"),
+            body, url, entity_type="task", entity_id=int(task["id"]), actor_id=int(actor["id"]),
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.warning("Задачи: уведомление о выполнении не отправлено: %s", error)
+
+
 def _column_ids(connection: Any, status: str) -> list[int]:
     rows = connection.execute(text("""
         SELECT id FROM tasks WHERE status = :status AND is_deleted = 0 ORDER BY position, id
@@ -672,6 +719,7 @@ def create_task(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) -
         })
         task_id = int(result.lastrowid or 0)
         _place(connection, status, task_id, None)
+    _notify_task_assigned(engine, task_id, title, assignee, user)
     return task_id
 
 
@@ -694,6 +742,7 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
         raise PermissionError("Менять задачу может автор или наставник")
 
     values: dict[str, Any] = {}
+    assignee_change: dict[str, Any] | None = None
     if "title" in payload:
         title = str(payload.get("title") or "").strip()[
             :modules.setting("tasks", "MAX_TITLE", MAX_TITLE)
@@ -718,7 +767,8 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
     if "meta_info" in payload:
         values["meta_info"] = _clean_meta(payload.get("meta_info"))
     if {"assignee_type", "assignee_role", "assignee_user_id"} & set(payload):
-        values.update(_validate_assignee(engine, payload, task["assignee"]))
+        assignee_change = _validate_assignee(engine, payload, task["assignee"])
+        values.update(assignee_change)
     if payload.get("is_deleted") is False:
         # Undo: карточка возвращается на доску; из архива её достаёт status='todo'.
         values["is_deleted"] = 0
@@ -759,6 +809,20 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
                 _renumber(connection, previous)
             if previous or has_before:
                 _place(connection, status, task_id, before_id)
+    # События Единого центра: закрытие задачи и смена адресата. Отправляем уже
+    # после коммита — фоновая запись ленты не должна ловить блокировку SQLite.
+    if previous and status in {"done", *ARCHIVE_STATUSES}:
+        _notify_task_completed(engine, {**task, "status": status}, user)
+    if assignee_change:
+        before = task.get("assignee") or {}
+        changed = (
+            assignee_change.get("assignee_type"), assignee_change.get("assignee_role"),
+            assignee_change.get("assignee_user_id"),
+        ) != (before.get("type"), before.get("role"), before.get("user_id"))
+        if changed:
+            _notify_task_assigned(
+                engine, task_id, str(values.get("title") or task["title"]), assignee_change, user
+            )
     return get_task(engine, task_id) or task
 
 
