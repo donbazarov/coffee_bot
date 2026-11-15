@@ -644,9 +644,9 @@ def fetch_messages(channel: str, user_id: int, peer_id: int | None, room_id: int
 def _active_staff(user_id: int) -> bool:
     """Сотрудник с активной должностью из справочника (доступ к чату)."""
     with engine.connect() as connection:
-        row = connection.execute(text("""
+        row = connection.execute(text(f"""
             SELECT 1 FROM users WHERE id = :id AND is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("users")}
         """), {"id": int(user_id)}).first()
     return row is not None
 
@@ -668,10 +668,10 @@ def match_mentions(text_value: str, exclude: int | None = None) -> set[int]:
     if not tokens:
         return set()
     with engine.connect() as connection:
-        rows = connection.execute(text("""
+        rows = connection.execute(text(f"""
             SELECT id, name, display_name, telegram_username FROM users
             WHERE is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("users")}
         """)).mappings().all()
     found: set[int] = set()
     for row in rows:
@@ -777,11 +777,11 @@ def _chat_notify_mode(user_id: int) -> str:
 def _chat_push_candidates() -> set[int]:
     """Кто вообще подписан на push (у кого есть устройства)."""
     with engine.connect() as connection:
-        rows = connection.execute(text("""
+        rows = connection.execute(text(f"""
             SELECT DISTINCT s.user_id FROM web_push_subscriptions s
             JOIN users u ON u.id = s.user_id
             WHERE u.is_active = 1
-              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("u")}
         """)).scalars().all()
     return {int(value) for value in rows}
 
@@ -880,10 +880,10 @@ def _user_from_cookie(cookie_value: str | None) -> dict[str, Any] | None:
     if not session:
         return None
     with engine.connect() as connection:
-        user = connection.execute(text("""
+        user = connection.execute(text(f"""
             SELECT id, name, display_name, role, session_epoch FROM users
             WHERE id = :id AND is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("users")}
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None
@@ -1134,7 +1134,7 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
                      ORDER BY m.id DESC LIMIT 1) AS last_text
             FROM users u
             WHERE u.is_active = 1 AND u.id != :me
-              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("u")}
         """), {"me": me}).mappings().all()
     users = []
     for row in rows:

@@ -745,9 +745,12 @@ def _system_author(engine: Engine) -> dict[str, Any] | None:
     with engine.connect() as connection:
         row = connection.execute(text("""
             SELECT u.id AS id, u.role AS role FROM users u
-            JOIN role_access_config r ON r.role_key = u.role AND r.is_active = 1
-            WHERE u.is_active = 1 AND r.access_level >= :admin_level
-            ORDER BY r.access_level DESC, u.id LIMIT 1
+            WHERE u.is_active = 1 AND EXISTS (
+                SELECT 1 FROM user_roles ur
+                JOIN role_access_config r ON r.role_key = ur.role_key
+                WHERE ur.user_id = u.id AND r.is_active = 1 AND r.access_level >= :admin_level
+            )
+            ORDER BY u.id LIMIT 1
         """), {"admin_level": access_roles.min_level("admin")}).mappings().first()
     return dict(row) if row else None
 

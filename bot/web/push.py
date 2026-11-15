@@ -279,12 +279,12 @@ def send_to_user(engine: Engine, user_id: int, payload: dict[str, Any]) -> int:
 def recipients(engine: Engine, category: str, exclude_user_id: int | None = None) -> list[int]:
     """Кому слать: активные сотрудники, у кого категория включена в уведомлениях."""
     with engine.connect() as connection:
-        rows = connection.execute(text("""
+        rows = connection.execute(text(f"""
             SELECT DISTINCT s.user_id
             FROM web_push_subscriptions AS s
             JOIN users AS u ON u.id = s.user_id
             WHERE u.is_active = 1
-              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("u")}
         """)).scalars().all()
     from bot.web import announcements  # локальный импорт: модули ссылаются друг на друга
 

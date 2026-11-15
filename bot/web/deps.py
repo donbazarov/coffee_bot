@@ -29,9 +29,12 @@ def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
 
     Сессия живёт, пока запись сотрудника активна: должность вне справочника или
     отключённая даёт уровень 0 (права fail-closed), но не выбрасывает человека из
-    системы — иначе нерабочий справочник разлогинивал бы всех. Уровень и название
-    должности читаются тем же запросом, поэтому гейты сравнивают числа без
-    дополнительных обращений к базе.
+    системы — иначе нерабочий справочник разлогинивал бы всех.
+
+    Должностей может быть несколько (`user_roles`): уровень доступа — максимум по
+    активным, а `roles` в словаре пользователя отдаёт все его должности — по ним
+    фильтруются задачи. «Основная» должность (`users.role`) нужна подсистемам,
+    которые хранят одну роль: график смен, нормо-часы, чат, push.
     """
     session = read_session(request.cookies.get(COOKIE_NAME))
     if not session:
@@ -40,20 +43,24 @@ def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
         user = connection.execute(text("""
             SELECT u.id, u.name, u.display_name, u.role, u.avatar_rev, u.telegram_id,
                    u.access_code, u.session_epoch,
-                   -- Уровень даёт только активная должность: отключённая = 0.
-                   COALESCE(CASE WHEN r.is_active = 1 THEN r.access_level END, 0) AS access_level,
                    COALESCE(r.title, u.role) AS role_title
             FROM users u
             LEFT JOIN role_access_config r ON r.role_key = u.role
             WHERE u.id = :id AND u.is_active = 1
         """), {"id": session["user_id"]}).mappings().first()
-    if not user:
-        return None, None
+        if not user:
+            return None, None
+        roles = access_roles.roles_of(connection, int(user["id"]))
+    if not roles:
+        # Записи `user_roles` может не быть у совсем старых аккаунтов: считаем
+        # должностью то, что записано в `users.role`.
+        roles = [str(user["role"])]
+    user = {**dict(user), "roles": roles, "access_level": access_roles.user_level(roles)}
     # Ротация кода супер-пользователем и «выйти на всех устройствах» поднимают
     # session_epoch — выданные ранее куки после этого недействительны.
     if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
         return None, None
-    return dict(user), session["csrf_token"]
+    return user, session["csrf_token"]
 
 
 def check_csrf(request: Request, csrf_token: str | None) -> None:

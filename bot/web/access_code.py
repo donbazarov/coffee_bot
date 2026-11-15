@@ -170,10 +170,10 @@ def ensure_active_codes(engine: Engine) -> int:
     наставника по каждому человеку.
     """
     with engine.connect() as connection:
-        missing = connection.execute(text("""
+        missing = connection.execute(text(f"""
             SELECT id FROM users
             WHERE is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
+              AND {access_roles.has_active_role_sql("users")}
               AND (access_code IS NULL OR access_code = '')
         """)).scalars().all()
     for user_id in missing:

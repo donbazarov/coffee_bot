@@ -1605,18 +1605,23 @@ function renderUsers(users) {
     const shown = user.display_name || user.name;
     // Должность и уровень приходят из справочника (`/api/users` → role_access_config):
     // бейджи обновляются вместе с вкладкой «Должности и допуски».
-    const roleTitle = user.role_name || user.role_title || user.role;
-    // Уровень считает сервер: отключённая должность прав не даёт (уровень 0), и
-    // причину показываем прямо в карточке — иначе «Уровень 0» выглядит как сбой.
+    const roles = user.roles || [];
+    // Должностей может быть несколько: показываем все, уровень — максимальный
+    // (его считает сервер; отключённая должность прав не даёт).
+    const roleTitleHtml = roles.length
+      ? roles.map((item) => `<span class="user-role-chip${item.is_active ? '' : ' is-inactive'}">${escapeHtml(item.title)}</span>`).join('')
+      : escapeHtml(user.role_name || user.role_title || user.role);
     const levelBadge = user.access_pending
       ? 'Без должности'
-      : `Уровень ${Number(user.access_level || 0)}${user.role_active ? '' : ' · должность отключена'}`;
+      : `Уровень ${Number(user.access_level || 0)}`
+        + (roles.length > 1 ? ` · должностей: ${roles.length}` : '')
+        + (roles.length && !user.role_active ? ' · все отключены' : '');
     return `
     <article class="user-row ${user.is_active ? '' : 'is-inactive'} ${user.access_pending ? 'is-pending' : ''}" data-user-id="${user.id}">
       <div class="user-person"><span class="user-avatar">${avatarMarkup(user.id, user.avatar_rev, shown)}</span><strong title="${escapeHtml(shown)}">${escapeHtml(shown)}</strong></div>
       <span class="user-detail user-iiko">${user.iiko_id ? `Iiko ${escapeHtml(user.iiko_id)}` : 'Iiko не указан'}</span>
       <span class="user-detail user-telegram">${user.telegram_username ? `@${escapeHtml(user.telegram_username)}` : 'Telegram не привязан'}</span>
-      <span class="user-detail user-role">${escapeHtml(roleTitle)}<small class="user-role-level">${escapeHtml(levelBadge)}</small></span>
+      <span class="user-detail user-role">${roleTitleHtml}<small class="user-role-level">${escapeHtml(levelBadge)}</small></span>
       <span class="user-detail user-code">${user.access_code ? `Код ${escapeHtml(user.access_code)}` : 'Кода нет'}</span>
       <div class="user-actions"><button class="user-edit" type="button" data-rotate-code>Новый код</button><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте должность через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает должность' : 'Выдать доступ'}</button></div>
     </article>`; }).join('');
@@ -10502,16 +10507,46 @@ function renderRolesList() {
     </article>`).join('');
 }
 
-/* Селект должностей в карточке сотрудника строится из того же справочника:
-   только что созданная должность доступна без перезагрузки страницы. */
-function syncUserRoleOptions() {
-  const select = document.querySelector('#user-form-role');
-  if (!select) return;
-  const current = select.value;
-  const active = rolesState.roles.filter((role) => role.is_active);
-  if (!active.length) return;
-  select.innerHTML = active.map((role) => `<option value="${escapeHtml(role.role_key)}">${escapeHtml(role.title)} · ${Number(role.access_level)} — ${escapeHtml(role.level_title || '')}</option>`).join('');
-  if (active.some((role) => role.role_key === current)) select.value = current;
+/* Выбор должностей в карточке сотрудника: их может быть несколько. Список
+   строится из того же справочника, что и панель, поэтому новая должность
+   доступна без перезагрузки страницы. Отключённую должность показываем, если она
+   уже назначена: снять её можно, назначить заново — нет. */
+function renderUserRolePicker(selectedKeys = null) {
+  const picker = document.querySelector('#user-form-roles');
+  if (!picker) return;
+  const chosen = new Set(selectedKeys || currentUserRoles(picker));
+  const roles = rolesState.roles.filter((role) => role.is_active || chosen.has(role.role_key));
+  if (!roles.length) {
+    picker.innerHTML = '<p class="empty-state">Должностей нет — заведите их в панели «Должности и допуски»</p>';
+    return;
+  }
+  picker.innerHTML = roles.map((role) => `
+    <label class="role-pick${role.is_active ? '' : ' is-inactive'}">
+      <input type="checkbox" name="roles" value="${escapeHtml(role.role_key)}"${chosen.has(role.role_key) ? ' checked' : ''}>
+      <span class="role-pick-body"><strong>${escapeHtml(role.title)}</strong><small>${Number(role.access_level)} — ${escapeHtml(role.level_title || '')}${role.is_active ? '' : ' · отключена'}</small></span>
+      <em class="role-pick-primary" hidden>основная</em>
+    </label>`).join('');
+  markPrimaryRole();
+}
+
+function currentUserRoles(root) {
+  return [...root.querySelectorAll('input[name="roles"]:checked')].map((input) => input.value);
+}
+
+/* Основная должность — первая отмеченная по порядку справочника: по ней работают
+   график смен и нормо-часы, а права берутся как максимум по всем должностям. */
+function markPrimaryRole() {
+  const picker = document.querySelector('#user-form-roles');
+  if (!picker) return;
+  const checked = currentUserRoles(picker);
+  const primary = checked.length ? checked[0] : '';
+  picker.querySelectorAll('.role-pick').forEach((row) => {
+    const input = row.querySelector('input[name="roles"]');
+    const isPrimary = Boolean(input && input.value === primary);
+    row.classList.toggle('is-primary', isPrimary);
+    const badge = row.querySelector('.role-pick-primary');
+    if (badge) badge.hidden = !isPrimary;
+  });
 }
 
 async function loadRoles() {
@@ -10526,7 +10561,7 @@ async function loadRoles() {
     rolesState.permissions = data.permissions || [];
     renderRoleLevels();
     renderRolesList();
-    syncUserRoleOptions();
+    renderUserRolePicker();
     rolesSetStatus('');
   } catch (error) {
     rolesSetStatus(error.message);
@@ -10553,6 +10588,7 @@ function openRoleDialog(roleKey) {
   form.elements.role_key_view.readOnly = Boolean(role);
   form.elements.title.value = role ? role.title : '';
   form.elements.access_level.value = String(role ? role.access_level : 0);
+  form.elements.sort_order.value = role ? String(role.sort_order ?? 0) : '';
   form.elements.description.value = role ? (role.description || '') : '';
   form.elements.is_active.checked = role ? Boolean(role.is_active) : true;
   setText('#role-dialog-kicker', role ? 'ДОЛЖНОСТЬ' : 'НОВАЯ ДОЛЖНОСТЬ');
@@ -10594,8 +10630,13 @@ async function saveRole(form) {
     description: form.elements.description.value.trim(),
     is_active: form.elements.is_active.checked,
   };
+  // Порядок задаёт и список в панели, и выбор основной должности у сотрудника.
+  const sortOrder = form.elements.sort_order.value.trim();
+  if (sortOrder !== '') payload.sort_order = Number(sortOrder);
   const key = form.elements.role_key_view.value.trim();
-  if (key) payload.role_key = key;
+  // При создании ключ можно задать руками; при правке он неизменяем и в запрос не
+  // уходит — сервер вернул бы «Переданы неизвестные поля» на лишнее поле.
+  if (!roleKey && key) payload.role_key = key;
   if (error) error.hidden = true;
   if (submit) submit.disabled = true;
   try {
@@ -10983,25 +11024,33 @@ function setupDashboard() {
   const dialog = document.querySelector('#user-dialog');
   const form = document.querySelector('#user-form');
   const formError = document.querySelector('#user-form-error');
-  const setDialogMode = (user = null) => {
+  const setDialogMode = async (user = null) => {
     form.reset();
     formError.hidden = true;
     form.dataset.userId = user?.id || '';
     document.querySelector('#user-dialog-kicker').textContent = user ? 'УЧЁТНАЯ ЗАПИСЬ' : 'НОВАЯ ЗАПИСЬ';
     document.querySelector('#user-dialog-title').textContent = user ? 'Изменить сотрудника' : 'Сотрудник';
     document.querySelector('#user-form-submit').textContent = user ? 'Сохранить' : 'Добавить';
+    // Выбор должностей строится из справочника: подгружаем его, если панель
+    // «Должности и допуски» ещё не открывали в этой сессии.
+    if (!rolesState.roles.length) await loadRoles();
     if (user) {
       form.elements.name.value = user.name;
-      form.elements.role.value = user.role;
+      // Должности приходят списком (`/api/users` → roles): отмечаем все, первая
+      // по порядку справочника станет основной.
+      renderUserRolePicker((user.roles || []).map((item) => item.key));
       form.elements.iiko_id.value = user.iiko_id ?? '';
       form.elements.telegram_username.value = user.telegram_username ?? '';
       loadUserWorkloadFields(form, user.id);
     } else {
+      renderUserRolePicker([]);
       applyWorkloadFields(form, null);
     }
     dialog.showModal();
   };
   document.querySelector('#add-user-button')?.addEventListener('click', () => setDialogMode());
+  // Пометка «основная» переезжает на первую выбранную должность (порядок справочника).
+  document.querySelector('#user-form-roles')?.addEventListener('change', markPrimaryRole);
   document.querySelectorAll('#user-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => dialog?.close()));
 
   form?.addEventListener('submit', async (event) => {
@@ -11010,6 +11059,14 @@ function setupDashboard() {
     const errorNode = formError;
     const formData = new FormData(form);
     const payload = Object.fromEntries(formData.entries());
+    // Должности уходят списком: у сотрудника их может быть несколько, а «основную»
+    // сервер выберет сам — первую по порядку справочника.
+    payload.roles = formData.getAll('roles').map(String);
+    if (!payload.roles.length) {
+      errorNode.textContent = 'Отметьте хотя бы одну должность';
+      errorNode.hidden = false;
+      return;
+    }
     // Нормо-часы уходят отдельным PATCH: у пользователя их принимает /workload.
     const workload = {
       min_hours: payload.min_hours,

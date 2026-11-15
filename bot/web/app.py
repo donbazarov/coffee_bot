@@ -1586,26 +1586,40 @@ async def delete_task(task_id: int, permanent: bool = False,
 
 @app.get("/api/users")
 def list_users(_: dict[str, Any] = Depends(require_permission("admin"))):
-    """Сотрудники с названием должности и уровнем доступа из справочника."""
+    """Сотрудники с должностями (их может быть несколько) и уровнем доступа.
+
+    `roles` — все должности по порядку справочника, `access_level` — максимум по
+    активным (отключённая должность прав не даёт), `role` остаётся основной.
+    """
     with engine.connect() as connection:
         users = connection.execute(text("""
             SELECT u.id, u.name, u.display_name, u.avatar_rev, u.iiko_id, u.telegram_username,
                    u.role, u.is_active, u.telegram_id, u.access_code,
-                   -- Уровень даёт только активная должность: отключённая = 0, а флаг
-                   -- `role_active` показывает причину прямо в карточке сотрудника.
-                   COALESCE(CASE WHEN r.is_active = 1 THEN r.access_level END, 0) AS access_level,
-                   COALESCE(r.is_active, 0) AS role_active,
                    COALESCE(r.title, u.role) AS role_title
             FROM users u
             LEFT JOIN role_access_config r ON r.role_key = u.role
             ORDER BY u.is_active DESC, COALESCE(u.display_name, u.name) COLLATE NOCASE
         """)).mappings().all()
+        roles_map = access_roles.user_roles_map(connection)
     role_names = {**access_roles.labels(), access_roles.PENDING_ROLE: "Ожидает доступа"}
-    return [
-        {**dict(user), "role_name": role_names.get(user["role"], user["role"]),
-         "access_pending": user["role"] == access_roles.PENDING_ROLE}
-        for user in users
-    ]
+    result = []
+    for user in users:
+        roles = roles_map.get(int(user["id"])) or []
+        if not roles and user["role"] and user["role"] != access_roles.PENDING_ROLE:
+            # Совсем старые аккаунты: назначения ещё нет, берём основную должность.
+            key = str(user["role"])
+            roles = [{"key": key, "title": role_names.get(key, key),
+                      "level": access_roles.level_of(key),
+                      "is_active": key in access_roles.role_keys()}]
+        result.append({
+            **dict(user),
+            "roles": roles,
+            "role_name": roles[0]["title"] if roles else role_names.get(user["role"], user["role"]),
+            "access_level": max((item["level"] for item in roles), default=0),
+            "role_active": any(item["is_active"] for item in roles),
+            "access_pending": user["role"] == access_roles.PENDING_ROLE,
+        })
+    return result
 
 
 def _clean_username(value: Any) -> str | None:
@@ -1617,19 +1631,41 @@ def _clean_username(value: Any) -> str | None:
 def _validate_user_payload(payload: Any, partial: bool = False) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=422, detail="Ожидался объект пользователя")
-    allowed = {"name", "iiko_id", "telegram_username", "role", "is_active"}
-    if set(payload) - allowed:
-        raise HTTPException(status_code=422, detail="Переданы неизвестные поля")
+    allowed = {"name", "iiko_id", "telegram_username", "role", "roles", "is_active"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Переданы неизвестные поля: {', '.join(sorted(unknown))}")
     values = dict(payload)
     if not partial or "name" in values:
         name = str(values.get("name", "")).strip()
         if not name or len(name) > 100:
             raise HTTPException(status_code=422, detail="Имя должно содержать от 1 до 100 символов")
         values["name"] = name
-    if not partial or "role" in values:
-        # Должность проверяем по справочнику: он же источник списка для интерфейса.
-        if values.get("role") not in access_roles.role_keys(active_only=False):
-            raise HTTPException(status_code=422, detail="Неизвестная должность")
+    # Должности: `roles` — список (их может быть несколько), `role` — прежний формат
+    # с одной должностью. Проверяем по справочнику: он же источник списка в интерфейсе.
+    roles: list[str] | None = None
+    if "roles" in values:
+        raw = values.pop("roles")
+        if not isinstance(raw, list):
+            raise HTTPException(status_code=422, detail="Должности должны быть списком")
+        roles = [str(item or "").strip() for item in raw]
+        roles = [item for item in roles if item]
+        if len(set(roles)) != len(roles):
+            raise HTTPException(status_code=422, detail="Должности не должны повторяться")
+    if "role" in values:
+        role = str(values.pop("role") or "").strip()
+        if roles is None:
+            roles = [role] if role else []
+    if roles is not None:
+        if not roles:
+            raise HTTPException(status_code=422, detail="У сотрудника должна быть хотя бы одна должность")
+        known = set(access_roles.role_keys(active_only=False))
+        bad = [key for key in roles if key not in known]
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Неизвестная должность: {', '.join(bad)}")
+        values["roles"] = roles
+    elif not partial:
+        raise HTTPException(status_code=422, detail="Укажите должность сотрудника")
     if "iiko_id" in values:
         try:
             values["iiko_id"] = int(values["iiko_id"]) if values["iiko_id"] not in (None, "") else None
@@ -1683,8 +1719,12 @@ def _backfill_base_xp() -> int:
 @app.post("/api/users")
 async def create_user(request: Request, manager: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     values = _validate_user_payload(await request.json())
+    roles = values.pop("roles")
     values.setdefault("iiko_id", None)
     values.setdefault("telegram_username", None)
+    # Пользователь создаётся с основной должностью, затем список должностей
+    # записывается целиком: `set_user_roles` сам выберет основную по справочнику.
+    values["role"] = roles[0]
     with engine.begin() as connection:
         try:
             result = connection.execute(
@@ -1696,10 +1736,11 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
             )
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
+        new_user_id = int(result.lastrowid)
+        primary = access_roles.set_user_roles(connection, new_user_id, roles)
         # Должность выше настроенного порога сразу даёт базовый опыт: не нужно
         # помнить о дополнительном действии (политика — `_grant_base_xp`).
-        _grant_base_xp(connection, int(result.lastrowid), values["role"])
-        new_user_id = int(result.lastrowid)
+        _grant_base_xp(connection, new_user_id, primary[0])
     # id возвращаем, чтобы интерфейс сразу дописал нормо-часы новому сотруднику.
     return {"ok": True, "id": new_user_id}
 
@@ -1710,7 +1751,8 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
     # Выдача нового кода — отдельное действие: наставник видит код и отдаёт его лично.
     regenerate = bool(isinstance(payload, dict) and payload.pop("regenerate_code", False))
     values = _validate_user_payload(payload, partial=True)
-    if not values and not regenerate:
+    roles = values.pop("roles", None)
+    if not values and roles is None and not regenerate:
         raise HTTPException(status_code=422, detail="Нет полей для обновления")
     assignments = ", ".join(f"{key} = :{key}" for key in values)
     has_fields = bool(assignments)
@@ -1721,7 +1763,8 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
         ).mappings().first()
         if not current_user:
             raise HTTPException(status_code=404, detail="Пользователь не найден")
-        target_role = values.get("role", current_user["role"])
+        # Основная должность — первая в списке (порядок задаёт справочник).
+        target_role = roles[0] if roles else current_user["role"]
         target_active = values.get("is_active", current_user["is_active"])
         if target_role == access_roles.PENDING_ROLE and target_active:
             raise HTTPException(status_code=400, detail="Назначьте должность до выдачи доступа")
@@ -1737,11 +1780,13 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
                     raise HTTPException(status_code=404, detail="Пользователь не найден")
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
+        if roles is not None:
+            access_roles.set_user_roles(connection, user_id, roles)
         if admins_before and not access_roles.admin_user_count(connection):
             raise HTTPException(status_code=400, detail="Нельзя убрать последнего супер-пользователя")
         # Повышение до должности с базовым опытом сразу его начисляет. Понижение
         # до уровня 0 и деактивация опыт не обнуляют: начисления остаются в логе.
-        if "role" in values and target_active:
+        if roles and target_active:
             _grant_base_xp(connection, user_id, target_role)
     if regenerate:
         return {"ok": True, "code": access_code.set_access_code(engine, user_id)}

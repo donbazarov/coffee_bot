@@ -2230,6 +2230,21 @@ body { transition: background-color .3s ease, color .3s ease; }
 .role-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; }
 .role-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .roles-status { margin: 12px 0 0; min-height: 1em; color: var(--muted); font-size: 12px; }
+
+/* --- Должности сотрудника: их может быть несколько ------------------------- */
+.field-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.role-picker { display: grid; gap: 6px; }
+.role-pick { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-sunken); cursor: pointer; }
+.role-pick:hover { border-color: var(--accent-line); }
+.role-pick.is-primary { border-color: var(--accent); background: var(--accent-soft); }
+.role-pick.is-inactive { opacity: .6; }
+.role-pick input[type="checkbox"] { flex: 0 0 auto; width: 18px; height: 18px; }
+.role-pick-body { display: grid; gap: 2px; min-width: 0; }
+.role-pick-body strong { font-size: 13px; }
+.role-pick-body small { color: var(--muted); font-size: 11px; }
+.role-pick-primary { margin-left: auto; padding: 2px 9px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--surface-raised); color: var(--text); font: 9px var(--mono); font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
+.user-role-chip { display: inline-block; margin: 0 4px 2px 0; padding: 1px 8px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--text); font: 10px var(--mono); }
+.user-role-chip.is-inactive { border-style: dashed; opacity: .6; }
 @media (min-width: 900px) {
   .control-layout { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: start; }
   /* Легенда уровней на широком экране — в две колонки: пять ступеней иначе
@@ -2243,6 +2258,8 @@ body { transition: background-color .3s ease, color .3s ease; }
   .role-levels-panel { margin-top: 14px; padding-top: 12px; }
   .role-level-row { padding: 9px 10px; }
   .role-level-summary { font-size: 11px; }
+  /* Отметка должности — палец, а не курсор: цель не меньше 44px. */
+  .role-pick { min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .control-tree-fold, .control-nav-toggle .icon, .control-tree-fab, .control-nav-item { transition: none; }

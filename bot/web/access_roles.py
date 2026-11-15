@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Iterable
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -126,6 +126,22 @@ CREATE TABLE IF NOT EXISTS role_access_config (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 """
+
+# Должности сотрудника: их может быть несколько (`user_roles`). Порядок задаёт
+# справочник (`role_access_config.sort_order`), «основная» — первая в списке: по
+# ней работают график смен, нормо-часы, чат и push (эти подсистемы хранят одну
+# роль), а права берутся как максимум по всем активным должностям.
+# Операторы идут по одному: sqlite3 исполняет за раз ровно одно выражение.
+_USER_ROLES_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS user_roles (
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        role_key TEXT NOT NULL,
+        PRIMARY KEY (user_id, role_key)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles (role_key)",
+)
 
 # Кэш уровня модуля: ключ должности → запись. Наполняет `_load` (старт и любая
 # правка справочника) — как кэш настроек в `modules.py`.
@@ -294,6 +310,20 @@ def _bootstrap_roles(connection: Any) -> list[str]:
     return touched
 
 
+def _bootstrap_user_roles(connection: Any) -> int:
+    """Переносит единственную прежнюю должность (`users.role`) в `user_roles`.
+
+    Идемпотентно: у кого назначение уже есть — не трогаем; заявки (`guest`) и
+    пустые роли пропускаем: должности у них нет.
+    """
+    result = connection.execute(text("""
+        INSERT OR IGNORE INTO user_roles (user_id, role_key)
+        SELECT id, role FROM users
+        WHERE role != :pending AND TRIM(COALESCE(role, '')) != ''
+    """), {"pending": PENDING_ROLE})
+    return int(result.rowcount or 0)
+
+
 def initialize_schema(engine: Engine) -> None:
     """Создаёт справочник, переводит прежние уровни в 0..4 и наполняет кэш.
 
@@ -304,6 +334,8 @@ def initialize_schema(engine: Engine) -> None:
     """
     with engine.begin() as connection:
         connection.execute(text(_DDL))
+        for statement in _USER_ROLES_DDL:
+            connection.execute(text(statement))
         rows = connection.execute(text("""
             SELECT role_key, access_level, capabilities FROM role_access_config
         """)).mappings().all()
@@ -323,7 +355,10 @@ def initialize_schema(engine: Engine) -> None:
                 {**updates, "role_key": row["role_key"]},
             )
         restored = _bootstrap_roles(connection)
+        moved = _bootstrap_user_roles(connection)
     _load(engine)
+    if moved:
+        logger.info("Должности: перенесено назначений из users.role — %s", moved)
     if restored:
         logger.critical(
             "Должности: справочник был нерабочим (ни у кого не было активной должности) "
@@ -396,6 +431,97 @@ def levels() -> list[dict[str, Any]]:
     return [dict(item) for item in ACCESS_LEVELS]
 
 
+# --- Должности сотрудника ---------------------------------------------------- #
+#
+# Их может быть несколько (`user_roles`): права берутся как максимум по активным
+# должностям, а «основная» (первая по порядку справочника) остаётся в `users.role`
+# для подсистем, которые хранят одну роль — график смен, нормо-часы, чат, push.
+
+
+def roles_of(connection: Any, user_id: int) -> list[str]:
+    """Должности сотрудника в порядке справочника (первая — основная)."""
+    return [str(row[0]) for row in connection.execute(text("""
+        SELECT ur.role_key
+        FROM user_roles ur
+        LEFT JOIN role_access_config r ON r.role_key = ur.role_key
+        WHERE ur.user_id = :user_id
+        ORDER BY COALESCE(r.sort_order, 2147483647), ur.role_key
+    """), {"user_id": user_id}).all()]
+
+
+def user_level(roles: Iterable[str]) -> int:
+    """Уровень доступа сотрудника: максимум по должностям (отключённые — 0)."""
+    return max((level_of(key) for key in roles), default=0)
+
+
+def user_roles_map(connection: Any) -> dict[int, list[dict[str, Any]]]:
+    """Все назначения разом: `user_id` → должности в порядке справочника.
+
+    Нужен панели (`/api/users`), чтобы не делать отдельный запрос на сотрудника.
+    """
+    rows = connection.execute(text("""
+        SELECT ur.user_id, ur.role_key, r.title, r.access_level, r.is_active
+        FROM user_roles ur
+        LEFT JOIN role_access_config r ON r.role_key = ur.role_key
+        ORDER BY ur.user_id, COALESCE(r.sort_order, 2147483647), ur.role_key
+    """)).mappings().all()
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        key = str(row["role_key"])
+        result.setdefault(int(row["user_id"]), []).append({
+            "key": key,
+            "title": row["title"] or title_of(key),
+            "level": level_of(key),
+            "is_active": bool(row["is_active"]),
+        })
+    return result
+
+
+def set_user_roles(connection: Any, user_id: int, role_keys: Iterable[str]) -> list[str]:
+    """Записывает должности сотрудника и синхронизирует основную (`users.role`).
+
+    Порядок задаёт справочник (`sort_order`), первая должность становится
+    основной. Без должности сотрудник остаться не может: «нет должности» — это
+    состояние заявки на доступ, а не рабочая конфигурация.
+    """
+    keys = [str(key or "").strip() for key in role_keys]
+    keys = [key for key in keys if key]
+    if not keys:
+        raise ValueError("У сотрудника должна быть хотя бы одна должность")
+    if len(set(keys)) != len(keys):
+        raise ValueError("Должности не должны повторяться")
+    unknown = [key for key in keys if key not in _roles]
+    if unknown:
+        raise ValueError(f"Неизвестная должность: {', '.join(unknown)}")
+    ordered = sorted(keys, key=lambda key: (int(_roles[key]["sort_order"]), key))
+    connection.execute(text("DELETE FROM user_roles WHERE user_id = :user_id"), {"user_id": user_id})
+    for key in ordered:
+        connection.execute(
+            text("INSERT INTO user_roles (user_id, role_key) VALUES (:user_id, :role_key)"),
+            {"user_id": user_id, "role_key": key},
+        )
+    connection.execute(text("""
+        UPDATE users SET role = :role, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id
+    """), {"role": ordered[0], "user_id": user_id})
+    return ordered
+
+
+def has_active_role_sql(alias: str = "users") -> str:
+    """SQL «у сотрудника есть активная должность» — для запросов вне модуля.
+
+    Проверяет `user_roles`, а не `users.role`: должностей может быть несколько, и
+    отключение основной не должно выкидывать человека из чата, push и ТО.
+    """
+    return (f"EXISTS (SELECT 1 FROM user_roles ur JOIN role_access_config r "
+            f"ON r.role_key = ur.role_key WHERE ur.user_id = {alias}.id AND r.is_active = 1)")
+
+
+def has_any_role_sql(alias: str, placeholders: str) -> str:
+    """SQL «у сотрудника есть любая из перечисленных должностей» (параметры снаружи)."""
+    return (f"EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = {alias}.id "
+            f"AND ur.role_key IN ({placeholders}))")
+
+
 def level_title(level: Any) -> str:
     """Название уровня по числу; неизвестное число — пустая строка."""
     try:
@@ -445,9 +571,9 @@ def list_roles(engine: Engine) -> list[dict[str, Any]]:
         rows = connection.execute(text("""
             SELECT r.role_key, r.title, r.access_level, r.description,
                    r.is_active, r.sort_order,
-                   (SELECT COUNT(*) FROM users u WHERE u.role = r.role_key) AS user_count,
-                   (SELECT COUNT(*) FROM users u
-                     WHERE u.role = r.role_key AND u.is_active = 1) AS active_user_count
+                   (SELECT COUNT(*) FROM user_roles ur WHERE ur.role_key = r.role_key) AS user_count,
+                   (SELECT COUNT(*) FROM user_roles ur JOIN users u ON u.id = ur.user_id
+                    WHERE ur.role_key = r.role_key AND u.is_active = 1) AS active_user_count
             FROM role_access_config r
             ORDER BY r.sort_order, r.access_level, r.role_key
         """)).mappings().all()
@@ -482,16 +608,22 @@ def view(engine: Engine) -> dict[str, Any]:
 
 
 def admin_user_count(connection: Any, exclude_user_id: int | None = None) -> int:
-    """Сколько активных сотрудников сейчас имеют уровень «панель управления»."""
+    """Сколько активных сотрудников сейчас имеют уровень «панель управления».
+
+    Учитываются все должности сотрудника (`user_roles`), а не только основная:
+    доступ к панели может прийти с любой из них.
+    """
     condition = "" if exclude_user_id is None else "AND u.id != :exclude_id"
     params: dict[str, Any] = {"admin_level": min_level("admin")}
     if exclude_user_id is not None:
         params["exclude_id"] = exclude_user_id
     return int(connection.execute(text(f"""
         SELECT COUNT(*) FROM users u
-        JOIN role_access_config r ON r.role_key = u.role
-        WHERE u.is_active = 1 AND r.is_active = 1
-          AND r.access_level >= :admin_level {condition}
+        WHERE u.is_active = 1 AND EXISTS (
+            SELECT 1 FROM user_roles ur
+            JOIN role_access_config r ON r.role_key = ur.role_key
+            WHERE ur.user_id = u.id AND r.is_active = 1 AND r.access_level >= :admin_level
+        ) {condition}
     """), params).scalar_one() or 0)
 
 
@@ -504,8 +636,9 @@ def create_role(engine: Engine, payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Не переданы данные должности")
     allowed = {"role_key", "title", "description", "access_level", "is_active", "sort_order"}
-    if set(payload) - allowed:
-        raise ValueError("Переданы неизвестные поля")
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"Переданы неизвестные поля: {', '.join(sorted(unknown))}")
 
     title = _clean_title(payload.get("title"))
     level = _clean_level(payload.get("access_level", 0))
@@ -549,9 +682,15 @@ def update_role(engine: Engine, role_key: str, payload: dict[str, Any]) -> dict[
     """
     if not isinstance(payload, dict) or not payload:
         raise ValueError("Не передано ни одного поля для сохранения")
-    allowed = {"title", "description", "access_level", "is_active", "sort_order"}
-    if set(payload) - allowed:
-        raise ValueError("Переданы неизвестные поля")
+    allowed = {"title", "description", "access_level", "is_active", "sort_order", "role_key"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise ValueError(f"Переданы неизвестные поля: {', '.join(sorted(unknown))}")
+    # `role_key` клиент присылает вместе с остальными полями (одна форма на создание
+    # и правку): ключ неизменен, но если он совпадает с адресом — это не ошибка.
+    sent_key = str(payload.get("role_key") or "").strip()
+    if sent_key and sent_key != role_key:
+        raise ValueError("Ключ должности изменить нельзя — создайте новую должность")
 
     values: dict[str, Any] = {}
     if "title" in payload:
@@ -586,8 +725,11 @@ def update_role(engine: Engine, role_key: str, payload: dict[str, Any]) -> dict[
         # Проверка по состоянию «после»: если супер-пользователи в системе уже
         # были, правка не имеет права оставить её без доступа к панели.
         if before and not admin_user_count(connection):
-            raise ValueError("В системе должен остаться хотя бы один супер-пользователь "
-                             "(уровень 4): правка снимает доступ у всех")
+            raise ValueError(
+                "В системе должен остаться хотя бы один супер-пользователь (уровень 4). "
+                "Сначала создайте должность с уровнем 4 и назначьте её себе, "
+                "затем понижайте эту."
+            )
     refresh(engine)
     return _role_view(engine, role_key)
 
@@ -602,7 +744,7 @@ def delete_role(engine: Engine, role_key: str) -> dict[str, Any]:
         if not exists:
             raise LookupError("Должность не найдена")
         users = int(connection.execute(
-            text("SELECT COUNT(*) FROM users WHERE role = :role_key"), {"role_key": role_key}
+            text("SELECT COUNT(*) FROM user_roles WHERE role_key = :role_key"), {"role_key": role_key}
         ).scalar_one() or 0)
         if users:
             raise ValueError(f"Должность назначена сотрудникам ({users}) — сначала переназначьте "

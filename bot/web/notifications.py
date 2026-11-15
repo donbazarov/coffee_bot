@@ -26,6 +26,7 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import access_roles
 from bot.web import notification_registry as registry, push
 
 logger = logging.getLogger("bot.web.notifications")
@@ -174,17 +175,20 @@ def active_user_ids(engine: Engine, roles: Iterable[str] | None = None,
                     exclude_user_id: int | None = None) -> list[int]:
     """Активные сотрудники (для событий «всей команде», вроде анонса).
 
-    Без явного списка должностей берём все активные из справочника — состав
-    сотрудников задаёт `role_access_config`, а не код.
+    Без явного списка должностей берём всех, у кого есть активная должность: состав
+    сотрудников задаёт `role_access_config`, а не код. Должностей у человека может
+    быть несколько (`user_roles`), поэтому события для должности получают все, у
+    кого она назначена, а не только те, у кого она основная.
     """
     allowed = tuple(roles) if roles else ()
     params: dict[str, Any] = {}
     if allowed:
         placeholders = ", ".join(f":r{index}" for index in range(len(allowed)))
         params = {f"r{index}": role for index, role in enumerate(allowed)}
-        where = f"role IN ({placeholders})"
+        where = (f"(users.role IN ({placeholders}) OR "
+                 f"{access_roles.has_any_role_sql('users', placeholders)})")
     else:
-        where = "role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)"
+        where = access_roles.has_active_role_sql("users")
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
             SELECT id FROM users WHERE is_active = 1 AND {where}

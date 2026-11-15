@@ -330,15 +330,28 @@ _TASK_SELECT = """
 """
 
 
+def _roles_of(user: dict[str, Any]) -> list[str]:
+    """Должности сотрудника: их может быть несколько (`user_roles`, сессия).
+
+    «Моя» задача — та, что адресована любой из его должностей, поэтому фильтр по
+    должности в SQL идёт списком, а не одним значением.
+    """
+    roles = [str(key) for key in (user.get("roles") or []) if key]
+    if roles:
+        return roles
+    return [str(user["role"])] if user.get("role") else [""]
+
+
 def _visibility(user: dict[str, Any], assignee: str) -> str:
-    """SQL-условие видимости: общие + моя должность + лично мне + созданные мной.
+    """SQL-условие видимости: общие + мои должности + лично мне + созданные мной.
 
     Автор видит задачу, которую поставил коллеге — иначе выданная задача
     пропадала бы из его поля зрения сразу после создания.
     """
     if assignee == "shared":
         return "t.assignee_type = 'all'"
-    mine = ("(t.assignee_type = 'role' AND t.assignee_role = :role) "
+    placeholders = ", ".join(f":role{index}" for index in range(len(_roles_of(user))))
+    mine = (f"(t.assignee_type = 'role' AND t.assignee_role IN ({placeholders})) "
             "OR (t.assignee_type = 'user' AND t.assignee_user_id = :uid) "
             "OR t.author_id = :uid")
     return f"({mine})" if assignee == "mine" else f"(t.assignee_type = 'all' OR {mine})"
@@ -389,7 +402,11 @@ def _task_payload(row: Any) -> dict[str, Any]:
 
 
 def _params(user: dict[str, Any], limit: int) -> dict[str, Any]:
-    return {"role": user["role"], "uid": user["id"], "limit": limit}
+    """Параметры запросов: должности идут списком (`:role0`, `:role1`, …)."""
+    params: dict[str, Any] = {"uid": user["id"], "limit": limit}
+    for index, key in enumerate(_roles_of(user)):
+        params[f"role{index}"] = key
+    return params
 
 
 NO_CATEGORY = "none"
@@ -499,14 +516,18 @@ def counts(engine: Engine, user: dict[str, Any], assignee: str = "all") -> dict[
 
 
 def assignees(engine: Engine) -> dict[str, Any]:
-    """Кого можно выбрать в адресации: должности и активные сотрудники."""
+    """Кого можно выбрать в адресации: должности и активные сотрудники.
+
+    Сотрудник попадает в список, если у него есть хотя бы одна активная должность
+    (`user_roles`), а в карточке видны все его должности.
+    """
     with engine.connect() as connection:
-        rows = connection.execute(text("""
-            SELECT id, COALESCE(display_name, name) AS name, role FROM users
-            WHERE is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
-            ORDER BY role, name COLLATE NOCASE
+        rows = connection.execute(text(f"""
+            SELECT u.id, COALESCE(u.display_name, u.name) AS name, u.role FROM users u
+            WHERE u.is_active = 1 AND {access_roles.has_active_role_sql("u")}
+            ORDER BY u.role, name COLLATE NOCASE
         """)).mappings().all()
+        roles_map = access_roles.user_roles_map(connection)
     return {
         "roles": [{"code": key, "label": access_roles.title_of(key)} for key in access_roles.role_keys()],
         "users": [
@@ -515,6 +536,7 @@ def assignees(engine: Engine) -> dict[str, Any]:
                 "name": row["name"],
                 "role": row["role"],
                 "role_label": access_roles.title_of(row["role"]),
+                "roles": [item["key"] for item in roles_map.get(int(row["id"]), [])],
             }
             for row in rows
         ],
@@ -528,8 +550,8 @@ def assignees(engine: Engine) -> dict[str, Any]:
 def can_edit(task: dict[str, Any], user: dict[str, Any]) -> bool:
     """Кто может менять задачу.
 
-    Автор и право «Задачи» — всегда; тот, кому задача адресована (лично, по
-    должности или как общая), тоже: статус и текст правит вся смена, а не
+    Автор и право «Задачи» — всегда; тот, кому задача адресована (лично, по любой
+    из его должностей или как общая), тоже: статус и текст правит вся смена, а не
     только автор — задача на то и командная.
     """
     if task["author_id"] == user["id"] or access_roles.allows(user, "tasks"):
@@ -538,7 +560,7 @@ def can_edit(task: dict[str, Any], user: dict[str, Any]) -> bool:
     if assignee.get("type") == "user":
         return assignee.get("user_id") == user["id"]
     if assignee.get("type") == "role":
-        return assignee.get("role") == user["role"]
+        return assignee.get("role") in _roles_of(user)
     return assignee.get("type") == "all"
 
 
