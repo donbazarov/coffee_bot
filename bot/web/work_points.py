@@ -67,6 +67,11 @@ _POINT_COLUMNS = (
     ("drink_descriptions", "point"),
     ("web_shift_change_log", "old_point"),
     ("web_shift_change_log", "new_point"),
+    # Тех. обслуживание: оборудование точки, остатки и журнал замен.
+    ("equipment_units", "point_code"),
+    ("location_stock", "point_code"),
+    ("maintenance_logs", "point_code"),
+    ("maintenance_responsibles", "point_code"),
 )
 
 

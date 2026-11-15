@@ -116,9 +116,8 @@ app.include_router(chat.chat_router)
 app.include_router(knowledge_base.kb_router)
 # Описание напитков (bot/web/drink_descriptions.py): лента смен, рецепты и викторины.
 app.include_router(drink_descriptions.router)
-# Тех. обслуживание (bot/web/maintenance.py): точки сети, остатки и журнал замен.
+# Тех. обслуживание (bot/web/maintenance.py): оборудование, остатки и журнал замен.
 app.include_router(maintenance.maintenance_router)
-app.include_router(maintenance.locations_router)
 # Точки присутствия и общие настройки бренда (bot/web/work_points.py).
 app.include_router(work_points.points_router)
 app.include_router(work_points.settings_router)
@@ -238,18 +237,19 @@ def migrate_database():
     # геймификации: `evaluations` ссылается на них через drink_id/bean_id, и на
     # чистой базе FK-цели должны существовать раньше.
     knowledge_base.initialize_schema(engine)
-    # Тех. обслуживание: точки, категории, каталог запчастей, остатки и журнал.
-    # Схема КБ создана строкой выше — `equipment_parts` ссылается на `kb_pages`.
+    # Тех. обслуживание: оборудование, категории, каталог запчастей, остатки и
+    # журнал замен. Схема КБ создана строкой выше — `equipment_parts` ссылается
+    # на `kb_pages`. Точки ТО берёт из `work_points` (см. ниже).
     maintenance.initialize_schema(engine)
-    # Авто-задачи ТО (закупка/замена) — идемпотентно, после того как есть и
-    # таблицы ТО, и доска задач.
-    maintenance.run_automation(engine)
     gamification.initialize_schema(engine)
     # Описание напитков: лента смен, напитки постов и викторины «где чей латте-арт».
     drink_descriptions.initialize_schema(engine)
     # Точки присутствия и настройки бренда. Схему создаём после таблиц графика,
-    # оценок и описаний: миграция legacy alias должна видеть все их колонки.
+    # оценок, описаний и ТО: миграция legacy alias должна видеть все их колонки.
     work_points.initialize_schema(engine)
+    # Авто-задачи ТО (заявка/замена) — идемпотентно, после того как есть и таблицы
+    # ТО, и доска задач, и справочник точек (`work_points`).
+    maintenance.run_automation(engine)
     # Базовый опыт уже работающей команде выдаётся один раз: у должностей выше
     # настроенного порога уровень должен появиться сразу после раскатки, а не
     # после первой оценки. Повторные запуски ничего не добавляют (идемпотентно).

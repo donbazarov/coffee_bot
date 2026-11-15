@@ -1,26 +1,35 @@
-"""Техническое обслуживание: точки, категории, остатки и журнал замен.
+"""Техническое обслуживание: оборудование точек, остатки и журнал замен.
 
 Модуль изолирован по образцу `tasks.py`/`knowledge_base.py`: доменная логика и
 роуты живут здесь, `app.py` только подключает роутеры и вызывает
 `initialize_schema` на старте.
 
-Никакого хардкода категорий и точек: и те, и другие — справочники в БД.
-На старте создаются только таблицы, справочники заполняются в панели управления.
+Никакого хардкода точек и категорий. Точки — **только** глобальный справочник
+`work_points` (`bot/web/work_points.py`): своей таблицы `locations` у модуля
+больше нет, зато есть «оборудование» точки — установка с названием, перечнем
+расходников и привязкой к точке. Категории и запчасти — справочники в БД,
+карточкой запчасти владеет База знаний (раздел `equipment`).
 
 Модель данных:
 
-* `locations`            — точки сети (динамические колонки дашборда);
-* `equipment_categories` — категории запчастей (цвет, порядок);
-* `equipment_parts`      — каталог запчастей/расходников; карточкой управляет
+* `equipment_units`       — оборудование точки (название + `point_code`);
+* `equipment_unit_parts`  — расходники оборудования (M2M на `equipment_parts`);
+* `equipment_categories`  — категории запчастей (цвет, порядок);
+* `equipment_parts`       — каталог запчастей/расходников; карточкой управляет
   База знаний (раздел `equipment`, см. `bot/web/knowledge_base.py`), а здесь —
   чтение и расчёты (`upsert_part` вызывается из КБ, чтобы схема жила в одном
   месте);
-* `location_stock`       — остатки на точках (`UNIQUE(point_code, part_id)`);
-* `maintenance_logs`     — журнал замен с расчётом `next_due_date`.
+* `location_stock`        — остатки на точках (`UNIQUE(point_code, part_id)`);
+* `maintenance_logs`      — журнал замен: оборудование, запчасть и количество;
+* `maintenance_responsibles` — ответственные точки: одно лицо на «Заявку»
+  (пополнение при остатке `<= min_stock`) и одно на «Замену» (истёк срок).
 
-Автоматизация (через модуль задач): остаток `<= min_stock` → задача на закупку,
-истёкший `next_due_date` → задача на замену. Дедупликация — маркер в
-`tasks.meta_info`: открытая задача с тем же маркером повторно не создаётся.
+Автоматизация (через модуль задач): остаток `<= min_stock` → задача «Заявка»,
+истёкший или близкий (`SOON_DAYS`) `next_due_date` → задача «Замена». Задача
+адресуется ответственному за точку; «на всех» — только если ответственный не
+задан (задачу видят все, уведомление о назначении придёт лично). Дедупликация —
+маркер в `tasks.meta_info`: открытая задача с тем же маркером не создаётся
+повторно.
 """
 
 from __future__ import annotations
@@ -30,11 +39,11 @@ from datetime import date, datetime, timedelta
 from typing import Any, Mapping
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from bot.database.models import engine
-from bot.web import access_roles, modules, page_links, tasks
+from bot.web import access_roles, modules, page_links, tasks, work_points
 from bot.web.announcements import TRANSLIT
 from bot.web.deps import require_permission_csrf, require_user
 
@@ -51,20 +60,31 @@ MAX_ARTICLE = 60
 MAX_URL = 500
 MAX_COMMENT = 1000
 
+# Виды ответственных на точке: «Заявка» — пополнить расходник (остаток ниже
+# минимума), «Замена» — заменить по сроку. Ключи стабильны (они в БД), подписи
+# править можно свободно.
+RESPONSIBLE_KINDS = ("request", "replacement")
+RESPONSIBLE_LABELS = {"request": "Заявка", "replacement": "Замена"}
+
 COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 modules.register_defaults("maintenance", {"SOON_DAYS": SOON_DAYS})
 
 # Схема создаётся отдельными операторами: драйвер SQLite не принимает несколько
-# `CREATE TABLE` в одном `execute`. Порядок важен — `equipment_parts` ссылается
-# на `equipment_categories`, а `location_stock`/`maintenance_logs` — на первые две.
+# `CREATE TABLE` в одном `execute`. Порядок важен — `equipment_unit_parts`
+# ссылается на `equipment_units`/`equipment_parts`, а `location_stock` и
+# `maintenance_logs` — на каталог. Точка (`point_code`) — код из `work_points`,
+# без FK: справочником владеет другой модуль.
 _DDL = (
     """
-    CREATE TABLE IF NOT EXISTS locations (
-        code TEXT PRIMARY KEY,
+    CREATE TABLE IF NOT EXISTS equipment_units (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        point_code TEXT NOT NULL,
         name TEXT NOT NULL,
-        is_active INTEGER NOT NULL DEFAULT 1
+        is_active INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
     """
@@ -90,9 +110,17 @@ _DDL = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS equipment_unit_parts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        unit_id INTEGER REFERENCES equipment_units(id) ON DELETE CASCADE,
+        part_id INTEGER REFERENCES equipment_parts(id) ON DELETE CASCADE,
+        UNIQUE(unit_id, part_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS location_stock (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        point_code TEXT REFERENCES locations(code) ON DELETE CASCADE,
+        point_code TEXT,
         part_id INTEGER REFERENCES equipment_parts(id) ON DELETE CASCADE,
         quantity INTEGER NOT NULL DEFAULT 0,
         UNIQUE(point_code, part_id)
@@ -101,8 +129,10 @@ _DDL = (
     """
     CREATE TABLE IF NOT EXISTS maintenance_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        point_code TEXT REFERENCES locations(code) ON DELETE CASCADE,
+        point_code TEXT,
+        equipment_id INTEGER REFERENCES equipment_units(id),
         part_id INTEGER REFERENCES equipment_parts(id) ON DELETE CASCADE,
+        quantity INTEGER NOT NULL DEFAULT 1,
         user_id INTEGER REFERENCES users(id),
         replaced_at DATE NOT NULL,
         next_due_date DATE,
@@ -111,17 +141,61 @@ _DDL = (
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS maintenance_responsibles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        point_code TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(point_code, kind)
+    )
+    """,
+)
+
+# Индексы создаём ПОСЛЕ досева колонок: на старой базе индекс по `equipment_id`
+# упал бы, пока колонки ещё нет.
+_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_equipment_parts_category ON equipment_parts (category_code)",
+    "CREATE INDEX IF NOT EXISTS idx_equipment_units_point ON equipment_units (point_code)",
+    "CREATE INDEX IF NOT EXISTS idx_equipment_unit_parts_unit ON equipment_unit_parts (unit_id)",
     "CREATE INDEX IF NOT EXISTS idx_location_stock_part ON location_stock (part_id)",
     "CREATE INDEX IF NOT EXISTS idx_maintenance_logs_point ON maintenance_logs (point_code, part_id)",
+    "CREATE INDEX IF NOT EXISTS idx_maintenance_logs_equipment ON maintenance_logs (equipment_id, part_id)",
 )
+
+# Колонки, досеиваемые в старых базах: `CREATE TABLE IF NOT EXISTS` их не добавит.
+_ADDED_COLUMNS = {
+    "maintenance_logs": (
+        ("equipment_id", "INTEGER"),
+        ("quantity", "INTEGER NOT NULL DEFAULT 1"),
+    ),
+}
+
+
+def _ensure_columns(connection: Any) -> None:
+    """Идемпотентно досеивает колонки, которых нет в старых базах."""
+    for table, fields in _ADDED_COLUMNS.items():
+        existing = {str(row[1]) for row in connection.exec_driver_sql(f"PRAGMA table_info({table})")}
+        for name, definition in fields:
+            if name not in existing:
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {definition}"))
 
 
 def initialize_schema(engine: Engine) -> None:
-    """Идемпотентно создаёт таблицы (справочники остаются как есть, без досева)."""
+    """Создаёт таблицы, досеивает новые колонки и убирает legacy `locations`.
+
+    Точки переехали в глобальный `work_points`, поэтому старая таблица
+    `locations` больше не нужна: удаляем её (на проде остатки и журнал ещё не
+    заведены). Вызывается после `work_points.initialize_schema`.
+    """
     with engine.begin() as connection:
         for statement in _DDL:
             connection.execute(text(statement))
+        _ensure_columns(connection)
+        for statement in _INDEXES:
+            connection.execute(text(statement))
+        connection.execute(text("DROP TABLE IF EXISTS locations"))
+
 
 
 # --- Мелкие нормализаторы --------------------------------------------------- #
@@ -181,82 +255,244 @@ def _today() -> date:
     return date.today()
 
 
-# --- Локации ---------------------------------------------------------------- #
+# --- Точки и оборудование --------------------------------------------------- #
+# Точки — только глобальный справочник `work_points` (своей таблицы у модуля
+# нет). Оборудование — установка на точке: название, привязка к точке и список
+# расходников, которые она использует.
 
 
-def all_locations(engine: Engine) -> list[dict[str, Any]]:
-    """Все точки сети в порядке добавления (rowid) — порядок колонок дашборда."""
+def all_equipment(engine: Engine, active_only: bool = False) -> list[dict[str, Any]]:
+    """Оборудование с расходниками; имя и цвет точки подтягиваются из `work_points`."""
+    where = " WHERE e.is_active = 1" if active_only else ""
     with engine.connect() as connection:
-        rows = connection.execute(text(
-            "SELECT code, name, is_active FROM locations ORDER BY rowid"
-        )).mappings().all()
-    return [{"code": row["code"], "name": row["name"], "is_active": int(row["is_active"] or 0)}
-            for row in rows]
+        rows = connection.execute(text(f"""
+            SELECT e.id, e.point_code, e.name, e.is_active, e.sort_order,
+                   wp.title_alias AS point_alias, wp.title AS point_title,
+                   wp.color AS point_color
+            FROM equipment_units e
+            LEFT JOIN work_points wp ON wp.code = e.point_code
+            {where}
+            ORDER BY e.sort_order, e.id
+        """)).mappings().all()
+        links = connection.execute(text("""
+            SELECT up.unit_id, p.id AS part_id, p.name, p.model,
+                   p.category_code, c.label AS category_label, c.color AS category_color
+            FROM equipment_unit_parts up
+            JOIN equipment_parts p ON p.id = up.part_id
+            LEFT JOIN equipment_categories c ON c.code = p.category_code
+            ORDER BY c.position, p.name COLLATE NOCASE, p.id
+        """)).mappings().all()
+    parts: dict[int, list[dict[str, Any]]] = {}
+    for row in links:
+        parts.setdefault(int(row["unit_id"]), []).append({
+            "part_id": int(row["part_id"]),
+            "name": row["name"],
+            "model": row["model"] or "",
+            "category_code": row["category_code"],
+            "category_label": row["category_label"],
+            "category_color": row["category_color"] or FALLBACK_COLOR,
+        })
+    return [{
+        "id": int(row["id"]),
+        "point_code": row["point_code"],
+        "point_alias": row["point_alias"] or row["point_code"],
+        "point_title": row["point_title"] or row["point_code"],
+        "point_color": row["point_color"] or FALLBACK_COLOR,
+        "name": row["name"],
+        "is_active": int(row["is_active"] or 0),
+        "sort_order": int(row["sort_order"] or 0),
+        "parts": parts.get(int(row["id"]), []),
+    } for row in rows]
 
 
-def active_locations(engine: Engine) -> list[dict[str, Any]]:
-    return [item for item in all_locations(engine) if item["is_active"]]
+def _get_equipment(engine: Engine, unit_id: int) -> dict[str, Any]:
+    for item in all_equipment(engine):
+        if item["id"] == unit_id:
+            return item
+    raise LookupError("Оборудование не найдено")
 
 
-def _location_exists(engine: Engine, code: str) -> bool:
-    with engine.connect() as connection:
-        return connection.execute(
-            text("SELECT 1 FROM locations WHERE code = :code"), {"code": code}
-        ).first() is not None
+def _normalize_part_ids(connection: Any, value: Any) -> list[int]:
+    """id расходников оборудования: без дублей и только существующие запчасти."""
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("Расходники должны быть массивом id")
+    ids: list[int] = []
+    for raw in value:
+        part_id = _clean_int(raw, default=None, minimum=1, label="Расходник")
+        if part_id and part_id not in ids:
+            ids.append(part_id)
+    if ids:
+        known = {int(row[0]) for row in connection.execute(
+            text("SELECT id FROM equipment_parts WHERE id IN :ids").bindparams(
+                bindparam("ids", expanding=True)
+            ), {"ids": ids},
+        ).all()}
+        if any(part_id not in known for part_id in ids):
+            raise ValueError("Неизвестный расходник")
+    return ids
 
 
-def create_location(engine: Engine, payload: dict[str, Any]) -> str:
-    """Новая точка. Код можно задать явно, иначе он собирается из названия."""
+def _set_unit_parts(connection: Any, unit_id: int, part_ids: list[int]) -> None:
+    connection.execute(text("DELETE FROM equipment_unit_parts WHERE unit_id = :id"), {"id": unit_id})
+    for part_id in part_ids:
+        connection.execute(text(
+            "INSERT INTO equipment_unit_parts (unit_id, part_id) VALUES (:unit_id, :part_id)"
+        ), {"unit_id": unit_id, "part_id": part_id})
+
+
+def create_equipment(engine: Engine, payload: Any) -> dict[str, Any]:
+    """Новое оборудование точки (право «тех. обслуживание» + CSRF)."""
+    allowed = {"point_code", "name", "part_ids", "is_active", "sort_order"}
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидался объект оборудования")
+    if set(payload) - allowed:
+        raise ValueError("Неизвестные поля оборудования")
     name = _clean(payload.get("name"), MAX_NAME)
     if not name:
-        raise ValueError("Название точки обязательно")
-    code = _clean_code(payload.get("code")) or _slugify(name, "point")
-    base, index = code, 2
+        raise ValueError("Название оборудования обязательно")
+    point_code = work_points.normalize_point(engine, payload.get("point_code"))
+    is_active = 1 if payload.get("is_active", True) else 0
     with engine.begin() as connection:
-        while connection.execute(
-            text("SELECT 1 FROM locations WHERE code = :code"), {"code": code}
-        ).first():
-            code = f"{base[:MAX_CODE - 3]}-{index}"
-            index += 1
-        connection.execute(text(
-            "INSERT INTO locations (code, name, is_active) VALUES (:code, :name, :active)"
-        ), {"code": code, "name": name, "active": 1 if payload.get("is_active", True) else 0})
-    return code
+        part_ids = _normalize_part_ids(connection, payload.get("part_ids"))
+        order = _clean_int(payload.get("sort_order"), default=None, minimum=0, label="Порядок")
+        if order is None:
+            order = int(connection.execute(text(
+                "SELECT COALESCE(MAX(sort_order), 0) + 10 FROM equipment_units"
+            )).scalar_one())
+        unit_id = int(connection.execute(text("""
+            INSERT INTO equipment_units (point_code, name, is_active, sort_order)
+            VALUES (:point_code, :name, :active, :order)
+            RETURNING id
+        """), {"point_code": point_code, "name": name,
+               "active": is_active, "order": order}).scalar_one())
+        _set_unit_parts(connection, unit_id, part_ids)
+    return _get_equipment(engine, unit_id)
 
 
-def update_location(engine: Engine, code: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Правка названия и активности точки."""
+def update_equipment(engine: Engine, unit_id: int, payload: Any) -> dict[str, Any]:
+    """Правка оборудования: название, точка, активность и список расходников."""
+    allowed = {"point_code", "name", "part_ids", "is_active", "sort_order"}
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("Ожидались поля оборудования")
+    if set(payload) - allowed:
+        raise ValueError("Неизвестные поля оборудования")
+    point_code = (work_points.normalize_point(engine, payload.get("point_code"))
+                  if "point_code" in payload else None)
     values: dict[str, Any] = {}
+    if point_code is not None:
+        values["point_code"] = point_code
     if "name" in payload:
         name = _clean(payload.get("name"), MAX_NAME)
         if not name:
-            raise ValueError("Название точки обязательно")
+            raise ValueError("Название оборудования обязательно")
         values["name"] = name
     if "is_active" in payload:
         values["is_active"] = 1 if payload.get("is_active") else 0
-    if not values:
-        raise ValueError("Нечего сохранять")
-    assignments = ", ".join(f"{key} = :{key}" for key in values)
+    if "sort_order" in payload:
+        values["sort_order"] = _clean_int(
+            payload.get("sort_order"), default=0, minimum=0, label="Порядок") or 0
     with engine.begin() as connection:
-        result = connection.execute(text(
-            f"UPDATE locations SET {assignments} WHERE code = :code"
-        ), {**values, "code": code})
-        if not result.rowcount:
-            raise LookupError("Точка не найдена")
-    return next(item for item in all_locations(engine) if item["code"] == code)
+        exists = connection.execute(text(
+            "SELECT 1 FROM equipment_units WHERE id = :id"
+        ), {"id": unit_id}).first()
+        if exists is None:
+            raise LookupError("Оборудование не найдено")
+        if "part_ids" in payload:
+            _set_unit_parts(connection, unit_id, _normalize_part_ids(connection, payload.get("part_ids")))
+        if values:
+            assignments = ", ".join(f"{key} = :{key}" for key in values)
+            connection.execute(text(
+                f"UPDATE equipment_units SET {assignments} WHERE id = :id"
+            ), {**values, "id": unit_id})
+    return _get_equipment(engine, unit_id)
 
 
-def delete_location(engine: Engine, code: str) -> None:
-    """Удаляет точку вместе с остатками и записями журнала (каскад вручную)."""
+def delete_equipment(engine: Engine, unit_id: int) -> None:
+    """Удаляет оборудование и его связи с расходниками (каскад вручную)."""
     with engine.begin() as connection:
-        row = connection.execute(
-            text("SELECT 1 FROM locations WHERE code = :code"), {"code": code}
-        ).first()
-        if row is None:
-            raise LookupError("Точка не найдена")
-        connection.execute(text("DELETE FROM location_stock WHERE point_code = :code"), {"code": code})
-        connection.execute(text("DELETE FROM maintenance_logs WHERE point_code = :code"), {"code": code})
-        connection.execute(text("DELETE FROM locations WHERE code = :code"), {"code": code})
+        exists = connection.execute(text(
+            "SELECT 1 FROM equipment_units WHERE id = :id"
+        ), {"id": unit_id}).first()
+        if exists is None:
+            raise LookupError("Оборудование не найдено")
+        used = int(connection.execute(text(
+            "SELECT COUNT(*) FROM maintenance_logs WHERE equipment_id = :id"
+        ), {"id": unit_id}).scalar_one() or 0)
+        if used:
+            raise ValueError("У оборудования есть записи журнала — сначала удалите их")
+        connection.execute(text("DELETE FROM equipment_unit_parts WHERE unit_id = :id"), {"id": unit_id})
+        connection.execute(text("DELETE FROM equipment_units WHERE id = :id"), {"id": unit_id})
+
+
+# --- Ответственные точки ---------------------------------------------------- #
+# Одно лицо на «Заявку» (пополнить расходник) и одно на «Замену» (срок вышел).
+# Авто-задачи адресуются им (см. `run_automation`).
+
+
+def responsibles(engine: Engine) -> dict[str, dict[str, dict[str, Any]]]:
+    """Ответственные по точкам: `{point_code: {kind: {user_id, user_name}}}`."""
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT r.point_code, r.kind, r.user_id,
+                   u.display_name AS user_name, u.name AS user_login
+            FROM maintenance_responsibles r
+            LEFT JOIN users u ON u.id = r.user_id
+        """)).mappings().all()
+    result: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in rows:
+        result.setdefault(str(row["point_code"]), {})[str(row["kind"])] = {
+            "user_id": int(row["user_id"]),
+            "user_name": row["user_name"] or row["user_login"] or "",
+        }
+    return result
+
+
+def responsible_user(engine: Engine, point_code: Any, kind: str) -> int | None:
+    """id ответственного за точку и вид работ (`request`/`replacement`)."""
+    with engine.connect() as connection:
+        row = connection.execute(text("""
+            SELECT user_id FROM maintenance_responsibles
+            WHERE point_code = :point AND kind = :kind
+        """), {"point": point_code, "kind": kind}).first()
+    return int(row[0]) if row else None
+
+
+def set_responsible(engine: Engine, payload: Any) -> dict[str, Any]:
+    """Ставит или снимает ответственного (право «тех. обслуживание» + CSRF).
+
+    Одно лицо на точку и вид: `user_id` = `null`/пусто снимает ответственного.
+    """
+    allowed = {"point_code", "kind", "user_id"}
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидался объект ответственного")
+    if set(payload) - allowed:
+        raise ValueError("Неизвестные поля ответственного")
+    point_code = work_points.normalize_point(engine, payload.get("point_code"))
+    kind = str(payload.get("kind") or "").strip()
+    if kind not in RESPONSIBLE_KINDS:
+        raise ValueError("Неизвестный вид ответственного")
+    user_id = _clean_int(payload.get("user_id"), default=None, minimum=1, label="Сотрудник")
+    if user_id is not None:
+        with engine.connect() as connection:
+            exists = connection.execute(text(
+                "SELECT COUNT(*) FROM users WHERE id = :id AND is_active = 1"
+            ), {"id": user_id}).scalar_one()
+        if not exists:
+            raise ValueError("Сотрудник не найден или отключён")
+    with engine.begin() as connection:
+        if user_id is None:
+            connection.execute(text(
+                "DELETE FROM maintenance_responsibles WHERE point_code = :point AND kind = :kind"
+            ), {"point": point_code, "kind": kind})
+        else:
+            connection.execute(text("""
+                INSERT INTO maintenance_responsibles (point_code, kind, user_id)
+                VALUES (:point, :kind, :user)
+                ON CONFLICT(point_code, kind) DO UPDATE SET user_id = excluded.user_id
+            """), {"point": point_code, "kind": kind, "user": user_id})
+    return {"point_code": point_code, "kind": kind, "user_id": user_id}
 
 
 # --- Категории запчастей ---------------------------------------------------- #
@@ -500,11 +736,12 @@ def get_part(engine: Engine, part_id: int) -> dict[str, Any] | None:
 def stock_matrix(engine: Engine) -> dict[str, Any]:
     """Матрица остатков: строки — запчасти, колонки — активные точки.
 
-    Отсутствие строки в `location_stock` означает «остаток не ведётся» (в UI
-    показываем прочерк), а не ноль: иначе каждая запчасть на каждой точке
-    выглядела бы «ниже минимума» и плодила задачи на закупку.
+    Колонки — точки из глобального `work_points`. Отсутствие строки в
+    `location_stock` означает «остаток не ведётся» (в UI показываем прочерк),
+    а не ноль: иначе каждая запчасть на каждой точке выглядела бы «ниже
+    минимума» и плодила задачи на пополнение.
     """
-    locations = active_locations(engine)
+    points = work_points.active_points(engine)
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT p.id AS part_id, p.name, p.model, p.min_stock, p.article,
@@ -527,14 +764,12 @@ def stock_matrix(engine: Engine) -> dict[str, Any]:
         })
         if row["point_code"] is not None:
             part["quantities"][row["point_code"]] = int(row["quantity"] or 0)
-    return {"locations": locations, "parts": list(parts.values())}
+    return {"points": points, "parts": list(parts.values())}
 
 
 def set_stock(engine: Engine, point_code: Any, part_id: Any, quantity: Any) -> dict[str, Any]:
     """Ставит остаток запчасти на точке (upsert) и возвращает итоговую запись."""
-    code = _clean_code(point_code)
-    if not code or not _location_exists(engine, code):
-        raise ValueError("Точка не найдена")
+    code = work_points.normalize_point(engine, point_code, require_active=False)
     part = _clean_int(part_id, default=None, minimum=1, label="Запчасть")
     if part is None or get_part(engine, part) is None:
         raise ValueError("Запчасть не найдена")
@@ -553,15 +788,16 @@ def set_stock(engine: Engine, point_code: Any, part_id: Any, quantity: Any) -> d
 
 def list_logs(engine: Engine, point_code: str | None = None, part_id: int | None = None,
               limit: int = 200) -> list[dict[str, Any]]:
-    """Журнал замен (свежие сверху) с названиями точки, запчасти и автора."""
+    """Журнал замен (свежие сверху) с названиями точки, оборудования и запчасти."""
     limit = max(1, min(int(limit or 200), 500))
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT m.*, l.name AS point_name, p.name AS part_name, p.model AS part_model,
-                   p.page_id AS part_page_id,
+            SELECT m.*, wp.title_alias AS point_name, e.name AS equipment_name,
+                   p.name AS part_name, p.model AS part_model, p.page_id AS part_page_id,
                    c.label AS category_label, u.display_name AS author_name, u.name AS author_login
             FROM maintenance_logs m
-            LEFT JOIN locations l ON l.code = m.point_code
+            LEFT JOIN work_points wp ON wp.code = m.point_code
+            LEFT JOIN equipment_units e ON e.id = m.equipment_id
             LEFT JOIN equipment_parts p ON p.id = m.part_id
             LEFT JOIN equipment_categories c ON c.code = p.category_code
             LEFT JOIN users u ON u.id = m.user_id
@@ -573,6 +809,9 @@ def list_logs(engine: Engine, point_code: str | None = None, part_id: int | None
     return [{
         "id": int(row["id"]), "point_code": row["point_code"],
         "point_name": row["point_name"] or row["point_code"],
+        "equipment_id": int(row["equipment_id"]) if row["equipment_id"] else None,
+        "equipment_name": row["equipment_name"] or "",
+        "quantity": int(row["quantity"] or 1),
         "part_id": int(row["part_id"]), "part_name": row["part_name"] or f"#{row['part_id']}",
         "part_model": row["part_model"] or "", "category_label": row["category_label"],
         "part_page_id": int(row["part_page_id"]) if row["part_page_id"] else None,
@@ -599,8 +838,8 @@ def logs_stats(engine: Engine) -> dict[str, Any]:
             GROUP BY m.part_id ORDER BY total DESC, label LIMIT 8
         """)).mappings().all()
         by_point = connection.execute(text("""
-            SELECT COALESCE(l.name, m.point_code) AS label, COUNT(*) AS total
-            FROM maintenance_logs m LEFT JOIN locations l ON l.code = m.point_code
+            SELECT COALESCE(wp.title_alias, m.point_code) AS label, COUNT(*) AS total
+            FROM maintenance_logs m LEFT JOIN work_points wp ON wp.code = m.point_code
             GROUP BY m.point_code ORDER BY total DESC
         """)).mappings().all()
     return {
@@ -613,20 +852,40 @@ def logs_stats(engine: Engine) -> dict[str, Any]:
 
 
 def create_log(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) -> int:
-    """Запись о замене. `next_due_date` считается от периодичности запчасти."""
-    code = _clean_code(payload.get("point_code"))
-    if not code or not _location_exists(engine, code):
-        raise ValueError("Точка не найдена")
+    """Запись о замене: точка + оборудование + запчасть + количество.
+
+    Оборудование должно принадлежать точке и использовать эту запчасть.
+    Остаток запчасти на точке уменьшается на количество (не ниже нуля).
+    `next_due_date` считается от периодичности запчасти.
+    """
+    code = work_points.normalize_point(engine, payload.get("point_code"), require_active=False)
+    equipment_id = _clean_int(payload.get("equipment_id"), default=None, minimum=1, label="Оборудование")
+    if equipment_id is None:
+        raise ValueError("Выберите оборудование")
     part_id = _clean_int(payload.get("part_id"), default=None, minimum=1, label="Запчасть")
     part = get_part(engine, part_id) if part_id else None
     if part is None:
         raise ValueError("Запчасть не найдена")
+    quantity = _clean_int(payload.get("quantity"), default=1, minimum=1, label="Количество") or 1
+    with engine.connect() as connection:
+        equipment = connection.execute(text(
+            "SELECT id, point_code FROM equipment_units WHERE id = :id"
+        ), {"id": equipment_id}).mappings().first()
+        linked = connection.execute(text(
+            "SELECT 1 FROM equipment_unit_parts WHERE unit_id = :id AND part_id = :part"
+        ), {"id": equipment_id, "part": part_id}).first()
+    if equipment is None:
+        raise ValueError("Оборудование не найдено")
+    if equipment["point_code"] != code:
+        raise ValueError("Оборудование относится к другой точке")
+    if linked is None:
+        raise ValueError("Запчасть не используется этим оборудованием")
 
     replaced_at = _parse_date(_clean(payload.get("replaced_at"), 10) or _today().isoformat())
     if replaced_at is None:
         raise ValueError("Дата замены в формате ГГГГ-ММ-ДД")
 
-    due_raw = _clean(payload.get("next_due_date"), 10)
+    due_raw = _clean(payload.get("next_due_date"), 10) if "next_due_date" in payload else ""
     if due_raw:
         due = _parse_date(due_raw)
         if due is None:
@@ -639,16 +898,29 @@ def create_log(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) ->
     with engine.begin() as connection:
         result = connection.execute(text("""
             INSERT INTO maintenance_logs
-                (point_code, part_id, user_id, replaced_at, next_due_date, comment, photo_url)
-            VALUES (:point_code, :part_id, :user_id, :replaced_at, :next_due_date, :comment, :photo_url)
+                (point_code, equipment_id, part_id, quantity, user_id, replaced_at,
+                 next_due_date, comment, photo_url)
+            VALUES (:point_code, :equipment_id, :part_id, :quantity, :user_id, :replaced_at,
+                    :next_due_date, :comment, :photo_url)
         """), {
-            "point_code": code, "part_id": part_id, "user_id": user["id"],
+            "point_code": code, "equipment_id": equipment_id, "part_id": part_id,
+            "quantity": quantity, "user_id": user["id"],
             "replaced_at": replaced_at.isoformat(),
             "next_due_date": due.isoformat() if due else None,
             "comment": _clean(payload.get("comment"), MAX_COMMENT) or None,
             "photo_url": _clean(payload.get("photo_url"), MAX_URL) or None,
         })
+        _decrease_stock(connection, code, part_id, quantity)
     return int(result.lastrowid or 0)
+
+
+def _decrease_stock(connection: Any, point_code: str, part_id: int, quantity: int) -> None:
+    """Списывает остаток при замене: строки нет — остаток на точке не ведётся."""
+    connection.execute(text("""
+        UPDATE location_stock
+        SET quantity = MAX(0, quantity - :quantity)
+        WHERE point_code = :point AND part_id = :part
+    """), {"quantity": quantity, "point": point_code, "part": part_id})
 
 
 def delete_log(engine: Engine, log_id: int) -> None:
@@ -676,7 +948,13 @@ def _status_for(interval: int | None, last: date | None, due: date | None, today
 
 
 def overview(engine: Engine) -> dict[str, Any]:
-    """Сводка «обслуживание по точкам»: статус и ближайший дедлайн по каждому узлу."""
+    """Сводка «обслуживание по точкам»: статус и ближайший дедлайн по оборудованию.
+
+    Строка — пара (оборудование, расходник): запчасти показываем по списку
+    оборудования, а не «все на все точки». История и срок замены считаются по
+    оборудованию, поэтому одинаковые картриджи на разных установках имеют
+    независимые дедлайны.
+    """
     try:
         soon_days = int(modules.setting("maintenance", "SOON_DAYS", SOON_DAYS))
     except (TypeError, ValueError):
@@ -684,20 +962,23 @@ def overview(engine: Engine) -> dict[str, Any]:
     today = _today()
     with engine.connect() as connection:
         rows = connection.execute(text("""
-            SELECT l.code AS point_code, l.name AS point_name,
+            SELECT wp.code AS point_code, wp.title_alias AS point_name,
+                   e.id AS equipment_id, e.name AS equipment_name,
                    p.id AS part_id, p.name, p.model, p.replacement_interval_days,
                    p.min_stock, p.article, p.category_code, p.page_id,
                    c.label AS category_label, c.color AS category_color,
                    (SELECT MAX(m.replaced_at) FROM maintenance_logs m
-                     WHERE m.point_code = l.code AND m.part_id = p.id) AS last_replaced,
+                     WHERE m.equipment_id = e.id AND m.part_id = p.id) AS last_replaced,
                    (SELECT m.next_due_date FROM maintenance_logs m
-                     WHERE m.point_code = l.code AND m.part_id = p.id
+                     WHERE m.equipment_id = e.id AND m.part_id = p.id
                      ORDER BY m.replaced_at DESC, m.id DESC LIMIT 1) AS next_due
-            FROM locations l
-            CROSS JOIN equipment_parts p
+            FROM equipment_units e
+            JOIN work_points wp ON wp.code = e.point_code AND wp.is_active = 1
+            JOIN equipment_unit_parts up ON up.unit_id = e.id
+            JOIN equipment_parts p ON p.id = up.part_id
             LEFT JOIN equipment_categories c ON c.code = p.category_code
-            WHERE l.is_active = 1
-            ORDER BY c.position, p.name COLLATE NOCASE, l.rowid
+            WHERE e.is_active = 1
+            ORDER BY wp.sort_order, e.sort_order, e.id, c.position, p.name COLLATE NOCASE
         """)).mappings().all()
 
     items: list[dict[str, Any]] = []
@@ -712,6 +993,7 @@ def overview(engine: Engine) -> dict[str, Any]:
         counts[status] += 1
         items.append({
             "point_code": row["point_code"], "point_name": row["point_name"] or row["point_code"],
+            "equipment_id": int(row["equipment_id"]), "equipment_name": row["equipment_name"],
             "part_id": int(row["part_id"]), "name": row["name"], "model": row["model"] or "",
             "article": row["article"] or "", "category_label": row["category_label"],
             "category_color": row["category_color"] or FALLBACK_COLOR,
@@ -767,33 +1049,52 @@ def _has_open_task(engine: Engine, token: str) -> bool:
 
 
 def _create_auto_task(engine: Engine, author: dict[str, Any] | None, token: str,
-                      title: str, description: str, priority: str) -> bool:
-    try:
-        # Автор — системный: должность берём у самого старшего супер-пользователя,
-        # чтобы задача не зависела от того, кто из них сейчас в смене.
-        tasks.create_task(engine, {"id": author["id"] if author else None,
-                                   "role": author["role"] if author else ""}, {
-            "title": title,
-            "description": description,
-            "priority": priority,
-            "meta_info": f"ТО · авто\n{token}",
-            "assignee_type": "all",
-        })
-    except ValueError:
-        return False
-    return True
+                      title: str, description: str, priority: str,
+                      assignee_user_id: int | None = None) -> bool:
+    """Создаёт авто-задачу; при `assignee_user_id` — лично ответственному.
+
+    Личная адресация сама шлёт уведомление «вам поставили задачу» (центр
+    уведомлений), поэтому «на всех» ставим только если ответственный не задан
+    или по какой-то причине недоступен.
+    """
+    # Автор — системный: должность берём у самого старшего супер-пользователя,
+    # чтобы задача не зависела от того, кто из них сейчас в смене.
+    actor = {"id": author["id"] if author else None, "role": author["role"] if author else ""}
+    base = {"title": title, "description": description,
+            "priority": priority, "meta_info": f"ТО · авто\n{token}"}
+    variants: list[dict[str, Any]] = []
+    if assignee_user_id:
+        variants.append({**base, "assignee_type": "user",
+                         "assignee_user_id": int(assignee_user_id)})
+    variants.append({**base, "assignee_type": "all"})
+    for payload in variants:
+        try:
+            tasks.create_task(engine, actor, payload)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def run_automation(engine: Engine) -> dict[str, int]:
-    """Авто-задачи: закупка (остаток ≤ `min_stock`) и замена (срок вышел)."""
-    created = {"purchase": 0, "replacement": 0}
+    """Авто-задачи: «Заявка» (остаток ≤ `min_stock`) и «Замена» (срок в пределах `SOON_DAYS`).
+
+    Задача адресуется ответственному за точку (`maintenance_responsibles`); не
+    задан — задача «на всех». Замена переиспользует настройку `SOON_DAYS`: и
+    подсветка дашборда, и заблаговременность задачи — одна шкала.
+    """
+    created = {"request": 0, "replacement": 0}
     author = _system_author(engine)
+    try:
+        soon_days = int(modules.setting("maintenance", "SOON_DAYS", SOON_DAYS))
+    except (TypeError, ValueError):
+        soon_days = SOON_DAYS
     with engine.connect() as connection:
         low = connection.execute(text("""
-            SELECT s.point_code, l.name AS point_name, p.id AS part_id, p.name,
+            SELECT s.point_code, wp.title_alias AS point_name, p.id AS part_id, p.name,
                    p.page_id, p.min_stock, s.quantity
             FROM location_stock s
-            JOIN locations l ON l.code = s.point_code AND l.is_active = 1
+            JOIN work_points wp ON wp.code = s.point_code AND wp.is_active = 1
             JOIN equipment_parts p ON p.id = s.part_id
             WHERE s.quantity <= p.min_stock
         """)).mappings().all()
@@ -802,37 +1103,45 @@ def run_automation(engine: Engine) -> dict[str, int]:
         if _has_open_task(engine, token):
             continue
         if _create_auto_task(engine, author, token,
-                             f"Закупка: {row['name']} ({row['point_name']})",
+                             f"Заявка: {row['name']} ({row['point_name']})",
                              f"{page_links.mention(row['page_id'], row['name'])} — остаток "
                              f"{row['quantity']} при минимуме {row['min_stock']}. "
                              f"Пополните запас на точке «{row['point_name']}».",
-                             "high"):
-            created["purchase"] += 1
+                             "high",
+                             assignee_user_id=responsible_user(engine, row["point_code"], "request")):
+            created["request"] += 1
 
-    today = _today().isoformat()
+    today = _today()
+    deadline = (today + timedelta(days=soon_days)).isoformat()
     with engine.connect() as connection:
         due_rows = connection.execute(text("""
-            SELECT l.code AS point_code, l.name AS point_name, p.id AS part_id, p.name,
-                   p.page_id,
+            SELECT e.id AS equipment_id, e.name AS equipment_name,
+                   wp.code AS point_code, wp.title_alias AS point_name,
+                   p.id AS part_id, p.name, p.page_id,
                    (SELECT m.next_due_date FROM maintenance_logs m
-                     WHERE m.point_code = l.code AND m.part_id = p.id
+                     WHERE m.equipment_id = e.id AND m.part_id = p.id
                      ORDER BY m.replaced_at DESC, m.id DESC LIMIT 1) AS next_due
-            FROM locations l
-            CROSS JOIN equipment_parts p
-            WHERE l.is_active = 1 AND p.replacement_interval_days IS NOT NULL
+            FROM equipment_units e
+            JOIN work_points wp ON wp.code = e.point_code AND wp.is_active = 1
+            JOIN equipment_unit_parts up ON up.unit_id = e.id
+            JOIN equipment_parts p ON p.id = up.part_id
+            WHERE e.is_active = 1 AND p.replacement_interval_days IS NOT NULL
         """)).mappings().all()
     for row in due_rows:
         due = str(row["next_due"] or "")[:10]
-        if not due or due >= today:
-            continue
-        token = f"auto:due:{row['point_code']}:{row['part_id']}"
+        if not due or due > deadline:
+            continue          # до срока ещё дальше окна SOON_DAYS — не беспокоим
+        token = f"auto:due:{row['equipment_id']}:{row['part_id']}"
         if _has_open_task(engine, token):
             continue
+        when = f"истёк {due}" if due < today.isoformat() else f"наступает {due}"
         if _create_auto_task(engine, author, token,
-                             f"Замена: {row['name']} ({row['point_name']})",
+                             f"Замена: {row['name']} · {row['equipment_name']} ({row['point_name']})",
                              f"{page_links.mention(row['page_id'], row['name'])} — срок замены "
-                             f"истёк {due}. Проведите замену и внесите запись в журнал ТО.",
-                             "urgent"):
+                             f"{when}. Замените расходник на «{row['equipment_name']}» "
+                             f"и внесите запись в журнал ТО.",
+                             "urgent",
+                             assignee_user_id=responsible_user(engine, row["point_code"], "replacement")):
             created["replacement"] += 1
     return created
 
@@ -870,7 +1179,6 @@ def part_qr_svg(part: dict[str, Any]) -> bytes:
 
 
 maintenance_router = APIRouter(prefix="/api/maintenance", tags=["maintenance"])
-locations_router = APIRouter(prefix="/api/locations", tags=["locations"])
 
 
 async def _json_object(request: Request) -> dict[str, Any]:
@@ -883,51 +1191,77 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return payload
 
 
-# Точки сети: чтение — любой сотрудник, правка — право «тех. обслуживание» + CSRF.
+# Точки сети — из глобального справочника `work_points`. Чтение — любой
+# сотрудник, правка оборудования и ответственных — право «тех. обслуживание».
 
 
-@locations_router.get("")
-def list_locations(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Справочник точек: из него строятся динамические колонки дашборда."""
-    return {"locations": all_locations(engine)}
+@maintenance_router.get("/points")
+def list_points(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Активные точки сети — из глобального справочника `work_points`."""
+    return {"points": work_points.active_points(engine)}
 
 
-@locations_router.post("", status_code=201)
-async def add_location(request: Request,
-                       _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
-    payload = await _json_object(request)
-    if set(payload) - {"code", "name", "is_active"}:
-        raise HTTPException(status_code=422, detail="Неизвестные поля точки")
-    try:
-        code = create_location(engine, payload)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"ok": True, "code": code, "locations": all_locations(engine)}
+@maintenance_router.get("/equipment")
+def list_equipment(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Оборудование сети: название, точка и список расходников."""
+    return {"equipment": all_equipment(engine)}
 
 
-@locations_router.patch("/{code}")
-async def edit_location(code: str, request: Request,
+@maintenance_router.post("/equipment", status_code=201)
+async def add_equipment(request: Request,
                         _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
-    if set(payload) - {"name", "is_active"}:
-        raise HTTPException(status_code=422, detail="Неизвестные поля точки")
     try:
-        location = update_location(engine, code, payload)
+        unit = create_equipment(engine, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "unit": unit, "equipment": all_equipment(engine)}
+
+
+@maintenance_router.patch("/equipment/{unit_id}")
+async def edit_equipment(unit_id: int, request: Request,
+                         _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
+    payload = await _json_object(request)
+    try:
+        unit = update_equipment(engine, unit_id, payload)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"ok": True, "location": location, "locations": all_locations(engine)}
+    return {"ok": True, "unit": unit, "equipment": all_equipment(engine)}
 
 
-@locations_router.delete("/{code}")
-def remove_location(code: str,
-                    _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
+@maintenance_router.delete("/equipment/{unit_id}")
+def remove_equipment(unit_id: int,
+                     _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     try:
-        delete_location(engine, code)
+        delete_equipment(engine, unit_id)
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    return {"ok": True, "locations": all_locations(engine)}
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"ok": True, "equipment": all_equipment(engine)}
+
+
+@maintenance_router.get("/responsibles")
+def list_responsibles(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+    """Ответственные точки: одно лицо на «Заявку», одно на «Замену»."""
+    return {
+        "responsibles": responsibles(engine),
+        "kinds": [{"code": kind, "label": RESPONSIBLE_LABELS[kind]}
+                  for kind in RESPONSIBLE_KINDS],
+    }
+
+
+@maintenance_router.put("/responsibles")
+async def save_responsible(request: Request,
+                           _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
+    payload = await _json_object(request)
+    try:
+        row = set_responsible(engine, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "responsible": row, "responsibles": responsibles(engine)}
 
 
 # Категории ТО: правятся в панели управления, читаются дашбордом.
@@ -1038,7 +1372,8 @@ def get_logs(point_code: str | None = None, part_id: int | None = None, limit: i
 @maintenance_router.post("/logs", status_code=201)
 async def add_log(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
-    if set(payload) - {"point_code", "part_id", "replaced_at", "next_due_date", "comment", "photo_url"}:
+    if set(payload) - {"point_code", "equipment_id", "part_id", "quantity",
+                       "replaced_at", "next_due_date", "comment", "photo_url"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля записи")
     try:
         log_id = create_log(engine, user, payload)

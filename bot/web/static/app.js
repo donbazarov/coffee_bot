@@ -9897,17 +9897,23 @@ function controlIsNarrow() {
 
 /* Подсвечивает активный пункт списка и обновляет бейджи «Вкл»/«Выкл». */
 /* --- Тех. обслуживание ---------------------------------------------------
-   Точки и категории — справочники в БД: колонки остатков и фильтры строятся
-   из ответа `/api/locations`, в коде нет ни одной захардкоженной точки.
-   Авто-задачи (закупка/замена) создаёт сервер — здесь только отображение. */
+   Точки — глобальный справочник «Основное» (колонки остатков и фильтры
+   строятся из `/api/maintenance/points`), в коде нет ни одной захардкоженной
+   точки. Оборудование точки и его расходники — `/api/maintenance/equipment`,
+   ответственные — `/api/maintenance/responsibles`. Авто-задачи (заявка/замена)
+   ставит сервер ответственному — здесь только отображение. */
 
 const maintenanceState = {
   tab: 'overview',
   canManage: can('maintenance'),
-  locations: [],
+  points: [],
   parts: [],
   partsLoaded: false,
   categories: [],
+  equipment: [],
+  responsibles: {},
+  users: [],
+  kinds: [],
   overview: null,
   stock: null,
   logs: [],
@@ -9959,11 +9965,18 @@ function openMaintenance() {
   maintenanceSetTab(maintenanceState.tab || 'overview');
 }
 
-async function maintenanceEnsureLocations(force = false) {
-  if (maintenanceState.locations.length && !force) return maintenanceState.locations;
-  const data = await api('/api/locations');
-  maintenanceState.locations = data.locations || [];
-  return maintenanceState.locations;
+async function maintenanceEnsurePoints(force = false) {
+  if (maintenanceState.points.length && !force) return maintenanceState.points;
+  const data = await api('/api/maintenance/points');
+  maintenanceState.points = data.points || [];
+  return maintenanceState.points;
+}
+
+async function maintenanceEnsureEquipment(force = false) {
+  if (maintenanceState.equipment.length && !force) return maintenanceState.equipment;
+  const data = await api('/api/maintenance/equipment');
+  maintenanceState.equipment = data.equipment || [];
+  return maintenanceState.equipment;
 }
 
 async function maintenanceEnsureParts(force = false) {
@@ -9978,7 +9991,7 @@ async function loadMaintenance() {
   maintenanceState.loading = true;
   maintenanceSetStatus('Загрузка…');
   try {
-    await maintenanceEnsureLocations();
+    await maintenanceEnsurePoints();
     if (maintenanceState.tab === 'overview') {
       maintenanceState.overview = await api('/api/maintenance/overview');
       renderMaintenanceOverview();
@@ -10025,7 +10038,7 @@ function renderMaintenanceOverview() {
     </div>`).join('');
   const items = data.items || [];
   if (!items.length) {
-    list.innerHTML = '<p class="empty-state">Каталог запчастей пуст. Заведите их в Базе знаний, раздел «Оборудование».</p>';
+    list.innerHTML = '<p class="empty-state">Пока нечего обслуживать: заведите запчасти в Базе знаний (раздел «Оборудование») и привяжите их к установкам в панели управления, блок «Оборудование».</p>';
     return;
   }
   const rows = items.map((item) => {
@@ -10035,14 +10048,15 @@ function renderMaintenanceOverview() {
     return `<article class="maintenance-row is-${item.status}">
       <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(item.category_color || '#7b8794')}"></i><span><strong>${maintenancePartNameMarkup(item.name, item.page_id)}</strong>${item.model ? `<small>${escapeHtml(item.model)}</small>` : ''}</span></span>
       <span>${escapeHtml(item.point_name)}</span>
+      <span class="maintenance-equipment">${item.equipment_name ? escapeHtml(item.equipment_name) : '—'}</span>
       <span>${item.replacement_interval_days ? `каждые ${Number(item.replacement_interval_days)} дн.` : 'по износу'}</span>
       <span>${maintenanceDate(item.last_replaced)}</span>
       <span class="maintenance-due">${due}</span>
       <span class="maintenance-badge is-${item.status}">${maintenanceStatusLabel(item.status)}</span>
     </article>`;
   }).join('');
-  list.innerHTML = `<div class="maintenance-table" style="--maintenance-columns:minmax(180px,1.7fr) minmax(90px,.8fr) minmax(110px,.9fr) minmax(120px,1fr) minmax(150px,1.2fr) minmax(120px,.9fr)">
-    <div class="maintenance-head"><span>Запчасть</span><span>Точка</span><span>Периодичность</span><span>Последняя замена</span><span>Следующая</span><span>Статус</span></div>
+  list.innerHTML = `<div class="maintenance-table" style="--maintenance-columns:minmax(180px,1.6fr) minmax(80px,.7fr) minmax(140px,1.2fr) minmax(110px,.9fr) minmax(120px,1fr) minmax(150px,1.2fr) minmax(110px,.8fr)">
+    <div class="maintenance-head"><span>Запчасть</span><span>Точка</span><span>Оборудование</span><span>Периодичность</span><span>Последняя замена</span><span>Следующая</span><span>Статус</span></div>
     ${rows}
   </div>`;
 }
@@ -10052,10 +10066,10 @@ function renderMaintenanceStock() {
   if (!box) return;
   const data = maintenanceState.stock;
   if (!data) { box.innerHTML = ''; return; }
-  const locations = data.locations || [];
+  const points = data.points || [];
   const parts = data.parts || [];
-  if (!locations.length) {
-    box.innerHTML = '<p class="empty-state">Нет активных точек — добавьте их в панели управления.</p>';
+  if (!points.length) {
+    box.innerHTML = '<p class="empty-state">Нет активных точек — заведите их в панели управления, вкладка «Основное».</p>';
     return;
   }
   if (!parts.length) {
@@ -10063,18 +10077,18 @@ function renderMaintenanceStock() {
     return;
   }
   const canManage = maintenanceState.canManage;
-  const columns = `minmax(180px,1.7fr) 72px ${locations.map(() => 'minmax(76px,1fr)').join(' ')}`;
-  const head = `<div class="maintenance-head"><span>Запчасть</span><span>Мин.</span>${locations.map((item) => `<span>${escapeHtml(item.name)}</span>`).join('')}</div>`;
+  const columns = `minmax(180px,1.7fr) 72px ${points.map(() => 'minmax(76px,1fr)').join(' ')}`;
+  const head = `<div class="maintenance-head"><span>Запчасть</span><span>Мин.</span>${points.map((item) => `<span>${escapeHtml(item.title_alias || item.code)}</span>`).join('')}</div>`;
   const rows = parts.map((part) => {
     const quantities = part.quantities || {};
-    const cells = locations.map((location) => {
-      const has = Object.prototype.hasOwnProperty.call(quantities, location.code);
-      const value = has ? Number(quantities[location.code]) : null;
+    const cells = points.map((point) => {
+      const has = Object.prototype.hasOwnProperty.call(quantities, point.code);
+      const value = has ? Number(quantities[point.code]) : null;
       const low = has && value < Number(part.min_stock || 0);
       const label = has ? String(value) : '—';
       const cls = `maintenance-qty${low ? ' is-low' : ''}${has ? '' : ' is-empty'}`;
       if (!canManage) return `<span class="${cls}">${label}</span>`;
-      return `<button class="${cls}" type="button" data-maintenance-stock="${part.part_id}:${escapeHtml(location.code)}" title="Изменить остаток">${label}</button>`;
+      return `<button class="${cls}" type="button" data-maintenance-stock="${part.part_id}:${escapeHtml(point.code)}" title="Изменить остаток">${label}</button>`;
     }).join('');
     return `<article class="maintenance-row">
       <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}"></i><span><strong>${maintenancePartNameMarkup(part.name, part.page_id)}</strong>${part.model ? `<small>${escapeHtml(part.model)}</small>` : ''}</span></span>
@@ -10092,7 +10106,7 @@ function renderMaintenanceLogs() {
   const canManage = maintenanceState.canManage;
   if (filters) {
     filters.innerHTML = [`<button class="chip ${maintenanceState.filter === 'all' ? 'is-selected' : ''}" type="button" data-maintenance-filter="all">Все точки</button>`]
-      .concat(maintenanceState.locations.map((item) => `<button class="chip ${maintenanceState.filter === item.code ? 'is-selected' : ''}" type="button" data-maintenance-filter="${escapeHtml(item.code)}">${escapeHtml(item.name)}</button>`))
+      .concat(maintenanceState.points.map((item) => `<button class="chip ${maintenanceState.filter === item.code ? 'is-selected' : ''}" type="button" data-maintenance-filter="${escapeHtml(item.code)}">${escapeHtml(item.title_alias || item.code)}</button>`))
       .join('');
   }
   const stats = maintenanceState.stats || {};
@@ -10115,6 +10129,8 @@ function renderMaintenanceLogs() {
         <span class="maintenance-log-date">${maintenanceDate(item.replaced_at)}</span>
         <span class="maintenance-log-part"><strong>${maintenancePartNameMarkup(item.part_name, item.part_page_id)}</strong>${item.part_model ? `<small>${escapeHtml(item.part_model)}</small>` : ''}</span>
         <span class="maintenance-log-point">${escapeHtml(item.point_name)}</span>
+        ${item.equipment_name ? `<span class="maintenance-log-point">${escapeHtml(item.equipment_name)}</span>` : ''}
+        <span class="maintenance-log-qty">${Number(item.quantity || 1)} шт.</span>
         <span class="maintenance-log-next">${item.next_due_date ? `следующая: ${maintenanceDate(item.next_due_date)}` : 'без срока'}</span>
       </div>
       ${item.comment ? `<p class="maintenance-log-comment">${escapeHtml(item.comment)}</p>` : ''}
@@ -10139,16 +10155,17 @@ async function openMaintenanceLogDialog() {
   if (!dialog || !form) return;
   form.reset();
   try {
-    const [locations, parts] = await Promise.all([maintenanceEnsureLocations(), maintenanceEnsureParts()]);
-    if (!locations.length || !parts.length) {
-      showToast('Сначала заведите точки и запчасти');
-      return;
-    }
-    form.elements.point_code.innerHTML = locations
-      .map((item) => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.name)}</option>`).join('');
-    form.elements.part_id.innerHTML = parts
-      .map((item) => `<option value="${Number(item.id)}">${escapeHtml(item.name)}${item.model ? ` · ${escapeHtml(item.model)}` : ''}</option>`).join('');
+    const [points, equipment] = await Promise.all([
+      maintenanceEnsurePoints(),
+      maintenanceEnsureEquipment(),
+    ]);
+    if (!points.length) { showToast('Сначала заведите точки в панели управления'); return; }
+    if (!equipment.length) { showToast('Сначала заведите оборудование в панели управления'); return; }
+    form.elements.point_code.innerHTML = points
+      .map((item) => `<option value="${escapeHtml(item.code)}">${escapeHtml(item.title_alias || item.code)}</option>`).join('');
+    maintenanceFillEquipmentSelect(form, equipment);
     form.elements.replaced_at.value = maintenanceToday();
+    form.elements.quantity.value = '1';
     const error = document.querySelector('#maintenance-log-error');
     if (error) error.hidden = true;
     dialog.showModal();
@@ -10157,23 +10174,48 @@ async function openMaintenanceLogDialog() {
   }
 }
 
+/* Оборудование в форме замены фильтруется по точке, а запчасти — по
+   оборудованию: одна и та же установка использует свой список расходников. */
+function maintenanceFillEquipmentSelect(form, equipment) {
+  const pointCode = form.elements.point_code.value;
+  const units = (equipment || []).filter((item) => !pointCode || item.point_code === pointCode);
+  form.elements.equipment_id.innerHTML = units.length
+    ? units.map((item) => `<option value="${Number(item.id)}">${escapeHtml(item.name)}</option>`).join('')
+    : '<option value="">Нет оборудования на точке</option>';
+  maintenanceFillPartSelect(form, equipment);
+}
+
+function maintenanceFillPartSelect(form, equipment) {
+  const unitId = Number(form.elements.equipment_id.value || 0);
+  const unit = (equipment || []).find((item) => Number(item.id) === unitId);
+  const parts = (unit && unit.parts) || [];
+  form.elements.part_id.innerHTML = parts.length
+    ? parts.map((part) => `<option value="${Number(part.part_id)}">${escapeHtml(part.name)}${part.model ? ` · ${escapeHtml(part.model)}` : ''}</option>`).join('')
+    : '<option value="">Нет расходников у оборудования</option>';
+}
+
 async function submitMaintenanceLog(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const payload = {
     point_code: form.elements.point_code.value,
-    part_id: Number(form.elements.part_id.value),
+    equipment_id: Number(form.elements.equipment_id.value || 0),
+    part_id: Number(form.elements.part_id.value || 0),
+    quantity: Number(form.elements.quantity.value || 1),
     replaced_at: form.elements.replaced_at.value,
     comment: form.elements.comment.value.trim(),
   };
+  if (!payload.equipment_id) { maintenanceFormError('#maintenance-log-error', 'Выберите оборудование'); return; }
+  if (!payload.part_id) { maintenanceFormError('#maintenance-log-error', 'Выберите запчасть'); return; }
   if (form.elements.next_due_date.value) payload.next_due_date = form.elements.next_due_date.value;
   const submit = form.querySelector('button[type="submit"]');
   if (submit) submit.disabled = true;
   try {
     await api('/api/maintenance/logs', { method: 'POST', body: JSON.stringify(payload) });
     document.querySelector('#maintenance-log-dialog')?.close();
-    showToast('Запись добавлена');
+    showToast('Запись добавлена, остаток уменьшен');
     maintenanceState.overview = null;
+    maintenanceState.stock = null;
     if (maintenanceState.tab === 'logs') await loadMaintenance();
     else maintenanceSetTab('logs');
   } catch (error) {
@@ -10190,7 +10232,7 @@ function openMaintenanceStockDialog(key) {
   const [partId, pointCode] = String(key).split(':');
   const part = ((maintenanceState.stock && maintenanceState.stock.parts) || [])
     .find((item) => String(item.part_id) === partId);
-  const point = maintenanceState.locations.find((item) => item.code === pointCode);
+  const point = maintenanceState.points.find((item) => item.code === pointCode);
   form.reset();
   form.elements.point_code.value = pointCode;
   form.elements.part_id.value = partId;
@@ -10198,7 +10240,7 @@ function openMaintenanceStockDialog(key) {
     ? part.quantities[pointCode] : 0;
   form.elements.quantity.value = String(current);
   const title = document.querySelector('#maintenance-stock-title');
-  if (title) title.textContent = `${part ? part.name : 'Запчасть'} · ${point ? point.name : pointCode}`;
+  if (title) title.textContent = `${part ? part.name : 'Запчасть'} · ${point ? (point.title_alias || point.code) : pointCode}`;
   const error = document.querySelector('#maintenance-stock-error');
   if (error) error.hidden = true;
   dialog.showModal();
@@ -10220,7 +10262,7 @@ async function submitMaintenanceStock(event) {
     maintenanceState.stock = data.matrix;
     maintenanceState.overview = null;
     renderMaintenanceStock();
-    const created = Number((data.automation || {}).purchase || 0) + Number((data.automation || {}).replacement || 0);
+    const created = Number((data.automation || {}).request || 0) + Number((data.automation || {}).replacement || 0);
     showToast(created ? `Остаток обновлён, создано задач: ${created}` : 'Остаток обновлён');
   } catch (error) {
     maintenanceFormError('#maintenance-stock-error', error.message);
@@ -10270,46 +10312,94 @@ function setupMaintenance() {
   });
   bind('#maintenance-log-add', openMaintenanceLogDialog);
   bind('#maintenance-log-form', submitMaintenanceLog, 'submit');
+  // Точка в записи замены пересобирает список оборудования, оборудование — запчасти.
+  bind('#maintenance-log-point', () => maintenanceFillEquipmentSelect(
+    document.querySelector('#maintenance-log-form'), maintenanceState.equipment), 'change');
+  bind('#maintenance-log-equipment', () => maintenanceFillPartSelect(
+    document.querySelector('#maintenance-log-form'), maintenanceState.equipment), 'change');
   bind('#maintenance-stock-form', submitMaintenanceStock, 'submit');
-  bind('#maintenance-location-add', () => openMaintenanceLocationDialog(null));
-  bind('#maintenance-location-form', submitMaintenanceLocation, 'submit');
-  bind('#maintenance-locations', onMaintenanceLocationAction);
+  bind('#maintenance-equipment-add', () => openMaintenanceEquipmentDialog(null));
+  bind('#maintenance-equipment-form', submitMaintenanceEquipment, 'submit');
+  bind('#maintenance-equipment', onMaintenanceEquipmentAction);
+  bind('#maintenance-responsibles', onMaintenanceResponsibleChange, 'change');
   bind('#maintenance-category-add', () => openMaintenanceCategoryDialog(null));
   bind('#maintenance-category-form', submitMaintenanceCategory, 'submit');
   bind('#maintenance-categories', onMaintenanceCategoryAction);
 }
 
-/* --- Панель управления: точки и категории ТО ---------------------------- */
+/* --- Панель управления: оборудование, ответственные и категории ТО ------ */
 
 async function loadMaintenanceAdmin() {
   try {
-    const [locations, categories] = await Promise.all([
-      api('/api/locations'),
+    const [points, categories, equipment, users, responsible] = await Promise.all([
+      api('/api/maintenance/points'),
       api('/api/maintenance/categories'),
+      api('/api/maintenance/equipment'),
+      api('/api/users'),
+      api('/api/maintenance/responsibles'),
     ]);
-    maintenanceState.locations = locations.locations || [];
+    maintenanceState.points = points.points || [];
     maintenanceState.categories = categories.categories || [];
-    renderMaintenanceLocations();
+    maintenanceState.equipment = equipment.equipment || [];
+    maintenanceState.users = (users || []).filter((user) => user.is_active);
+    maintenanceState.responsibles = responsible.responsibles || {};
+    maintenanceState.kinds = responsible.kinds || [];
+    renderMaintenanceEquipment();
+    renderMaintenanceResponsibles();
     renderMaintenanceCategories();
   } catch (error) {
     showToast(error.message);
   }
 }
 
-function renderMaintenanceLocations() {
-  const node = document.querySelector('#maintenance-locations');
+function renderMaintenanceEquipment() {
+  const node = document.querySelector('#maintenance-equipment');
   if (!node) return;
-  const items = maintenanceState.locations || [];
-  node.innerHTML = items.length ? items.map((item) => `
+  const items = maintenanceState.equipment || [];
+  node.innerHTML = items.length ? items.map((item) => {
+    const parts = (item.parts || []).map((part) =>
+      `<span class="maintenance-part-chip" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}">${escapeHtml(part.name)}</span>`).join('');
+    return `
     <article class="announcement-category">
       <span class="category-swatch" style="--announcement-color:${item.is_active ? '#4cbfa9' : '#7b8794'}"></span>
       <strong>${escapeHtml(item.name)}</strong>
-      <span class="category-flags">${escapeHtml(item.code)}${item.is_active ? '' : ' · выкл'}</span>
+      <span class="category-flags">${escapeHtml(item.point_alias || item.point_code)}${item.is_active ? '' : ' · выкл'}</span>
+      <span class="maintenance-part-chips">${parts || '<span class="maintenance-part-chip is-empty">расходники не выбраны</span>'}</span>
       <div class="category-actions">
-        <button class="text-button" type="button" data-maintenance-location-edit="${escapeHtml(item.code)}">Изменить</button>
-        <button class="text-button" type="button" data-maintenance-location-delete="${escapeHtml(item.code)}">Удалить</button>
+        <button class="text-button" type="button" data-maintenance-equipment-edit="${Number(item.id)}">Изменить</button>
+        <button class="text-button" type="button" data-maintenance-equipment-delete="${Number(item.id)}">Удалить</button>
       </div>
-    </article>`).join('') : '<p class="empty-state">Точек нет</p>';
+    </article>`;
+  }).join('') : '<p class="empty-state">Оборудования нет</p>';
+}
+
+/* Ответственные: на каждую точку — селект на «Заявку» и селект на «Замену». */
+function renderMaintenanceResponsibles() {
+  const node = document.querySelector('#maintenance-responsibles');
+  if (!node) return;
+  const points = maintenanceState.points || [];
+  if (!points.length) {
+    node.innerHTML = '<p class="empty-state">Точек нет — заведите их в разделе «Основное».</p>';
+    return;
+  }
+  const users = maintenanceState.users || [];
+  const kinds = maintenanceState.kinds.length
+    ? maintenanceState.kinds
+    : [{ code: 'request', label: 'Заявка' }, { code: 'replacement', label: 'Замена' }];
+  const options = (current) => '<option value="">— не выбран —</option>' + users.map((user) =>
+    `<option value="${Number(user.id)}"${Number(user.id) === current ? ' selected' : ''}>${escapeHtml(user.display_name || user.name)}</option>`).join('');
+  node.innerHTML = points.map((point) => {
+    const assigned = (maintenanceState.responsibles || {})[point.code] || {};
+    const selects = kinds.map((kind) => {
+      const current = Number((assigned[kind.code] || {}).user_id || 0);
+      return `<label>${escapeHtml(kind.label)}<select data-maintenance-responsible="${escapeHtml(point.code)}:${escapeHtml(kind.code)}">${options(current)}</select></label>`;
+    }).join('');
+    return `<article class="announcement-category maintenance-responsible-row">
+      <span class="category-swatch"${pointColorStyle(point.code)}></span>
+      <strong>${escapeHtml(point.title_alias || point.code)}</strong>
+      <div class="maintenance-responsible-fields">${selects}</div>
+    </article>`;
+  }).join('');
 }
 
 function renderMaintenanceCategories() {
@@ -10328,68 +10418,117 @@ function renderMaintenanceCategories() {
     </article>`).join('') : '<p class="empty-state">Категорий нет</p>';
 }
 
-function openMaintenanceLocationDialog(item) {
-  const dialog = document.querySelector('#maintenance-location-dialog');
-  const form = document.querySelector('#maintenance-location-form');
+async function openMaintenanceEquipmentDialog(item) {
+  const dialog = document.querySelector('#maintenance-equipment-dialog');
+  const form = document.querySelector('#maintenance-equipment-form');
   if (!dialog || !form) return;
   form.reset();
-  form.dataset.code = item ? item.code : '';
-  const title = document.querySelector('#maintenance-location-title');
-  if (title) title.textContent = item ? 'Точка сети' : 'Новая точка';
+  form.dataset.id = item ? String(item.id) : '';
+  const title = document.querySelector('#maintenance-equipment-title');
+  if (title) title.textContent = item ? 'Оборудование' : 'Новое оборудование';
+  const points = maintenanceState.points || [];
+  form.elements.point_code.innerHTML = points
+    .map((point) => `<option value="${escapeHtml(point.code)}">${escapeHtml(point.title_alias || point.code)}</option>`).join('');
   if (item) {
     form.elements.name.value = item.name;
-    form.elements.code.value = item.code;
+    form.elements.point_code.value = item.point_code;
     form.elements.is_active.checked = Boolean(item.is_active);
-    form.elements.code.disabled = true;   // код — первичный ключ, его не меняем
   } else {
     form.elements.is_active.checked = true;
-    form.elements.code.disabled = false;
   }
-  const error = document.querySelector('#maintenance-location-error');
+  const error = document.querySelector('#maintenance-equipment-error');
   if (error) error.hidden = true;
   dialog.showModal();
+  try {
+    // Каталог запчастей ведёт База знаний — берём его свежим.
+    await maintenanceEnsureParts(true);
+  } catch (partsError) {
+    showToast(partsError.message);
+  }
+  renderMaintenancePartsPicker(item ? (item.parts || []).map((part) => Number(part.part_id)) : []);
 }
 
-async function submitMaintenanceLocation(event) {
+/* Чекбоксы расходников: полный каталог запчастей, отмечены используемые. */
+function renderMaintenancePartsPicker(selected) {
+  const node = document.querySelector('#maintenance-equipment-parts');
+  if (!node) return;
+  const chosen = new Set((selected || []).map((value) => Number(value)));
+  const parts = maintenanceState.parts || [];
+  node.innerHTML = parts.length ? parts.map((part) => `
+    <label class="maintenance-part-option">
+      <input type="checkbox" value="${Number(part.id)}"${chosen.has(Number(part.id)) ? ' checked' : ''}>
+      <i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}"></i>
+      <span>${escapeHtml(part.name)}${part.model ? `<small>${escapeHtml(part.model)}</small>` : ''}</span>
+    </label>`).join('') : '<p class="empty-state">Каталог запчастей пуст — заведите их в разделе «Оборудование» БЗ.</p>';
+}
+
+async function submitMaintenanceEquipment(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const code = form.dataset.code;
-  const payload = { name: form.elements.name.value.trim(), is_active: form.elements.is_active.checked };
-  if (!code) payload.code = form.elements.code.value.trim();
+  const id = form.dataset.id;
+  const payload = {
+    name: form.elements.name.value.trim(),
+    point_code: form.elements.point_code.value,
+    is_active: form.elements.is_active.checked,
+    part_ids: Array.from(document.querySelectorAll('#maintenance-equipment-parts input:checked'))
+      .map((input) => Number(input.value)),
+  };
   const submit = form.querySelector('button[type="submit"]');
   if (submit) submit.disabled = true;
   try {
-    if (code) await api(`/api/locations/${encodeURIComponent(code)}`, { method: 'PATCH', body: JSON.stringify(payload) });
-    else await api('/api/locations', { method: 'POST', body: JSON.stringify(payload) });
-    document.querySelector('#maintenance-location-dialog')?.close();
-    maintenanceState.partsLoaded = false;
-    await loadMaintenanceAdmin();
-    showToast(code ? 'Точка сохранена' : 'Точка добавлена');
+    const data = id
+      ? await api(`/api/maintenance/equipment/${Number(id)}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      : await api('/api/maintenance/equipment', { method: 'POST', body: JSON.stringify(payload) });
+    document.querySelector('#maintenance-equipment-dialog')?.close();
+    maintenanceState.equipment = data.equipment || [];
+    maintenanceState.overview = null;
+    renderMaintenanceEquipment();
+    showToast(id ? 'Оборудование сохранено' : 'Оборудование добавлено');
   } catch (error) {
-    maintenanceFormError('#maintenance-location-error', error.message);
+    maintenanceFormError('#maintenance-equipment-error', error.message);
   } finally {
     if (submit) submit.disabled = false;
   }
 }
 
-async function onMaintenanceLocationAction(event) {
-  const edit = event.target.closest('[data-maintenance-location-edit]');
+async function onMaintenanceEquipmentAction(event) {
+  const edit = event.target.closest('[data-maintenance-equipment-edit]');
   if (edit) {
-    const item = (maintenanceState.locations || []).find((row) => row.code === edit.dataset.maintenanceLocationEdit);
-    if (item) openMaintenanceLocationDialog(item);
+    const item = (maintenanceState.equipment || []).find(
+      (row) => String(row.id) === edit.dataset.maintenanceEquipmentEdit);
+    if (item) openMaintenanceEquipmentDialog(item);
     return;
   }
-  const remove = event.target.closest('[data-maintenance-location-delete]');
+  const remove = event.target.closest('[data-maintenance-equipment-delete]');
   if (!remove) return;
-  const code = remove.dataset.maintenanceLocationDelete;
-  if (!window.confirm('Удалить точку? Её остатки и записи журнала будут стёрты.')) return;
+  if (!window.confirm('Удалить оборудование? Его связи с расходниками будут сняты.')) return;
   try {
-    await api(`/api/locations/${encodeURIComponent(code)}`, { method: 'DELETE' });
-    maintenanceState.stock = null;
-    await loadMaintenanceAdmin();
-    showToast('Точка удалена');
+    const data = await api(`/api/maintenance/equipment/${Number(remove.dataset.maintenanceEquipmentDelete)}`,
+      { method: 'DELETE' });
+    maintenanceState.equipment = data.equipment || [];
+    maintenanceState.overview = null;
+    renderMaintenanceEquipment();
+    showToast('Оборудование удалено');
   } catch (error) {
     showToast(error.message);
+  }
+}
+
+/* Ответственного сохраняем сразу при выборе — отдельной кнопки не нужно. */
+async function onMaintenanceResponsibleChange(event) {
+  const select = event.target.closest('[data-maintenance-responsible]');
+  if (!select) return;
+  const [pointCode, kind] = String(select.dataset.maintenanceResponsible).split(':');
+  const payload = { point_code: pointCode, kind, user_id: select.value ? Number(select.value) : null };
+  select.disabled = true;
+  try {
+    const data = await api('/api/maintenance/responsibles', { method: 'PUT', body: JSON.stringify(payload) });
+    maintenanceState.responsibles = data.responsibles || {};
+    showToast(select.value ? 'Ответственный сохранён' : 'Ответственный снят');
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    select.disabled = false;
   }
 }
 
