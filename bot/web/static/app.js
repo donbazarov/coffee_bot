@@ -1606,7 +1606,11 @@ function renderUsers(users) {
     // Должность и уровень приходят из справочника (`/api/users` → role_access_config):
     // бейджи обновляются вместе с вкладкой «Должности и допуски».
     const roleTitle = user.role_name || user.role_title || user.role;
-    const levelBadge = user.access_pending ? 'Без должности' : `Уровень ${Number(user.access_level || 0)}`;
+    // Уровень считает сервер: отключённая должность прав не даёт (уровень 0), и
+    // причину показываем прямо в карточке — иначе «Уровень 0» выглядит как сбой.
+    const levelBadge = user.access_pending
+      ? 'Без должности'
+      : `Уровень ${Number(user.access_level || 0)}${user.role_active ? '' : ' · должность отключена'}`;
     return `
     <article class="user-row ${user.is_active ? '' : 'is-inactive'} ${user.access_pending ? 'is-pending' : ''}" data-user-id="${user.id}">
       <div class="user-person"><span class="user-avatar">${avatarMarkup(user.id, user.avatar_rev, shown)}</span><strong title="${escapeHtml(shown)}">${escapeHtml(shown)}</strong></div>

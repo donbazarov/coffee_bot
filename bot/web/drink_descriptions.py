@@ -1053,7 +1053,7 @@ async def create_description(request: Request,
             row = connection.execute(text(
                 "SELECT id, COALESCE(display_name, name) AS name, role, is_active FROM users WHERE id = :id"
             ), {"id": partner_id}).mappings().first()
-            if not row or not row["is_active"] or row["role"] not in access_roles.staff_roles():
+            if not row or not row["is_active"] or row["role"] == access_roles.PENDING_ROLE:
                 raise HTTPException(status_code=422, detail="Напарник не найден или недоступен")
             partner = {"id": int(row["id"]), "name": row["name"]}
         for item in items:

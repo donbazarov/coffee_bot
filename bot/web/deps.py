@@ -27,10 +27,11 @@ from bot.web.auth import COOKIE_NAME, read_session
 def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
     """Возвращает (пользователь, CSRF-токен) по cookie сессии, иначе (None, None).
 
-    Должность сотрудника — активная запись справочника; уровень доступа и
-    название должности читаются тем же запросом, поэтому гейты сравнивают числа
-    без дополнительных обращений к базе. Заявка на доступ (`guest`) в справочник
-    не входит, поэтому неавторизованный пользователь сессии не получает.
+    Сессия живёт, пока запись сотрудника активна: должность вне справочника или
+    отключённая даёт уровень 0 (права fail-closed), но не выбрасывает человека из
+    системы — иначе нерабочий справочник разлогинивал бы всех. Уровень и название
+    должности читаются тем же запросом, поэтому гейты сравнивают числа без
+    дополнительных обращений к базе.
     """
     session = read_session(request.cookies.get(COOKIE_NAME))
     if not session:
@@ -39,12 +40,12 @@ def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
         user = connection.execute(text("""
             SELECT u.id, u.name, u.display_name, u.role, u.avatar_rev, u.telegram_id,
                    u.access_code, u.session_epoch,
-                   COALESCE(r.access_level, 0) AS access_level,
+                   -- Уровень даёт только активная должность: отключённая = 0.
+                   COALESCE(CASE WHEN r.is_active = 1 THEN r.access_level END, 0) AS access_level,
                    COALESCE(r.title, u.role) AS role_title
             FROM users u
             LEFT JOIN role_access_config r ON r.role_key = u.role
             WHERE u.id = :id AND u.is_active = 1
-              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None, None

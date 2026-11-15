@@ -175,7 +175,7 @@ coffee_bot/
 │       ├── page_links.py           # ссылки `@[Заголовок](kb:12)` между модулями
 │       ├── static/                 # CSS, JS (в т.ч. theme-boot.js и sw.js), шрифты, иконки
 │       └── templates/              # index.html, stories.html, login-wait.html
-├── deploy/                         # systemd, nginx, deploy.sh, backup.sh
+├── deploy/                         # nginx, deploy.sh, backup.sh, systemd-юнит (альтернатива Docker)
 ├── data/                           # база, истории и фото (не в git)
 ├── requirements.txt                # зависимости сервиса
 ├── requirements-dev.txt            # + httpx для тестов

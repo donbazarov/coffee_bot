@@ -117,7 +117,10 @@ def register_or_find_telegram_user(telegram_data: dict[str, Any]) -> tuple[dict[
 
             if user["role"] == access_roles.PENDING_ROLE:
                 return None, "pending"
-            if not user["is_active"] or user["role"] not in access_roles.staff_roles():
+            # Вход зависит только от активности записи: должность вне справочника
+            # даёт уровень 0 (права fail-closed), но не отбирает доступ к сайту —
+            # иначе нерабочий справочник превращается в «уволить всех».
+            if not user["is_active"]:
                 return None, "disabled"
             return {"id": user["id"], "name": user["name"], "role": user["role"]}, "approved"
     except IntegrityError:

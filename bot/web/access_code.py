@@ -113,8 +113,12 @@ def code_matches(user: dict[str, Any], code: Any) -> bool:
 
 
 def is_staff(user: dict[str, Any]) -> bool:
-    """Активный сотрудник с должностью из справочника (заявка `guest` не входит)."""
-    return bool(user.get("is_active")) and user.get("role") in access_roles.staff_roles()
+    """Активный сотрудник (заявка `guest` — не сотрудник).
+
+    Должность вне справочника доступ не отбирает: права в этом случае нулевые
+    (уровень 0), но войти человек может.
+    """
+    return bool(user.get("is_active")) and user.get("role") != access_roles.PENDING_ROLE
 
 
 def find_user_by_login(engine: Engine, raw: Any) -> dict[str, Any] | None:

@@ -1591,7 +1591,10 @@ def list_users(_: dict[str, Any] = Depends(require_permission("admin"))):
         users = connection.execute(text("""
             SELECT u.id, u.name, u.display_name, u.avatar_rev, u.iiko_id, u.telegram_username,
                    u.role, u.is_active, u.telegram_id, u.access_code,
-                   COALESCE(r.access_level, 0) AS access_level,
+                   -- Уровень даёт только активная должность: отключённая = 0, а флаг
+                   -- `role_active` показывает причину прямо в карточке сотрудника.
+                   COALESCE(CASE WHEN r.is_active = 1 THEN r.access_level END, 0) AS access_level,
+                   COALESCE(r.is_active, 0) AS role_active,
                    COALESCE(r.title, u.role) AS role_title
             FROM users u
             LEFT JOIN role_access_config r ON r.role_key = u.role

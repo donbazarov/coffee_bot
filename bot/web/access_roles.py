@@ -24,11 +24,17 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+# Лог домена: сводка по должностям пишется на старте — поломка справочника делает
+# вход невозможным, и это должно быть видно в логах сервиса, а не только по жалобе
+# «не пускает».
+logger = logging.getLogger("bot.web")
 
 # --- Хардкод уровней доступа ------------------------------------------------- #
 
@@ -100,6 +106,11 @@ MAX_KEY = 40
 # миграция переводит их в 0..4. Условие самозавершающееся — после прогона в
 # таблице не остаётся уровней вне 0..4 и непустых «возможностей».
 LEGACY_LEVELS: dict[int, int] = {0: 0, 5: 1, 10: 2, 15: 4}
+
+# Ключи прежней шкалы (до 2026-11). Используются ТОЛЬКО для аварийного
+# восстановления справочника по фактическим ролям команды (`_bootstrap_roles`):
+# это не дефолтный набор должностей — новые заводятся руками в панели управления.
+LEGACY_ROLE_LEVELS: dict[str, int] = {"newbie": 0, "barista": 5, "senior": 10, "mentor": 15}
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS role_access_config (
@@ -222,11 +233,74 @@ def _load(engine: Engine) -> None:
         _roles[record["role_key"]] = record
 
 
+def _bootstrap_roles(connection: Any) -> list[str]:
+    """Восстанавливает справочник, если активной должности нет ни у кого.
+
+    Ситуация «люди работают, а справочник пуст» делает вход невозможным: права и
+    сессии читаются только из активных должностей, а завести их можно лишь из
+    панели, куда никого не пускает. Поэтому справочник собираем по фактическим
+    `users.role` (уровни — по прежней шкале), включаем отключённые строки и
+    гарантируем, что доступ к панели управления у кого-то остался. Операция
+    самозавершающаяся: при рабочем справочнике не делает ничего.
+    """
+    working = int(connection.execute(text("""
+        SELECT COUNT(*) FROM users u
+        JOIN role_access_config r ON r.role_key = u.role AND r.is_active = 1
+        WHERE u.is_active = 1 AND u.role != :pending
+    """), {"pending": PENDING_ROLE}).scalar_one() or 0)
+    if working:
+        return []
+
+    known = set(connection.execute(text("SELECT role_key FROM role_access_config")).scalars().all())
+    roles = [str(row[0] or "") for row in connection.execute(text("""
+        SELECT role FROM users WHERE role != :pending GROUP BY role
+    """), {"pending": PENDING_ROLE}).all()]
+    touched: list[str] = []
+    order = 0
+    for role_key in roles:
+        if not role_key:
+            continue
+        order += 10
+        if role_key in known:
+            connection.execute(text(
+                "UPDATE role_access_config SET is_active = 1 WHERE role_key = :role_key"
+            ), {"role_key": role_key})
+        else:
+            connection.execute(text("""
+                INSERT INTO role_access_config
+                    (role_key, title, access_level, description, capabilities, is_active, sort_order)
+                VALUES (:role_key, :role_key, :access_level, '', '', 1, :sort_order)
+            """), {"role_key": role_key,
+                   "access_level": _legacy_level(LEGACY_ROLE_LEVELS.get(role_key, 0)),
+                   "sort_order": order})
+        touched.append(role_key)
+
+    # Панель управления обязана быть доступна: иначе должности не завести руками.
+    admin_level = min_level("admin")
+    admins = int(connection.execute(text("""
+        SELECT COUNT(*) FROM users u
+        JOIN role_access_config r ON r.role_key = u.role AND r.is_active = 1
+        WHERE u.is_active = 1 AND r.access_level >= :admin_level
+    """), {"admin_level": admin_level}).scalar_one() or 0)
+    if not admins:
+        owner = connection.execute(text("""
+            SELECT role FROM users WHERE is_active = 1 AND role != :pending ORDER BY id LIMIT 1
+        """), {"pending": PENDING_ROLE}).first()
+        if owner and owner[0]:
+            connection.execute(text("""
+                UPDATE role_access_config SET access_level = :admin_level WHERE role_key = :role_key
+            """), {"admin_level": admin_level, "role_key": owner[0]})
+            touched.append(f"{owner[0]} → уровень {admin_level}")
+    return touched
+
+
 def initialize_schema(engine: Engine) -> None:
     """Создаёт справочник, переводит прежние уровни в 0..4 и наполняет кэш.
 
     Дефолтных должностей нет намеренно: состав команды заводят руками в панели
-    управления, в коде хардкодится только шкала уровней.
+    управления, в коде хардкодится только шкала уровней. Единственное исключение —
+    аварийное восстановление (`_bootstrap_roles`): если активной должности нет ни
+    у одного сотрудника, справочник собирается по фактическим ролям команды.
     """
     with engine.begin() as connection:
         connection.execute(text(_DDL))
@@ -248,7 +322,19 @@ def initialize_schema(engine: Engine) -> None:
                 text(f"UPDATE role_access_config SET {assignments} WHERE role_key = :role_key"),
                 {**updates, "role_key": row["role_key"]},
             )
+        restored = _bootstrap_roles(connection)
     _load(engine)
+    if restored:
+        logger.critical(
+            "Должности: справочник был нерабочим (ни у кого не было активной должности) "
+            "и восстановлен по фактическим ролям команды: %s. Проверьте уровни в панели "
+            "управления → «Должности и допуски».", ", ".join(restored),
+        )
+    logger.info(
+        "Должности: активных %s (%s); доступ к панели управления — %s",
+        len(role_keys()), ", ".join(role_keys()) or "нет",
+        ", ".join(key for key in role_keys() if level_of(key) >= min_level("admin")) or "нет",
+    )
 
 
 def refresh(engine: Engine) -> None:
@@ -282,7 +368,8 @@ def labels() -> dict[str, str]:
 def level_of(user_or_role: Any) -> int:
     """Уровень доступа: по пользователю (сессия) или по ключу должности.
 
-    Неизвестная должность (в том числе заявка `guest`) — уровень 0.
+    Неизвестная или отключённая должность — уровень 0 (права fail-closed):
+    отключение снимает права, но не выбрасывает человека из системы.
     """
     if isinstance(user_or_role, dict):
         raw = user_or_role.get("access_level")
@@ -293,7 +380,9 @@ def level_of(user_or_role: Any) -> int:
                 return 0
         return level_of(user_or_role.get("role"))
     record = _roles.get(str(user_or_role or ""))
-    return int(record["access_level"]) if record else 0
+    if not record or not int(record["is_active"]):
+        return 0
+    return int(record["access_level"])
 
 
 def title_of(role: Any) -> str:

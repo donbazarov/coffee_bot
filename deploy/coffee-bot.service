@@ -1,10 +1,17 @@
 # =============================================================================
-#  НЕФТЬ · Coffee Bot — systemd-юнит
+#  НЕФТЬ · Coffee Bot — systemd-юнит (альтернатива Docker)
 #
-#  Установка на VDS:
+#  Боевой сервер работает в Docker: состав и запуск описаны в docker-compose.yml
+#  (контейнер `coffee-bot`, образ `coffee-bot:latest`, порт 127.0.0.1:8001, база
+#  в ./data). Этот юнит нужен только для развёртывания БЕЗ Docker.
+#
+#  Установка без Docker:
+#      cd /opt/coffee_bot
+#      python3 -m venv venv && venv/bin/pip install -r requirements.txt
 #      sudo cp deploy/coffee-bot.service /etc/systemd/system/coffee-bot.service
-#      sudo systemctl daemon-reload
-#      sudo systemctl enable --now coffee-bot
+#      sudo systemctl daemon-reload && sudo systemctl enable --now coffee-bot
+#
+#  Нельзя держать этот юнит и Docker-контейнер одновременно: оба слушают порт 8001.
 #
 #  Если проект лежит не в /opt/coffee_bot, поправьте WorkingDirectory
 #  и EnvironmentFile ниже, а также пути в deploy/deploy.sh.
@@ -38,7 +45,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-# Приложению нужно писать в свой каталог: SQLite-база, data/stories, бэкапы.
+# Приложению нужно писать в свой каталог: SQLite-база (coffee_quality.db рядом
+# с проектом), data/stories и бэкапы.
 ReadWritePaths=/opt/coffee_bot
 
 [Install]
