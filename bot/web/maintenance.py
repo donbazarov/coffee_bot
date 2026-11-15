@@ -5,8 +5,7 @@
 `initialize_schema` на старте.
 
 Никакого хардкода категорий и точек: и те, и другие — справочники в БД.
-Базовые значения досеиваются один раз (`INSERT OR IGNORE`) и дальше правятся в
-панели управления.
+На старте создаются только таблицы, справочники заполняются в панели управления.
 
 Модель данных:
 
@@ -38,18 +37,6 @@ from bot.database.models import engine
 from bot.web import modules, page_links, tasks
 from bot.web.announcements import TRANSLIT
 from bot.web.deps import require_manager_csrf, require_user
-
-# Базовые точки сети: (код, название). Досеиваются один раз, дальше — только БД.
-DEFAULT_LOCATIONS = (("ya", "УЯ"), ("de", "ДЕ"), ("ledgen", "Легенда"))
-
-# Дефолтные категории запчастей: (код, подпись, цвет, порядок).
-DEFAULT_CATEGORIES = (
-    ("coffee_machines", "Кофемашины", "#ff9f43", 10),
-    ("coffee_grinders", "Кофемолки", "#a55eea", 20),
-    ("filters", "Фильтры", "#4c9aff", 30),
-    ("water_treatment", "Водоподготовка", "#22c1c3", 40),
-    ("consumables", "Расходники", "#7b8794", 50),
-)
 
 FALLBACK_COLOR = "#7b8794"
 # Порог «скоро дедлайн», дней (правится в панели управления).
@@ -131,19 +118,10 @@ _DDL = (
 
 
 def initialize_schema(engine: Engine) -> None:
-    """Идемпотентно создаёт таблицы и досеивает базовые справочники."""
+    """Идемпотентно создаёт таблицы (справочники остаются как есть, без досева)."""
     with engine.begin() as connection:
         for statement in _DDL:
             connection.execute(text(statement))
-        for code, name in DEFAULT_LOCATIONS:
-            connection.execute(text(
-                "INSERT OR IGNORE INTO locations (code, name, is_active) VALUES (:code, :name, 1)"
-            ), {"code": code, "name": name})
-        for code, label, color, position in DEFAULT_CATEGORIES:
-            connection.execute(text("""
-                INSERT OR IGNORE INTO equipment_categories (code, label, color, position)
-                VALUES (:code, :label, :color, :position)
-            """), {"code": code, "label": label, "color": color, "position": position})
 
 
 # --- Мелкие нормализаторы --------------------------------------------------- #
@@ -156,9 +134,8 @@ def _clean(value: Any, limit: int) -> str:
 def _clean_code(value: Any) -> str:
     """Код справочника: латиница в нижнем регистре, цифры, дефис и подчёркивание.
 
-    Подчёркивание сохраняем: базовые категории ТО заданы кодами вида
-    `coffee_machines` (см. `DEFAULT_CATEGORIES`), и они должны переживать
-    нормализацию.
+    Подчёркивание сохраняем: коды, заданные в панели управления или пришедшие
+    из БЗ (например, `coffee_machines`), должны переживать нормализацию.
     """
     return re.sub(r"[^a-z0-9_-]+", "-", str(value or "").lower()).strip("-_")[:MAX_CODE]
 
