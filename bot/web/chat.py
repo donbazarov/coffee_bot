@@ -39,7 +39,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from bot.database.models import engine
-from bot.web import notifications, push
+from bot.web import access_roles, notifications, push
 from bot.web.auth import COOKIE_NAME, read_session
 from bot.web.calendar_service import get_user_preferences
 from bot.web.deps import require_csrf, require_manager, require_manager_csrf, require_user
@@ -67,7 +67,6 @@ MAX_POLL_OPTIONS = 12
 MIN_POLL_OPTIONS = 2
 MAX_POLL_QUESTION = 200
 MAX_POLL_OPTION = 100
-STAFF_ROLES = ("newbie", "barista", "senior", "mentor")
 # Приём файлов из системного меню «Поделиться» (Web Share Target из манифеста):
 # файлы складываются в uploads, а в базу пишется заявка с токеном — страница
 # открывается с `?share=<токен>` и предлагает выбрать чат.
@@ -643,10 +642,11 @@ def fetch_messages(channel: str, user_id: int, peer_id: int | None, room_id: int
 
 
 def _active_staff(user_id: int) -> bool:
+    """Сотрудник с активной должностью из справочника (доступ к чату)."""
     with engine.connect() as connection:
         row = connection.execute(text("""
             SELECT 1 FROM users WHERE id = :id AND is_active = 1
-              AND role IN ('newbie','barista','senior','mentor')
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"id": int(user_id)}).first()
     return row is not None
 
@@ -670,7 +670,8 @@ def match_mentions(text_value: str, exclude: int | None = None) -> set[int]:
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT id, name, display_name, telegram_username FROM users
-            WHERE is_active = 1 AND role IN ('newbie','barista','senior','mentor')
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """)).mappings().all()
     found: set[int] = set()
     for row in rows:
@@ -779,7 +780,8 @@ def _chat_push_candidates() -> set[int]:
         rows = connection.execute(text("""
             SELECT DISTINCT s.user_id FROM web_push_subscriptions s
             JOIN users u ON u.id = s.user_id
-            WHERE u.is_active = 1 AND u.role IN ('newbie','barista','senior','mentor')
+            WHERE u.is_active = 1
+              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """)).scalars().all()
     return {int(value) for value in rows}
 
@@ -880,7 +882,8 @@ def _user_from_cookie(cookie_value: str | None) -> dict[str, Any] | None:
     with engine.connect() as connection:
         user = connection.execute(text("""
             SELECT id, name, display_name, role, session_epoch FROM users
-            WHERE id = :id AND is_active = 1 AND role IN ('newbie','barista','senior','mentor')
+            WHERE id = :id AND is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None
@@ -1130,7 +1133,8 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
                             OR (m.sender_id = :me AND m.recipient_id = u.id))
                      ORDER BY m.id DESC LIMIT 1) AS last_text
             FROM users u
-            WHERE u.is_active = 1 AND u.role IN ('newbie','barista','senior','mentor') AND u.id != :me
+            WHERE u.is_active = 1 AND u.id != :me
+              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"me": me}).mappings().all()
     users = []
     for row in rows:
@@ -1379,14 +1383,14 @@ async def chat_message_edit(message_id: int, request: Request,
 
 @chat_router.delete("/messages/{message_id}")
 async def chat_message_delete(message_id: int, user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
-    """Удаление: своё сообщение, а senior/mentor — любое."""
+    """Удаление: своё сообщение, а управляющий — любое."""
     with engine.begin() as connection:
         row = connection.execute(text(
             "SELECT id, sender_id, recipient_id, room_id FROM chat_messages WHERE id = :id"
         ), {"id": int(message_id)}).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Сообщение не найдено")
-        if int(row["sender_id"]) != int(user["id"]) and user["role"] not in {"senior", "mentor"}:
+        if int(row["sender_id"]) != int(user["id"]) and not access_roles.is_manager(user):
             raise HTTPException(status_code=403, detail="Недостаточно прав")
         target = dict(row)
         connection.execute(text("""

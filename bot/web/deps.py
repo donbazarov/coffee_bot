@@ -1,8 +1,11 @@
-"""Общие зависимости доступа: сессия, роли и CSRF.
+"""Общие зависимости доступа: сессия, уровни допуска и CSRF.
 
 Вынесены из `bot/web/app.py`, чтобы их могли использовать и другие роутеры
 (например, `bot/web/chat.py`) без циклического импорта. Логика не менялась —
 это тот же код, что раньше жил прямо в `app.py`.
+
+Должности больше не перечисляются здесь строкой: состав сотрудников и уровень
+доступа приходят из справочника `role_access_config` (`bot/web/access_roles.py`).
 """
 
 from __future__ import annotations
@@ -14,18 +17,31 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
 
 from bot.database.models import engine
+from bot.web import access_roles
 from bot.web.auth import COOKIE_NAME, read_session
 
 
 def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
-    """Возвращает (пользователь, CSRF-токен) по cookie сессии, иначе (None, None)."""
+    """Возвращает (пользователь, CSRF-токен) по cookie сессии, иначе (None, None).
+
+    Роль сотрудника — активная должность справочника; уровень доступа и название
+    должности читаются тем же запросом, поэтому гейты сравнивают числа без
+    дополнительных обращений к базе. Заявка на доступ (`guest`) в справочник не
+    входит, поэтому неавторизованный пользователь сессии не получает.
+    """
     session = read_session(request.cookies.get(COOKIE_NAME))
     if not session:
         return None, None
     with engine.connect() as connection:
         user = connection.execute(text("""
-            SELECT id,name,display_name,role,avatar_rev,telegram_id,access_code,session_epoch FROM users
-            WHERE id=:id AND is_active=1 AND role IN ('newbie','barista','senior','mentor')
+            SELECT u.id, u.name, u.display_name, u.role, u.avatar_rev, u.telegram_id,
+                   u.access_code, u.session_epoch,
+                   COALESCE(r.access_level, 0) AS access_level,
+                   COALESCE(r.title, u.role) AS role_title
+            FROM users u
+            LEFT JOIN role_access_config r ON r.role_key = u.role
+            WHERE u.id = :id AND u.is_active = 1
+              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None, None
@@ -50,7 +66,8 @@ def require_user(request: Request) -> dict[str, Any]:
 
 
 def require_manager(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    if user["role"] not in {"senior", "mentor"}:
+    """Управленческий доступ: порог уровня и возможность `manage` — из справочника."""
+    if not access_roles.is_manager(user):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     return user
 

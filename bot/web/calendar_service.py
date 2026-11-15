@@ -9,14 +9,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, work_points
+from bot.web import access_roles, modules, work_points
 from bot.web.schedule_snapshot import (
     active_employee_ids,
     prune_snapshots,
     render_schedule_snapshots,
 )
 
-ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 # Максимум дней в одной публикации: 92 дня — это ровно 12 снимков по 8 дней.
 MAX_PUBLISH_DAYS = 92
 # Оформление аккаунта: тема и акцентный цвет (по умолчанию мягкий коралл).
@@ -465,7 +464,8 @@ def get_month_calendar(engine: Engine, user: dict[str, Any], year: int, month: i
         """), {"first_day": first_day.isoformat(), "last_day": last_day.isoformat()}).mappings().all()
         employees = connection.execute(text("""
             SELECT id, COALESCE(display_name, name) AS name, iiko_id, role, avatar_rev FROM users
-            WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
             ORDER BY COALESCE(display_name, name) COLLATE NOCASE
         """)).mappings().all()
         current_user_id = user["id"]
@@ -651,19 +651,21 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         actor = connection.execute(text("SELECT name, role FROM users WHERE id=:id AND is_active=1"), {"id": actor_id}).mappings().first()
         if not actor:
             raise LookupError("Пользователь не найден или отключён")
-        if change_type == "schedule" and actor["role"] != "mentor":
+        if change_type == "schedule" and not access_roles.is_mentor(actor):
             raise PermissionError("Тип «Расписание» доступен только наставникам")
         # Стажёр расписание видит, но не правит: право на изменения приходит
-        # вместе с ролью «Бариста» после аттестации. Тот же отказ и на сервере,
+        # вместе с должностью, у которой есть возможность `schedule_edit`
+        # (например, «Бариста») — после аттестации. Тот же отказ и на сервере,
         # а не только скрытой кнопкой в интерфейсе.
-        if actor["role"] == "newbie":
-            raise PermissionError("Стажёр не может менять расписание")
+        if not access_roles.can_edit_schedule(actor):
+            raise PermissionError("Недостаточно прав для правки расписания")
 
         cells = []
         for operation in prepared:
             employee = connection.execute(text("""
                 SELECT id, name, iiko_id FROM users
-                WHERE id=:id AND is_active=1 AND role IN ('newbie','barista','senior','mentor')
+                WHERE id=:id AND is_active=1
+                  AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
             """), {"id": operation["user_id"]}).mappings().first()
             if not employee or employee["iiko_id"] is None:
                 raise LookupError("У бариста не найден активный iiko_id")
@@ -866,7 +868,7 @@ def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -
     with engine.connect() as connection:
         user = connection.execute(text("""
             SELECT id, name, display_name, iiko_id FROM users WHERE id = :user_id AND is_active = 1
-              AND role IN ('newbie','barista','senior','mentor')
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """), {"user_id": user_id}).mappings().first()
         if not user or user["iiko_id"] is None:
             return "\r\n".join([

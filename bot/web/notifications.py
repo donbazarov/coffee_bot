@@ -35,7 +35,6 @@ MAX_BODY = 240
 MAX_URL = 300
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
-STAFF_ROLES = registry.ALL_ROLES
 
 
 def initialize_schema(engine: Engine) -> None:
@@ -173,13 +172,22 @@ def _deliver_push(engine: Engine, user_ids: list[int], event_type: str, title: s
 
 def active_user_ids(engine: Engine, roles: Iterable[str] | None = None,
                     exclude_user_id: int | None = None) -> list[int]:
-    """Активные сотрудники (для событий «всей команде», вроде анонса)."""
-    allowed = tuple(roles or STAFF_ROLES)
-    placeholders = ", ".join(f":r{index}" for index in range(len(allowed)))
-    params: dict[str, Any] = {f"r{index}": role for index, role in enumerate(allowed)}
+    """Активные сотрудники (для событий «всей команде», вроде анонса).
+
+    Без явного списка должностей берём все активные из справочника — состав
+    сотрудников задаёт `role_access_config`, а не код.
+    """
+    allowed = tuple(roles) if roles else ()
+    params: dict[str, Any] = {}
+    if allowed:
+        placeholders = ", ".join(f":r{index}" for index in range(len(allowed)))
+        params = {f"r{index}": role for index, role in enumerate(allowed)}
+        where = f"role IN ({placeholders})"
+    else:
+        where = "role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)"
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
-            SELECT id FROM users WHERE is_active = 1 AND role IN ({placeholders})
+            SELECT id FROM users WHERE is_active = 1 AND {where}
         """), params).scalars().all()
     result = [int(value) for value in rows]
     if exclude_user_id is not None:

@@ -33,7 +33,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import gamification, workload_service, work_points
+from bot.web import access_roles, gamification, workload_service, work_points
 
 # Ветки хард-скиллов образуют колонки тепловой карты (социальная «Команда» — нет).
 HARD_BRANCH_CODES = gamification.HARD_SKILL_CODES
@@ -118,8 +118,6 @@ def team_overview(engine: Engine, days: int = DEFAULT_WINDOW_DAYS) -> dict[str, 
     window = f"-{days} days"
     branch_placeholders = ", ".join(f":b{index}" for index in range(len(HARD_BRANCH_CODES)))
     branch_params = {f"b{index}": code for index, code in enumerate(HARD_BRANCH_CODES)}
-    role_placeholders = ", ".join(f":r{index}" for index in range(len(workload_service.WORK_ROLES)))
-    role_params = {f"r{index}": role for index, role in enumerate(workload_service.WORK_ROLES)}
 
     with engine.connect() as connection:
         branch_rows = connection.execute(text(f"""
@@ -127,12 +125,13 @@ def team_overview(engine: Engine, days: int = DEFAULT_WINDOW_DAYS) -> dict[str, 
             WHERE is_active = 1 AND code IN ({branch_placeholders})
             ORDER BY position, id
         """), branch_params).mappings().all()
-        employees = connection.execute(text(f"""
+        employees = connection.execute(text("""
             SELECT id, COALESCE(display_name, name) AS name, role
             FROM users
-            WHERE is_active = 1 AND role IN ({role_placeholders})
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
             ORDER BY COALESCE(display_name, name) COLLATE NOCASE
-        """), role_params).mappings().all()
+        """)).mappings().all()
         eval_rows = connection.execute(text("""
             SELECT employee_id, created_at, raw_scores
             FROM evaluations
@@ -183,7 +182,7 @@ def team_overview(engine: Engine, days: int = DEFAULT_WINDOW_DAYS) -> dict[str, 
             "id": int(employee["id"]),
             "name": employee["name"],
             "role": employee["role"],
-            "role_name": workload_service.ROLE_NAMES.get(employee["role"], employee["role"]),
+            "role_name": access_roles.title_of(employee["role"]),
             "evaluations": evaluations,
             "last_evaluated_at": data["last"] if data else None,
             "overall": overall,

@@ -13,7 +13,7 @@
 Адресация (`tasks.assignee_type`):
 
 * `all` — общая задача для всей команды;
-* `role` — на должность (`newbie`/`barista`/`senior`/`mentor`);
+* `role` — на должность из справочника `role_access_config`;
 * `user` — конкретному сотруднику.
 
 Видимость строго персональная: сотрудник видит общие задачи, задачи на свою
@@ -34,9 +34,9 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, notifications, page_links
+from bot.web import access_roles, modules, notifications, page_links
 from bot.web.announcements import COLOR_RE, TRANSLIT
-from bot.web.calendar_service import ROLE_NAMES as ROLE_LABELS, _ensure_columns
+from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.tasks")
 
@@ -49,7 +49,6 @@ BOARD_STATUSES = ("todo", "in_progress", "done")
 ARCHIVE_STATUSES = ("archived_done", "archived_cancelled")
 PRIORITIES = ("normal", "high", "urgent")
 ASSIGNEE_TYPES = ("all", "role", "user")
-ASSIGNEE_ROLES = tuple(ROLE_LABELS)
 # Режимы выборки: всё доступное, только моё, только общие.
 FILTERS = ("all", "mine", "shared")
 
@@ -374,7 +373,7 @@ def _task_payload(row: Any) -> dict[str, Any]:
         "assignee": {
             "type": row["assignee_type"] or "all",
             "role": role,
-            "role_label": ROLE_LABELS.get(role, ""),
+            "role_label": access_roles.title_of(role),
             "user_id": int(row["assignee_user_id"]) if row["assignee_user_id"] else None,
             "name": row["assignee_name"] or "",
         },
@@ -504,17 +503,18 @@ def assignees(engine: Engine) -> dict[str, Any]:
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT id, COALESCE(display_name, name) AS name, role FROM users
-            WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
             ORDER BY role, name COLLATE NOCASE
         """)).mappings().all()
     return {
-        "roles": [{"code": code, "label": label} for code, label in ROLE_LABELS.items()],
+        "roles": [{"code": key, "label": access_roles.title_of(key)} for key in access_roles.role_keys()],
         "users": [
             {
                 "id": int(row["id"]),
                 "name": row["name"],
                 "role": row["role"],
-                "role_label": ROLE_LABELS.get(row["role"], ""),
+                "role_label": access_roles.title_of(row["role"]),
             }
             for row in rows
         ],
@@ -532,7 +532,7 @@ def can_edit(task: dict[str, Any], user: dict[str, Any]) -> bool:
     должности или как общая), тоже: статус и текст правит вся смена, а не
     только автор — задача на то и командная.
     """
-    if task["author_id"] == user["id"] or user["role"] in {"senior", "mentor"}:
+    if task["author_id"] == user["id"] or access_roles.is_manager(user):
         return True
     assignee = task.get("assignee") or {}
     if assignee.get("type") == "user":
@@ -555,7 +555,7 @@ def _validate_assignee(engine: Engine, payload: dict[str, Any],
         raise ValueError("Неизвестный тип адресации")
     if atype == "role":
         role = str(payload.get("assignee_role", base.get("role")) or "").strip()
-        if role not in ASSIGNEE_ROLES:
+        if role not in access_roles.role_keys(active_only=False):
             raise ValueError("Выберите должность из списка")
         return {"assignee_type": atype, "assignee_role": role, "assignee_user_id": None}
     if atype == "user":

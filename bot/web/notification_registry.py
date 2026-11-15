@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bot.web import access_roles
+
 # Модули-источники событий: код → название, иконка (`<use href="#i-...">`) и
 # вьюха SPA, к которой относится бейдж в сайдбаре.
 NOTIFICATION_MODULES: tuple[dict[str, str], ...] = (
@@ -37,8 +39,10 @@ NOTIFICATION_MODULES: tuple[dict[str, str], ...] = (
     {"code": "chat", "title": "Чат", "icon": "i-chat", "view": "chat"},
 )
 
-# Роли, которые получают уведомления: те же, что и в push-рассылке.
-ALL_ROLES: tuple[str, ...] = ("newbie", "barista", "senior", "mentor")
+# Пустой список = «все активные должности»: состав читается из справочника
+# `role_access_config` (`access_roles.staff_roles()`), поэтому новая должность
+# получает уведомления без правки этого файла.
+ALL_ROLES: tuple[str, ...] = ()
 
 NOTIFICATION_EVENTS: tuple[dict[str, Any], ...] = (
     {
@@ -144,8 +148,11 @@ def event_defaults(code: str) -> dict[str, bool]:
 
 
 def roles_for(code: str) -> tuple[str, ...]:
+    """Кому может приходить событие: явный список или все активные должности."""
     event = _BY_CODE.get(code)
-    return tuple(event["roles"]) if event else ALL_ROLES
+    if event and event["roles"]:
+        return tuple(event["roles"])
+    return access_roles.staff_roles()
 
 
 def settings_schema() -> list[dict[str, Any]]:

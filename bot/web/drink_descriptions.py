@@ -46,7 +46,7 @@ from sqlalchemy.engine import Connection, Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import gamification, modules, notifications, work_points
+from bot.web import access_roles, gamification, modules, notifications, work_points
 from bot.web.calendar_service import active_staff, app_timezone
 from bot.web.deps import require_csrf, require_user
 
@@ -365,7 +365,8 @@ def _active_staff_list(connection: Connection) -> list[dict[str, Any]]:
     """Активные сотрудники команды — для ручного выбора напарника вне смены."""
     rows = connection.execute(text("""
         SELECT id, COALESCE(display_name, name) AS name, role FROM users
-        WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
+        WHERE is_active = 1
+          AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         ORDER BY name
     """)).mappings().all()
     return [{"id": int(row["id"]), "name": row["name"], "role": row["role"]} for row in rows]
@@ -1052,7 +1053,7 @@ async def create_description(request: Request,
             row = connection.execute(text(
                 "SELECT id, COALESCE(display_name, name) AS name, role, is_active FROM users WHERE id = :id"
             ), {"id": partner_id}).mappings().first()
-            if not row or not row["is_active"] or row["role"] not in ("newbie", "barista", "senior", "mentor"):
+            if not row or not row["is_active"] or row["role"] not in access_roles.staff_roles():
                 raise HTTPException(status_code=422, detail="Напарник не найден или недоступен")
             partner = {"id": int(row["id"]), "name": row["name"]}
         for item in items:

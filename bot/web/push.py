@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import page_links, work_points
+from bot.web import access_roles, page_links, work_points
 
 logger = logging.getLogger("bot.web.push")
 
@@ -283,7 +283,8 @@ def recipients(engine: Engine, category: str, exclude_user_id: int | None = None
             SELECT DISTINCT s.user_id
             FROM web_push_subscriptions AS s
             JOIN users AS u ON u.id = s.user_id
-            WHERE u.is_active = 1 AND u.role IN ('newbie', 'barista', 'senior', 'mentor')
+            WHERE u.is_active = 1
+              AND u.role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
         """)).scalars().all()
     from bot.web import announcements  # локальный импорт: модули ссылаются друг на друга
 

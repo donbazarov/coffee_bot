@@ -20,7 +20,7 @@
      что внешний CDN не проходит по CSP `script-src 'self'` и не кешируется
      Service Worker'ом. Подключаем только управляющим ролям — бариста и стажёры
      читают страницы без редактора. #}
-  {% if user.role in ['senior', 'mentor'] %}
+  {% if manager %}
   <script src="/static/vendor/editorjs/editorjs.umd.js?v={{ static_version }}" defer></script>
   <script src="/static/vendor/editorjs/header.umd.js?v={{ static_version }}" defer></script>
   <script src="/static/vendor/editorjs/editorjs-list.umd.js?v={{ static_version }}" defer></script>
@@ -41,7 +41,7 @@
      Service Worker'ом, поэтому в офлайне витрина осталась бы пустой. #}
   <script type="module" src="/static/vendor/model-viewer.min.js?v={{ static_version }}"></script>
 </head>
-<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if user and user.role in ['senior', 'mentor'] else 'false' }}" data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ role_names.get(user.role, user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}" data-pwa-launch="{{ 'true' if utm_source == 'pwa' else 'false' }}">
+<body data-authenticated="{{ 'true' if user else 'false' }}" data-manager="{{ 'true' if manager else 'false' }}"{% if user %} data-mentor="{{ 'true' if mentor else 'false' }}" data-access-level="{{ access_level }}" data-manager-min-level="{{ manager_min_level }}" data-mentor-min-level="{{ mentor_min_level }}" data-staff-level="{{ staff_level }}" data-preview-role="{{ preview_role }}"{% endif %} data-user-id="{{ user.id if user else '' }}" data-user-name="{{ user.name if user else '' }}" data-role="{{ user.role if user else '' }}" data-role-label="{{ (user.role_title or user.role) if user else '' }}" data-csrf="{{ csrf_token }}" data-tg-pending="{{ 'true' if tg_pending else 'false' }}" data-pwa-launch="{{ 'true' if utm_source == 'pwa' else 'false' }}">
   {# Фон Liquid Glass: canvas с разводами + виньетка. Видны только при
      data-glass="on" (CSS); на мобильных рисуется реже и в меньшем разрешении. #}
   <canvas id="glass-bg" aria-hidden="true"></canvas>
@@ -271,7 +271,7 @@
               <circle class="level-ring-track" cx="60" cy="60" r="52"></circle>
               <circle class="level-ring-value" cx="60" cy="60" r="52" id="level-ring-value" stroke-dasharray="326.7" stroke-dashoffset="326.7"></circle>
             </svg>
-            {% if user.role == 'mentor' %}<svg class="level-skull" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a8 8 0 0 0-8 8c0 2.4 1.1 4.5 2.8 5.9V19a1 1 0 0 0 1 1h1v-2h2v2h2v-2h2v2h1a1 1 0 0 0 1-1v-3.1A7.9 7.9 0 0 0 20 10a8 8 0 0 0-8-8Zm-3 9a1.6 1.6 0 1 1 0-3.2A1.6 1.6 0 0 1 9 11Zm6 0a1.6 1.6 0 1 1 0-3.2A1.6 1.6 0 0 1 15 11Z" fill="currentColor"/></svg>{% endif %}
+            {% if mentor %}<svg class="level-skull" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a8 8 0 0 0-8 8c0 2.4 1.1 4.5 2.8 5.9V19a1 1 0 0 0 1 1h1v-2h2v2h2v-2h2v2h1a1 1 0 0 0 1-1v-3.1A7.9 7.9 0 0 0 20 10a8 8 0 0 0-8-8Zm-3 9a1.6 1.6 0 1 1 0-3.2A1.6 1.6 0 0 1 9 11Zm6 0a1.6 1.6 0 1 1 0-3.2A1.6 1.6 0 0 1 15 11Z" fill="currentColor"/></svg>{% endif %}
             <span class="level-number" id="level-number">—</span>
           </div>
           <div class="level-copy">
@@ -311,14 +311,14 @@
       {% if modules['quality'].enabled %}<section class="view" id="quality-view" hidden>
         <div class="section-heading">
           <div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h2>Оценочные сессии</h2></div>
-          {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>{% endif %}
+          {% if manager %}<button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>{% endif %}
         </div>
         <section class="panel">
-          <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>{% if user.role in ['senior', 'mentor'] %}Проведённые сессии{% else %}Мои оценки{% endif %}</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>{% if manager %}Проведённые сессии{% else %}Мои оценки{% endif %}</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
           <div class="session-list" id="quality-sessions"></div>
           <button class="button button-quiet session-more" type="button" id="quality-sessions-more" hidden>Показать ещё</button>
         </section>
-        {% if user.role in ['senior', 'mentor'] %}<section class="panel analytics-panel" id="evaluation-analytics-panel">
+        {% if manager %}<section class="panel analytics-panel" id="evaluation-analytics-panel">
           <div class="panel-heading"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h3>Аналитика оценок</h3></div><span class="panel-index">30 ДНЕЙ</span></div>
           <div class="analytics-body" id="evaluation-analytics"></div>
         </section>{% endif %}
@@ -330,7 +330,7 @@
           <div class="calendar-actions">
             <button class="button button-quiet" type="button" id="announcements-subscribe"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg> В календарь</button>
             <button class="button button-quiet" type="button" id="announcements-read-all">Прочитать всё</button>
-            {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="announcements-add">Объявление</button>{% endif %}
+            {% if manager %}<button class="button button-primary" type="button" id="announcements-add">Объявление</button>{% endif %}
           </div>
         </div>
         <section class="panel settings-panel" id="announcements-bell-panel">
@@ -343,7 +343,7 @@
             <button class="button button-quiet" type="button" id="push-test" hidden>Проверить</button>
           </div>
           <p class="settings-hint">Отмеченные категории — это всё, что вас уведомляет: счётчик на иконке «Анонсы», push на подписанные устройства и попадание анонсов с датой в календарь. Сам список показывает всё.
-            {% if user.role in ['senior', 'mentor'] %}Проверить доставку можно кнопкой выше: если push-сервис недоступен с сервера, увидите ошибку сразу.{% endif %}</p>
+            {% if manager %}Проверить доставку можно кнопкой выше: если push-сервис недоступен с сервера, увидите ошибку сразу.{% endif %}</p>
         </section>
         <div class="chip-row" id="announcements-filters" role="group" aria-label="Фильтр ленты"></div>
         <div class="announcement-list" id="announcements-list"></div>
@@ -435,7 +435,7 @@
           <div class="maintenance-stats" id="maintenance-stats"></div>
           <div class="maintenance-log-toolbar">
             <div class="chip-row" id="maintenance-log-filters" role="group" aria-label="Фильтр по точке"></div>
-            {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="maintenance-log-add"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Записать замену</button>{% endif %}
+            {% if manager %}<button class="button button-primary" type="button" id="maintenance-log-add"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Записать замену</button>{% endif %}
           </div>
           <div class="maintenance-log-list" id="maintenance-log-list"></div>
         </div>
@@ -446,7 +446,7 @@
         <div class="section-heading">
           <div><p class="eyebrow">КОМАНДА / СПРАВОЧНИК</p><h2>База знаний</h2></div>
           <div class="calendar-actions">
-            {% if user.role in ['senior', 'mentor'] %}<button class="button button-primary" type="button" id="kb-add-page"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Создать страницу</button>{% endif %}
+            {% if manager %}<button class="button button-primary" type="button" id="kb-add-page"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Создать страницу</button>{% endif %}
           </div>
         </div>
         <div class="chip-row" id="kb-filters" role="group" aria-label="Разделы базы знаний"></div>
@@ -664,14 +664,14 @@
           <div class="notif-settings-actions"><button class="button button-quiet" type="button" id="notif-settings-reset">Сбросить к стандартным</button></div>
           <p class="account-note" id="notif-settings-note" role="status"></p>
         </section>
-        {% if real_role in ['senior', 'mentor'] %}
+        {% if real_manager %}
         <section class="panel settings-panel"><div class="panel-heading"><div><p class="eyebrow">ПРОСМОТР</p><h3>Режим бариста</h3></div></div>
           <label class="module-setting"><span><strong>Показывать сайт как бариста</strong><small>Скрыть управление командой и инструменты наставника</small></span><input type="checkbox" id="barista-preview-toggle"{% if preview_active %} checked{% endif %}><i></i></label>
         </section>
         {% endif %}
       </section>
 
-      {% if user.role in ['senior', 'mentor'] %}
+      {% if manager %}
       <section class="view" id="control-view" hidden>
         <div class="section-heading"><div><p class="eyebrow">АДМИНИСТРИРОВАНИЕ</p><h2>Панель управления</h2></div></div>
         <div class="control-layout">
@@ -694,7 +694,7 @@
           <div class="control-body-panel">
             {% for module in control_modules %}<section class="control-module" data-control-module="{{ module.code }}" hidden>
               <div class="control-module-head">
-                <div><p class="eyebrow">{% if module.code == 'main' %}ОСНОВНОЕ{% else %}МОДУЛЬ{% endif %}</p><h3>{{ module.title }}</h3></div>
+                <div><p class="eyebrow">{% if module.code == 'main' %}ОСНОВНОЕ{% elif module.code == 'roles' %}ДОСТУП{% else %}МОДУЛЬ{% endif %}</p><h3>{{ module.title }}</h3></div>
                 {% if module.settable %}<label class="module-setting module-setting-compact"><span><strong>Модуль включён</strong><small>Выключение скрывает раздел у всей команды</small></span><input type="checkbox" data-module-toggle="{{ module.code }}"{% if module.enabled %} checked{% endif %}><i></i></label>{% endif %}
               </div>
               {% if module.code == 'main' %}
@@ -721,7 +721,15 @@
                 <p class="template-form-error" role="alert" hidden></p>
                 <div class="template-form-actions"><button class="button button-primary" type="submit">Сохранить настройки</button></div>
               </form>{% endif %}
-              {% if module.code == 'calendar' %}
+              {% if module.code == 'roles' %}
+              <section class="panel settings-panel" id="roles-panel">
+                <div class="panel-heading"><div><p class="eyebrow">УРОВНИ ДОСТУПА</p><h3>Должности команды</h3></div><button class="button button-quiet" type="button" id="roles-refresh">Обновить</button></div>
+                <p class="settings-hint">Уровень — числовой вес прав: разделы сайта сравнивают его с порогом, а не с названием должности. Пороги «Управление» и «Наставничество» сервер считает по возможностям, поэтому правка уровня сразу меняет доступ у всей команды. Пока в системе есть хотя бы один активный управляющий, система не даст снять права у всех.</p>
+                <div class="roles-thresholds" id="roles-thresholds"></div>
+                <div class="roles-list" id="roles-list"></div>
+                <p class="roles-status" id="roles-status" role="status"></p>
+              </section>
+              {% elif module.code == 'calendar' %}
         <section class="panel settings-panel" id="shift-templates-panel">
           <div class="panel-heading"><div><p class="eyebrow">ГРАФИК</p><h3>Шаблоны смен</h3></div></div>
           <p class="settings-hint">Шаблон задаёт время, точку и тип смены (утро/вечер/пересмен, только выходные). В графике выберите шаблон и нажмите по ячейке — смена подставится. Флаги типа нужны разделу «Команда → Расчет часов». Шаблоны видны всей команде.</p>
@@ -825,7 +833,7 @@
         {% endif %}
       </section>
 
-      {% if user.role in ['senior', 'mentor'] %}
+      {% if manager %}
       {% if modules['team'].enabled %}
       <section class="view" id="team-view" hidden>
         <div class="section-heading"><div><p class="eyebrow" id="team-eyebrow">ДОСТУП И РОЛИ</p><h2 id="team-title">Команда</h2></div><button type="button" class="button button-primary" id="add-user-button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Добавить сотрудника</button></div>
@@ -971,15 +979,15 @@
       {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg><span class="nav-badge" data-badge-module="drinks" hidden></span></span><span>Описание напитков</span></button>{% endif %}
       <div class="drawer-divider"></div>
       {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" data-badge-module="chat" hidden></span></span><span>Чат</span></button>{% endif %}
-      {% if user.role in ['senior', 'mentor'] and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
-      {% if user.role in ['senior', 'mentor'] and modules['analytics'].enabled %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
+      {% if manager and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
+      {% if manager and modules['analytics'].enabled %}<button class="nav-item" type="button" data-view="analytics"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart"></use></svg></span><span>Аналитика</span></button>{% endif %}
       <div class="drawer-divider"></div>
       <button class="nav-item" type="button" data-view="profile"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg></span><span>Личный кабинет</span></button>
-      {% if user.role in ['senior', 'mentor'] %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
+      {% if manager %}<button class="nav-item" type="button" data-view="control"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-settings"></use></svg></span><span>Панель управления</span></button>{% endif %}
     </nav>
     <div class="drawer-account">
       <div class="account-mark">{% if user.avatar_rev %}<img src="/avatars/{{ user.id }}.jpg?v={{ user.avatar_rev }}" alt="">{% else %}{{ (user.display_name or user.name)[:1] | upper }}{% endif %}</div>
-      <div class="account-copy"><strong>{{ user.display_name or user.name }}</strong><span>{{ role_names.get(user.role, user.role) }}{% if preview_active %} · предпросмотр{% endif %}</span></div>
+      <div class="account-copy"><strong>{{ user.display_name or user.name }}</strong><span>{{ user.role_title or user.role }}{% if preview_active %} · предпросмотр{% endif %}</span></div>
       <button class="button button-quiet drawer-logout" type="button" id="drawer-logout">Выйти</button>
     </div>
   </aside>
@@ -1044,7 +1052,7 @@
   </dialog>
   {% endif %}
 
-  {% if user.role in ['senior', 'mentor'] %}
+  {% if manager %}
   <dialog class="user-dialog" id="task-category-dialog">
     <form id="task-category-form">
       <div class="dialog-top">
@@ -1072,8 +1080,26 @@
     <div class="session-detail-comments" id="session-detail-comments"></div>
     <div class="dialog-actions"><button class="button button-primary dialog-close" type="button">Закрыть</button></div>
   </dialog>
-  {% if user.role in ['senior', 'mentor'] %}
-  <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Роль<select name="role"><option value="newbie">Стажёр</option><option value="barista">Бариста</option><option value="senior">Старший</option><option value="mentor">Наставник</option></select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
+  {% if manager %}
+  <dialog class="user-dialog" id="user-dialog"><form id="user-form"><div class="dialog-top"><div><p class="eyebrow" id="user-dialog-kicker">НОВАЯ ЗАПИСЬ</p><h2 id="user-dialog-title">Сотрудник</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Имя<input name="name" maxlength="100" required autocomplete="name" placeholder="Имя и фамилия"></label><label>Должность<select name="role" id="user-form-role">{% for role in roles.roles %}{% if role.is_active %}<option value="{{ role.role_key }}">{{ role.title }} · уровень {{ role.access_level }}</option>{% endif %}{% endfor %}</select></label><label>Iiko ID <span class="optional">необязательно</span><input name="iiko_id" inputmode="numeric" placeholder="Например, 1042"></label><label>Telegram username <span class="optional">без @</span><input name="telegram_username" autocomplete="off" placeholder="username"></label><fieldset class="template-flags user-workload-fields"><legend>Нормо-часы в месяц</legend><div class="workload-form-grid"><label>Минимум, ч<input name="min_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Оптимум, ч<input name="opt_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label><label>Максимум, ч<input name="max_hours" type="number" min="0" max="744" step="1" inputmode="numeric"></label></div></fieldset><p class="dialog-error" id="user-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="user-form-submit" type="submit">Добавить</button></div></form></dialog>
+  <dialog class="user-dialog" id="role-dialog">
+    <form id="role-form">
+      <div class="dialog-top">
+        <div><p class="eyebrow" id="role-dialog-kicker">ДОЛЖНОСТЬ</p><h2 id="role-dialog-title">Должность</h2></div>
+        <button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
+      </div>
+      <input type="hidden" name="role_key">
+      <label>Ключ <span class="optional">не меняется: на него ссылаются сотрудники, оценки и график</span><input name="role_key_view" disabled autocomplete="off"></label>
+      <label>Название<input name="title" maxlength="60" required autocomplete="off" placeholder="Например: Старший бариста"></label>
+      <label>Уровень доступа <span class="optional">целое число: чем больше, тем больше прав</span><input name="access_level" type="number" min="0" max="1000" step="1" inputmode="numeric" required></label>
+      <label>Описание <span class="optional">что доступно на этом уровне</span><textarea name="description" rows="3" maxlength="400"></textarea></label>
+      <fieldset class="task-fieldset"><legend>Возможности</legend><div class="roles-capabilities" id="role-capabilities"></div></fieldset>
+      <label class="checkbox-row"><input name="is_active" type="checkbox" checked><span>Должность активна — её можно назначать сотрудникам</span></label>
+      <p class="dialog-error" id="role-form-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="role-form-submit" type="submit">Сохранить</button></div>
+    </form>
+  </dialog>
+
   <dialog class="user-dialog evaluation-dialog" id="evaluation-dialog">
     <form id="evaluation-form">
       <div class="dialog-top"><div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h2>Новая оценка</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
@@ -1132,12 +1158,12 @@
     </form>
   </dialog>
   {% endif %}
-  {% if user.role in ['senior', 'mentor'] %}
+  {% if manager %}
   <dialog class="user-dialog" id="announcement-dialog"><form id="announcement-form"><div class="dialog-top"><div><p class="eyebrow" id="announcement-dialog-kicker">НОВОЕ ОБЪЯВЛЕНИЕ</p><h2 id="announcement-dialog-title">Анонс</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Категория<select name="category"></select></label><label>Заголовок<input name="title" maxlength="120" required placeholder="Например: Собрание команды"></label><label>Текст <span class="optional">необязательно</span><textarea name="body" rows="5" maxlength="2000" placeholder="Что нужно знать команде"></textarea></label><label>Дата и время <span class="optional">необязательно — без них анонс не попадёт в календарь</span><input name="start_at" type="datetime-local"></label><label class="checkbox-row"><input name="pinned" type="checkbox"><span>Закрепить — анонс всегда вверху, даже через неделю</span></label><p class="dialog-error" id="announcement-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-submit" type="submit">Опубликовать</button></div></form></dialog>
   <dialog class="user-dialog" id="announcement-category-dialog"><form id="announcement-category-form"><div class="dialog-top"><div><p class="eyebrow">КАТЕГОРИЯ АНОНСОВ</p><h2 id="announcement-category-title">Новая категория</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="label" maxlength="60" required placeholder="Например: Обучение"></label><label>Цвет<input name="color" type="color" value="#7b8794"></label><label class="checkbox-row"><input name="important" type="checkbox" checked><span>Показывать в «Важном» на главной</span></label><p class="dialog-error" id="announcement-category-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="announcement-category-submit" type="submit">Создать</button></div></form></dialog>
   <dialog class="user-dialog" id="room-dialog"><form id="room-form"><div class="dialog-top"><div><p class="eyebrow" id="room-dialog-kicker">НОВАЯ ТЕМА</p><h2 id="room-dialog-title">Тема общего чата</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="name" maxlength="60" required placeholder="Например: Смены и замены"></label><div class="appearance-group"><strong>Кто видит тему</strong><small>«Все сотрудники» — новые люди попадают автоматически. «Выбранные» — только отмеченные.</small><div class="theme-switch" role="group" aria-label="Доступ к теме" id="room-visibility"><button type="button" data-room-visibility="all">Все сотрудники</button><button type="button" data-room-visibility="selected">Выбранные</button></div></div><div class="room-members" id="room-members" hidden></div><p class="dialog-error" id="room-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   {% endif %}
-  {% if user.role in ['senior', 'mentor'] %}
+  {% if manager %}
   <dialog class="user-dialog" id="maintenance-log-dialog"><form id="maintenance-log-form"><div class="dialog-top"><div><p class="eyebrow">ЖУРНАЛ ТО</p><h2 id="maintenance-log-title">Запись о замене</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Точка<select name="point_code" id="maintenance-log-point" required></select></label><label>Запчасть<select name="part_id" id="maintenance-log-part" required></select></label><div class="time-fields"><label>Дата замены<input name="replaced_at" type="date" required></label><label>Следующая замена <span class="optional">пусто — посчитаем</span><input name="next_due_date" type="date"></label></div><label>Комментарий <span class="optional">необязательно</span><textarea name="comment" rows="3" maxlength="1000" placeholder="Что заменили, что заметили"></textarea></label><p class="dialog-error" id="maintenance-log-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   <dialog class="user-dialog" id="maintenance-stock-dialog"><form id="maintenance-stock-form"><div class="dialog-top"><div><p class="eyebrow">ОСТАТОК</p><h2 id="maintenance-stock-title">Остаток на точке</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><input type="hidden" name="point_code"><input type="hidden" name="part_id"><label>Количество<input name="quantity" type="number" min="0" max="99999" step="1" inputmode="numeric" required></label><p class="dialog-error" id="maintenance-stock-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   <dialog class="user-dialog" id="maintenance-location-dialog"><form id="maintenance-location-form"><div class="dialog-top"><div><p class="eyebrow">ТОЧКА СЕТИ</p><h2 id="maintenance-location-title">Новая точка</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="name" maxlength="120" required placeholder="Например: УЯ"></label><label>Код <span class="optional">латиницей, можно оставить пустым</span><input name="code" maxlength="40" pattern="[A-Za-z0-9-]*" placeholder="ya"></label><label class="checkbox-row"><input name="is_active" type="checkbox" checked><span>Активна — показывать на дашборде</span></label><p class="dialog-error" id="maintenance-location-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>

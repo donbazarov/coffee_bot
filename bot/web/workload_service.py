@@ -37,10 +37,7 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, work_points
-
-ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
-WORK_ROLES = ("newbie", "barista", "senior", "mentor")
+from bot.web import access_roles, modules, work_points
 
 # Нормо-часы: значения по умолчанию и границы валидации.
 DEFAULT_MIN_HOURS = 80
@@ -399,16 +396,15 @@ def _month_schedule(engine: Engine, year: int, month: int, allowed_keys: set[str
 
 def list_workload_users(engine: Engine) -> list[dict[str, Any]]:
     """Активные сотрудники с нормо-часами — источник для «Доступ и роли» и расчёта."""
-    placeholders = ", ".join(f":role{index}" for index in range(len(WORK_ROLES)))
-    params = {f"role{index}": role for index, role in enumerate(WORK_ROLES)}
     with engine.connect() as connection:
-        rows = connection.execute(text(f"""
+        rows = connection.execute(text("""
             SELECT id, COALESCE(display_name, name) AS name, iiko_id, role, avatar_rev,
                    min_hours, opt_hours, max_hours
             FROM users
-            WHERE is_active = 1 AND role IN ({placeholders})
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
             ORDER BY COALESCE(display_name, name) COLLATE NOCASE
-        """), params).mappings().all()
+        """)).mappings().all()
     return [dict(row) for row in rows]
 
 
@@ -537,7 +533,7 @@ def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = Fa
             "name": user["name"],
             "iiko_id": user["iiko_id"],
             "role": user["role"],
-            "role_name": ROLE_NAMES.get(user["role"], user["role"]),
+            "role_name": access_roles.title_of(user["role"]),
             "avatar_rev": user["avatar_rev"] or 0,
             "min_hours": int(user["min_hours"] or _cfg("DEFAULT_MIN_HOURS")),
             "opt_hours": int(user["opt_hours"] or _cfg("DEFAULT_OPT_HOURS")),

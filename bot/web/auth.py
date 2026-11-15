@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from bot.config import BotConfig
 from bot.database.models import engine
+from bot.web import access_roles
 
 COOKIE_NAME = "coffee_session"
 # Устройства «помнят» вход: полгода со скользящим продлением (см. `home()`).
@@ -107,15 +108,16 @@ def register_or_find_telegram_user(telegram_data: dict[str, Any]) -> tuple[dict[
                 connection.execute(
                     text("""
                         INSERT INTO users (name, telegram_username, telegram_id, role, is_active)
-                        VALUES (:name, :username, :telegram_id, 'guest', 0)
+                        VALUES (:name, :username, :telegram_id, :pending_role, 0)
                     """),
-                    {"name": profile_name, "username": username or None, "telegram_id": telegram_id},
+                    {"name": profile_name, "username": username or None, "telegram_id": telegram_id,
+                     "pending_role": access_roles.PENDING_ROLE},
                 )
                 return None, "pending"
 
-            if user["role"] == "guest":
+            if user["role"] == access_roles.PENDING_ROLE:
                 return None, "pending"
-            if not user["is_active"] or user["role"] not in {"newbie", "barista", "senior", "mentor"}:
+            if not user["is_active"] or user["role"] not in access_roles.staff_roles():
                 return None, "disabled"
             return {"id": user["id"], "name": user["name"], "role": user["role"]}, "approved"
     except IntegrityError:

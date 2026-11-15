@@ -73,9 +73,16 @@ function pointSwatch(value, extra = '') {
 function pointBadge(value, extra = '') {
   return `<span class="point-badge ${extra}"${pointColorStyle(value)}>${escapeHtml(pointLabel(value))}</span>`;
 }
+/* Должности и уровни доступа приходят из справочника (`role_access_config`):
+   сервер отдаёт на страницу и флаги доступа, и сами числа, поэтому интерфейс
+   сравнивает уровни с порогами, а не названия должностей строками. */
 const managerRole = document.body.dataset.manager === 'true';
+const isMentor = document.body.dataset.mentor === 'true';
 const userRole = document.body.dataset.role || '';
-const isMentor = userRole === 'mentor';
+const accessLevel = Number(document.body.dataset.accessLevel || 0);
+const managerMinLevel = Number(document.body.dataset.managerMinLevel || 0);
+const mentorMinLevel = Number(document.body.dataset.mentorMinLevel || 0);
+const staffLevel = Number(document.body.dataset.staffLevel || 0);
 let matrixDayWidth = null;
 let editType = 'swap';
 let templateReorderMode = false;
@@ -457,29 +464,36 @@ function renderDevelopment(data) {
   const bar = document.querySelector('#level-bar');
   const ring = document.querySelector('#level-ring-value');
   const ringLength = 2 * Math.PI * 52;
+  // Состояния панели уровня — по возможностям должности, а не по её ключу:
+  // «стажёр» — должность без базового опыта, «наставник» — с наставничеством.
+  const isNewbieState = !data.xp_base;
+  const isMentorState = Boolean(data.mentor);
+  const roleTitle = data.role_title || '';
   if (panel) {
-    panel.classList.toggle('is-newbie', data.role === 'newbie');
-    panel.classList.toggle('is-mentor', data.role === 'mentor');
+    panel.classList.toggle('is-newbie', isNewbieState);
+    panel.classList.toggle('is-mentor', isMentorState);
   }
   // Бейдж стажёра скрыт, у наставника вместо цифры — череп (см. разметку).
-  if (number) number.textContent = data.role === 'newbie' || data.role === 'mentor' ? '' : String(data.level);
+  if (number) number.textContent = isNewbieState || isMentorState ? '' : String(data.level);
   if (ring) {
     ring.style.strokeDasharray = String(ringLength);
     ring.style.strokeDashoffset = String(ringLength * (1 - Math.min(100, Number(data.account_progress) || 0) / 100));
   }
   if (title) {
-    title.textContent = data.role === 'newbie'
+    title.textContent = isNewbieState
       ? 'Уровень появится после аттестации'
-      : data.role === 'mentor'
-        ? 'Наставник'
+      : isMentorState
+        ? (roleTitle || 'Наставник')
         : data.level_name || `Уровень ${data.level}`;
   }
   if (sub) {
-    sub.textContent = data.role === 'newbie'
-      ? 'Вы стажёр: расписание видно, прогресс заморожен до перехода в «Бариста»'
-      : data.role === 'mentor'
-        ? 'Высшая ступень: оценивайте команду и растите ветки сотрудников'
-        : `${Number(data.account_xp)} XP · до следующего уровня ${Number(data.account_xp_to_next)} XP`;
+    if (isNewbieState) {
+      sub.textContent = `Должность «${roleTitle || 'стажёр'}»: расписание видно, прогресс заморожен до перехода на следующую ступень`;
+    } else if (isMentorState) {
+      sub.textContent = 'Высшая ступень: оценивайте команду и растите ветки сотрудников';
+    } else {
+      sub.textContent = `${Number(data.account_xp)} XP · до следующего уровня ${Number(data.account_xp_to_next)} XP`;
+    }
   }
   if (bar) bar.style.width = `${Math.min(100, Number(data.account_progress) || 0)}%`;
 
@@ -663,7 +677,11 @@ async function fillQualityEmployees() {
   try {
     const users = await api('/api/users');
     const me = Number(document.body.dataset.userId || 0);
-    const staff = users.filter((user) => user.is_active && user.role !== 'mentor' && Number(user.id) !== me);
+    // Оценивать можно должности с возможностью `evaluated` — список строится по
+    // уровню: те, кто сам оценивает (наставнические должности), в него не попадают.
+    const staff = users.filter((user) => user.is_active
+      && Number(user.access_level || 0) < mentorMinLevel
+      && Number(user.id) !== me);
     select.innerHTML = staff.length
       ? '<option value="">— выберите —</option>'
         + staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name || user.role)}</option>`).join('')
@@ -674,14 +692,16 @@ async function fillQualityEmployees() {
   }
 }
 
-/* Список сотрудников для смены владельца оценки: активные, без наставников и себя. */
+/* Список сотрудников для смены владельца оценки: активные, без оценивающих и себя. */
 async function fillQualityEditEmployees() {
   const select = document.querySelector('#evaluation-edit-employee');
   if (!select) return;
   try {
     const users = await api('/api/users');
     const me = Number(document.body.dataset.userId || 0);
-    const staff = users.filter((user) => user.is_active && user.role !== 'mentor' && Number(user.id) !== me);
+    const staff = users.filter((user) => user.is_active
+      && Number(user.access_level || 0) < mentorMinLevel
+      && Number(user.id) !== me);
     select.innerHTML = staff.length
       ? '<option value="">— выберите —</option>'
         + staff.map((user) => `<option value="${user.id}">${escapeHtml(user.display_name || user.name)} — ${escapeHtml(user.role_name || user.role)}</option>`).join('')
@@ -1571,17 +1591,20 @@ function renderUsers(users) {
   const pendingCount = users.filter((user) => user.access_pending).length;
   count.textContent = `${activeCount} активных · ${pendingCount} ожидают · ${users.length} всего`;
   if (!users.length) { list.innerHTML = '<p class="empty-state">Сотрудников пока нет</p>'; return; }
-  const roleNames = { newbie: 'Стажёр', barista: 'Бариста', senior: 'Старший', mentor: 'Наставник', guest: 'Ожидает доступа' };
   list.innerHTML = users.map((user) => {
     const shown = user.display_name || user.name;
+    // Должность и уровень приходят из справочника (`/api/users` → role_access_config):
+    // бейджи обновляются вместе с вкладкой «Должности и допуски».
+    const roleTitle = user.role_name || user.role_title || user.role;
+    const levelBadge = user.access_pending ? 'Без должности' : `Уровень ${Number(user.access_level || 0)}`;
     return `
     <article class="user-row ${user.is_active ? '' : 'is-inactive'} ${user.access_pending ? 'is-pending' : ''}" data-user-id="${user.id}">
       <div class="user-person"><span class="user-avatar">${avatarMarkup(user.id, user.avatar_rev, shown)}</span><strong title="${escapeHtml(shown)}">${escapeHtml(shown)}</strong></div>
       <span class="user-detail user-iiko">${user.iiko_id ? `Iiko ${escapeHtml(user.iiko_id)}` : 'Iiko не указан'}</span>
       <span class="user-detail user-telegram">${user.telegram_username ? `@${escapeHtml(user.telegram_username)}` : 'Telegram не привязан'}</span>
-      <span class="user-detail user-role">${roleNames[user.role] || escapeHtml(user.role)}</span>
+      <span class="user-detail user-role">${escapeHtml(roleTitle)}<small class="user-role-level">${escapeHtml(levelBadge)}</small></span>
       <span class="user-detail user-code">${user.access_code ? `Код ${escapeHtml(user.access_code)}` : 'Кода нет'}</span>
-      <div class="user-actions"><button class="user-edit" type="button" data-rotate-code>Новый код</button><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте роль через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает роль' : 'Выдать доступ'}</button></div>
+      <div class="user-actions"><button class="user-edit" type="button" data-rotate-code>Новый код</button><button class="user-edit" type="button" data-edit>Изменить</button><button class="user-toggle ${user.is_active ? 'is-active' : ''}" type="button" data-active="${user.is_active ? 'true' : 'false'}" ${user.access_pending ? 'disabled title="Сначала назначьте должность через редактирование"' : ''}>${user.is_active ? 'Активен' : user.access_pending ? 'Ожидает должность' : 'Выдать доступ'}</button></div>
     </article>`; }).join('');
 }
 
@@ -2105,8 +2128,9 @@ function updateEditControls() {
   document.body.classList.toggle('calendar-editing', editMode);
   const swapsEntry = document.querySelector('#edit-swaps-toggle');
   const scheduleEntry = document.querySelector('#edit-schedule-toggle');
-  // Стажёр только смотрит график: сервер тоже отклонит правки (PermissionError).
-  const canEdit = userRole !== 'newbie';
+  // Правка графика: должность с возможностью `schedule_edit` (уровень не ниже
+  // порога). Сервер тоже отклонит правки (PermissionError).
+  const canEdit = accessLevel >= staffLevel;
   if (swapsEntry) swapsEntry.hidden = editMode || !canEdit;
   if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor;
   const tools = document.querySelector('.matrix-edit-tools');
@@ -3157,7 +3181,7 @@ function setView(name) {
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar') loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); loadMaintenanceAdmin(); ensureControlSelection(); }
+  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); loadMaintenanceAdmin(); loadRoles(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -10407,6 +10431,152 @@ async function onMaintenanceCategoryAction(event) {
   }
 }
 
+/* --- «Должности и допуски»: справочник уровней доступа ---------------------
+   Уровень — числовой вес прав; пороги (управление, наставничество, правка
+   графика) сервер считает по возможностям должностей, поэтому здесь они только
+   показываются. Правка уходит через общий `api()` — CSRF-токен он ставит сам. */
+
+const rolesState = { roles: [], thresholds: {}, capabilities: [], loading: false };
+
+function rolesSetStatus(message) {
+  const node = document.querySelector('#roles-status');
+  if (node) node.textContent = message || '';
+}
+
+function renderRolesThresholds() {
+  const box = document.querySelector('#roles-thresholds');
+  if (!box) return;
+  const thresholds = rolesState.thresholds || {};
+  box.innerHTML = `
+    <div class="roles-threshold"><span>Управление с уровня</span><strong>${Number(thresholds.manager_min_level ?? 0)}</strong><small>команда, аналитика, панель управления</small></div>
+    <div class="roles-threshold"><span>Наставничество с уровня</span><strong>${Number(thresholds.mentor_min_level ?? 0)}</strong><small>оценка напитков, правка и удаление оценок</small></div>
+    <div class="roles-threshold"><span>Правка графика с уровня</span><strong>${Number(thresholds.staff_level ?? 0)}</strong><small>замены, расписание, адресация задач</small></div>`;
+}
+
+function renderRolesList() {
+  const list = document.querySelector('#roles-list');
+  if (!list) return;
+  if (!rolesState.roles.length) { list.innerHTML = '<p class="empty-state">Справочник пуст</p>'; return; }
+  const capabilities = rolesState.capabilities || [];
+  list.innerHTML = rolesState.roles.map((role) => {
+    const badges = capabilities
+      .filter((capability) => (role.capability_list || []).includes(capability.code))
+      .map((capability) => `<span class="role-capability">${escapeHtml(capability.title)}</span>`)
+      .join('');
+    return `
+    <article class="role-row${role.is_active ? '' : ' is-inactive'}" data-role-key="${escapeHtml(role.role_key)}">
+      <div class="role-head">
+        <div class="role-heading"><strong>${escapeHtml(role.title)}</strong><code>${escapeHtml(role.role_key)}</code></div>
+        <span class="role-level" title="Уровень доступа">Уровень ${Number(role.access_level)}</span>
+      </div>
+      <p class="role-description">${escapeHtml(role.description || 'Описание не заполнено')}</p>
+      <div class="role-capabilities-row">${badges || '<span class="role-capability is-muted">Базовый доступ</span>'}</div>
+      <div class="role-meta"><span>${Number(role.user_count)} сотрудников</span><span>${role.is_active ? 'Должность активна' : 'Отключена'}</span></div>
+      <div class="role-actions"><button class="button button-quiet" type="button" data-role-edit="${escapeHtml(role.role_key)}">Изменить</button><button class="button button-quiet" type="button" data-role-toggle="${escapeHtml(role.role_key)}" data-role-active="${role.is_active ? 'true' : 'false'}">${role.is_active ? 'Отключить' : 'Включить'}</button></div>
+    </article>`;
+  }).join('');
+}
+
+async function loadRoles() {
+  const panel = document.querySelector('#roles-panel');
+  if (!panel || rolesState.loading) return;
+  rolesState.loading = true;
+  rolesSetStatus('Загрузка…');
+  try {
+    const data = await api('/api/roles');
+    rolesState.roles = data.roles || [];
+    rolesState.thresholds = data.thresholds || {};
+    rolesState.capabilities = data.capabilities || [];
+    renderRolesThresholds();
+    renderRolesList();
+    rolesSetStatus('');
+  } catch (error) {
+    rolesSetStatus(error.message);
+  } finally {
+    rolesState.loading = false;
+  }
+}
+
+function openRoleDialog(roleKey) {
+  const role = rolesState.roles.find((item) => item.role_key === roleKey);
+  const dialog = document.querySelector('#role-dialog');
+  const form = document.querySelector('#role-form');
+  if (!role || !dialog || !form) return;
+  const error = document.querySelector('#role-form-error');
+  if (error) error.hidden = true;
+  form.dataset.roleKey = role.role_key;
+  form.elements.role_key.value = role.role_key;
+  form.elements.role_key_view.value = role.role_key;
+  form.elements.title.value = role.title;
+  form.elements.access_level.value = String(role.access_level);
+  form.elements.description.value = role.description || '';
+  form.elements.is_active.checked = Boolean(role.is_active);
+  setText('#role-dialog-title', role.title);
+  const box = document.querySelector('#role-capabilities');
+  if (box) {
+    box.innerHTML = (rolesState.capabilities || []).map((capability) => {
+      const checked = (role.capability_list || []).includes(capability.code) ? ' checked' : '';
+      return `<label class="checkbox-row role-capability-option"><input type="checkbox" data-role-capability="${capability.code}"${checked}><span>${escapeHtml(capability.title)}</span></label>`;
+    }).join('');
+  }
+  dialog.showModal();
+}
+
+async function saveRole(form) {
+  const roleKey = form.dataset.roleKey;
+  if (!roleKey) return;
+  const error = document.querySelector('#role-form-error');
+  const submit = document.querySelector('#role-form-submit');
+  const capabilities = Array.from(form.querySelectorAll('[data-role-capability]'))
+    .filter((box) => box.checked)
+    .map((box) => box.dataset.roleCapability);
+  const payload = {
+    title: form.elements.title.value.trim(),
+    access_level: Number(form.elements.access_level.value),
+    description: form.elements.description.value.trim(),
+    capabilities,
+    is_active: form.elements.is_active.checked,
+  };
+  if (error) error.hidden = true;
+  if (submit) submit.disabled = true;
+  try {
+    const data = await api(`/api/roles/${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    form.closest('dialog')?.close();
+    await loadRoles();
+    showToast(`Должность «${data.role ? data.role.title : roleKey}» сохранена`);
+  } catch (err) {
+    if (error) { error.textContent = err.message; error.hidden = false; }
+    else showToast(err.message);
+  } finally {
+    if (submit) submit.disabled = false;
+  }
+}
+
+async function toggleRoleActive(roleKey, active) {
+  try {
+    await api(`/api/roles/${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: JSON.stringify({ is_active: active }) });
+    await loadRoles();
+    showToast(active ? 'Должность включена' : 'Должность отключена');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function setupRolesAdmin() {
+  const panel = document.querySelector('#roles-panel');
+  const form = document.querySelector('#role-form');
+  if (!panel || !form || panel.dataset.bound) return;
+  panel.dataset.bound = '1';
+  document.querySelector('#roles-refresh')?.addEventListener('click', () => loadRoles());
+  form.addEventListener('submit', (event) => { event.preventDefault(); saveRole(form); });
+  document.querySelector('#roles-list')?.addEventListener('click', (event) => {
+    const edit = event.target.closest('[data-role-edit]');
+    if (edit) { openRoleDialog(edit.dataset.roleEdit); return; }
+    const toggle = event.target.closest('[data-role-toggle]');
+    if (toggle) toggleRoleActive(toggle.dataset.roleToggle, toggle.dataset.roleActive !== 'true');
+  });
+}
+
 function renderControlNav() {
   const list = document.querySelector('#control-nav');
   if (!list) return;
@@ -10719,6 +10889,7 @@ function setupDashboard() {
   setupDrawer();
   setupProfile();
   setupControlPanel();
+  setupRolesAdmin();
   setupWorkloadForm();
   setupAnalytics();
   setupAnnouncements();
@@ -10834,7 +11005,9 @@ function setupDashboard() {
     loadCalendar();
   });
   const startEditing = (type) => {
-    if (editMode || userRole === 'newbie') return;
+    // Правка графика доступна должностям с возможностью `schedule_edit` —
+    // сравниваем числовой уровень с порогом справочника.
+    if (editMode || accessLevel < staffLevel) return;
     editType = type;
     editMode = true;
     matrixAnchor = null; matrixExtent = null;
@@ -11062,7 +11235,7 @@ function setupDashboard() {
   document.querySelector('#barista-preview-toggle')?.addEventListener('change', async (event) => {
     const box = event.currentTarget;
     try {
-      await api('/api/preview', { method: 'POST', body: JSON.stringify({ role: box.checked ? 'barista' : '' }) });
+      await api('/api/preview', { method: 'POST', body: JSON.stringify({ role: box.checked ? document.body.dataset.previewRole : '' }) });
       window.location.reload();
     } catch (error) {
       box.checked = !box.checked;
@@ -11154,7 +11327,12 @@ window.Neft = {
       name: document.body.dataset.userName || '',
       role: document.body.dataset.role || '',
       label: document.body.dataset.roleLabel || '',
+      accessLevel: Number(document.body.dataset.accessLevel || 0),
+      managerMinLevel: Number(document.body.dataset.managerMinLevel || 0),
+      mentorMinLevel: Number(document.body.dataset.mentorMinLevel || 0),
+      staffLevel: Number(document.body.dataset.staffLevel || 0),
       manager: document.body.dataset.manager === 'true',
+      mentor: document.body.dataset.mentor === 'true',
     };
   },
 };

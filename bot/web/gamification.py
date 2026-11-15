@@ -29,9 +29,12 @@ from PIL import Image, ImageOps
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
+from bot.web import access_roles
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Базовая выдача при повышении роли до barista/senior: 2500 XP = 5 уровень.
+# Базовая выдача при назначении на должность с возможностью `xp_base`
+# (по умолчанию бариста и старший): 2500 XP = 5 уровень.
 BASE_XP = 2500
 
 # Хард-скиллы двигают общий уровень аккаунта; социальная ветка — нет.
@@ -340,13 +343,13 @@ def active_branches(connection: Connection) -> list[dict[str, Any]]:
 
 
 def grant_base_xp(connection: Connection, user_id: int, role: str) -> int:
-    """Базовые 2500 XP во все активные ветки при роли barista/senior.
+    """Базовые 2500 XP во все активные ветки при должности с `xp_base`.
 
     Начисляется только тем веткам, где опыт меньше базового; каждый раз — одной
-    `system`-транзакцией (идемпотентно при повторе). `newbie` и `guest` ничего
-    не получают.
+    `system`-транзакцией (идемпотентно при повторе). Стажёр и ожидающие доступа
+    ничего не получают: у их должностей возможности `xp_base` нет.
     """
-    if role not in {"barista", "senior"}:
+    if not access_roles.grants_base_xp(role):
         return 0
     granted = 0
     current = {
@@ -377,15 +380,20 @@ def grant_base_xp(connection: Connection, user_id: int, role: str) -> int:
 
 
 def backfill_base_xp(engine: Engine) -> int:
-    """Одноразовая (идемпотентная) выдача базового XP активным barista/senior.
+    """Одноразовая (идемпотентная) выдача базового XP активным должностям.
 
     Вызывается на старте: у существующей команды уровень появляется сразу,
-    а не после первого действия. Стажёры и отключённые записи не трогаются.
+    а не после первого действия. Стажёры и отключённые записи не трогаются:
+    должность должна иметь возможность `xp_base`.
     """
     total = 0
     with engine.begin() as connection:
         rows = connection.execute(text("""
-            SELECT id, role FROM users WHERE is_active = 1 AND role IN ('barista', 'senior')
+            SELECT id, role FROM users
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config
+                            WHERE is_active = 1
+                              AND instr(',' || capabilities || ',', ',xp_base,') > 0)
         """)).mappings().all()
         for row in rows:
             total += grant_base_xp(connection, int(row["id"]), row["role"])
@@ -990,8 +998,15 @@ def dashboard_me(engine: Engine, user_id: int) -> dict[str, Any]:
         })
 
     progress = _branch_progress(hard_xp)
+    role_key = role_row["role"] if role_row else ""
     return {
-        "role": role_row["role"] if role_row else "",
+        "role": role_key,
+        "role_title": access_roles.title_of(role_key),
+        "access_level": access_roles.level_of(role_key),
+        # Возможности должности: интерфейс не сравнивает ключи ролей строкой,
+        # а показывает состояния (стажёр / наставник) по данным справочника.
+        "xp_base": access_roles.grants_base_xp(role_key),
+        "mentor": access_roles.is_mentor(role_key),
         "level": progress["level"],
         "account_xp": hard_xp,
         "account_xp_to_next": progress["xp_to_next"],

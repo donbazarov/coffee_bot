@@ -23,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
+from bot.web import access_code, access_roles, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -54,16 +54,13 @@ from bot.web.workload_service import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-ROLE_VALUES = {"newbie", "barista", "senior", "mentor"}
-ROLE_NAMES = {
-    "newbie": "Стажёр",
-    "barista": "Бариста",
-    "senior": "Старший",
-    "mentor": "Наставник",
-}
-# Предпросмотр «глазами бариста»: роль, которой сервер рендерит страницу для
-# старшего/наставника. Хранится в cookie, чтобы гейты Jinja (`user.role`) и
-# data-атрибуты <body> совпадали без клиентской имитации.
+# Должности и уровни допуска живут в справочнике `role_access_config`
+# (`bot/web/access_roles.py`): здесь не остаётся перечисления ролей. Пороги
+# гейтов (manager/mentor) вычисляются из справочника, поэтому правка уровня в
+# панели управления сразу меняет права — без правки кода.
+# Предпросмотр «глазами бариста»: должность, которой сервер рендерит страницу
+# для управляющих. Хранится в cookie, чтобы гейты Jinja и data-атрибуты <body>
+# совпадали без клиентской имитации.
 PREVIEW_COOKIE = "preview_role"
 PREVIEW_ROLE = "barista"
 
@@ -222,6 +219,10 @@ def migrate_database():
     modules.initialize_schema(engine)
     # Редактируемые настройки модулей (бывшие константы) — в кэш из web_app_settings.
     modules.initialize_settings(engine)
+    # Должности и уровни допуска: справочник нужен раньше остальных сервисов —
+    # по нему строится состав сотрудников (`access_code.ensure_active_codes`),
+    # списки адресатов уведомлений и задачи ТО.
+    access_roles.initialize_schema(engine)
     workload_service.initialize_schema(engine)
     access_code.initialize_access_schema(engine)
     announcements.initialize_schema(engine)
@@ -304,14 +305,14 @@ async def update_preferences(request: Request, user: dict[str, Any] = Depends(re
 @app.get("/api/modules")
 def list_modules(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Состояние модулей для навигации и панели управления (глобальное, не персональное)."""
-    is_manager = user["role"] in {"senior", "mentor"}
+    is_manager = access_roles.is_manager(user)
     return {"modules": modules.load_modules(engine, is_manager=is_manager)}
 
 
 @app.patch("/api/modules/{code}")
 async def update_module(code: str, request: Request,
                         _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
-    """Включает/выключает модуль целиком для всей команды (senior/mentor + CSRF)."""
+    """Включает/выключает модуль целиком для всей команды (управляющий + CSRF)."""
     payload = await _read_json_object(request)
     if set(payload) - {"enabled"} or not isinstance(payload.get("enabled"), bool):
         raise HTTPException(status_code=422, detail="Ожидался флаг enabled (boolean)")
@@ -333,13 +334,44 @@ def module_settings(code: str, _: dict[str, Any] = Depends(require_manager)) -> 
 @app.patch("/api/modules/{code}/settings")
 async def update_module_settings(code: str, request: Request,
                                  _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
-    """Сохраняет настройки модуля (senior/mentor + CSRF) с валидацией по типам и границам."""
+    """Сохраняет настройки модуля (управляющий + CSRF) с валидацией по типам и границам."""
     payload = await _read_json_object(request)
     try:
         fields = modules.save_module_settings(engine, code, payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"ok": True, "code": code, "fields": fields}
+
+
+# --- Должности и допуски (панель управления) -------------------------------- #
+
+@app.get("/api/roles")
+def list_roles(_: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
+    """Справочник должностей, вычисленные пороги и словарь возможностей.
+
+    Пороги не хранятся отдельно: они выводятся из уровней должностей с
+    возможностью `manage`/`mentor`, поэтому правка уровня сразу меняет права.
+    """
+    return access_roles.view(engine)
+
+
+@app.patch("/api/roles/{role_key}")
+async def update_role(role_key: str, request: Request,
+                      _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+    """Правка должности: название, описание, уровень, возможности, активность.
+
+    Ключ должности неизменен — на него ссылаются `users.role`, история оценок,
+    задач и графика. Инвариант: правка не может оставить систему без активного
+    управляющего (проверяется в `access_roles.update_role`).
+    """
+    payload = await _read_json_object(request)
+    try:
+        role = access_roles.update_role(engine, role_key, payload)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "role": role, "thresholds": access_roles.view(engine)["thresholds"]}
 
 
 @app.patch("/api/profile")
@@ -466,26 +498,36 @@ def home(request: Request):
         except RuntimeError:
             pass
 
-    # Предпросмотр «глазами бариста»: старший/наставник рендерит страницу с ролью
-    # бариста, поэтому весь manager-UI (Jinja + data-*) отключается единым механизмом.
+    # Предпросмотр «глазами бариста»: управляющий рендерит страницу с уровнем и
+    # должностью бариста, поэтому весь manager-UI (Jinja + data-*) отключается
+    # единым механизмом: понижается и роль, и числовой уровень доступа.
     real_role = user["role"] if user else ""
+    is_manager = bool(user and access_roles.is_manager(user))
     preview_active = bool(
-        user and user["role"] in {"senior", "mentor"}
-        and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+        is_manager and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
     )
-    render_user = {**user, "role": PREVIEW_ROLE} if preview_active else user
+    render_user = {
+        **user,
+        "role": PREVIEW_ROLE,
+        "access_level": access_roles.level_of(PREVIEW_ROLE),
+        "role_title": access_roles.title_of(PREVIEW_ROLE),
+    } if preview_active else user
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
     # Модули загружаем одним запросом: из него и словарь для Jinja-гейтов
     # навигации/вьюх, и список для левого оглавления панели управления.
-    module_list = modules.load_modules(engine, is_manager=real_role in {"senior", "mentor"})
+    module_list = modules.load_modules(engine, is_manager=is_manager)
     main_settings = work_points.get_main_settings(engine)
     # «Основное» — не модуль, а первая вкладка панели управления: бренд,
     # дефолтный акцент и справочник точек. Синтетическая запись нужна, чтобы
     # левое оглавление и переключение блоков работали как у обычных модулей.
     control_modules = [
         {"code": "main", "title": "Основное", "icon": "i-overview",
+         "enabled": True, "settable": False},
+        # «Должности и допуски» — вторая синтетическая вкладка: справочник ролей
+        # не раздел сайта, поэтому он есть только в панели управления.
+        {"code": "roles", "title": "Должности и допуски", "icon": "i-team",
          "enabled": True, "settable": False},
         *[item for item in module_list if item["settable"]],
     ]
@@ -520,8 +562,23 @@ def home(request: Request):
                 "unknown": telegram_login.reason_message("unknown"),
                 "expired": telegram_login.reason_message("expired"),
             }.get(request.query_params.get("auth_error"), ""),
-            "role_names": ROLE_NAMES,
+            # Должности: названия и уровни приходят из справочника, поэтому в
+            # шаблоне и JS нет перечисления ролей, а гейты сравнивают числа.
+            "role_names": access_roles.labels(),
+            "access_level": int((render_user or {}).get("access_level") or 0),
+            "manager": bool(render_user and access_roles.is_manager(render_user)),
+            "mentor": bool(render_user and access_roles.is_mentor(render_user)),
+            "manager_min_level": access_roles.manager_min_level(),
+            "mentor_min_level": access_roles.mentor_min_level(),
+            "staff_level": access_roles.staff_level(),
+            # Справочник для вкладки «Должности и допуски» и селекта должностей:
+            # рендерим на сервере, чтобы форма работала и до загрузки JS.
+            "roles": access_roles.view(engine),
             "real_role": real_role,
+            "real_manager": bool(user and access_roles.is_manager(user)),
+            # Предпросмотр «глазами бариста»: должность-предпросмотр отдаём и в
+            # разметку, чтобы клиент не держал её ключ строкой.
+            "preview_role": PREVIEW_ROLE,
             "preview_active": preview_active,
             # Модули: глобальное вкл/выкл разделов. Навигация и вьюхи скрываются
             # на сервере (по `modules`), а панель управления строит из них список.
@@ -870,8 +927,8 @@ async def team_workload_stats(
 
 @app.get("/api/users/{user_id}/workload")
 def user_workload(user_id: int, user: dict[str, Any] = Depends(require_user)):
-    """Нормо-часы сотрудника: свои видит любой, чужие — наставник/старший."""
-    if user_id != user["id"] and user["role"] not in {"senior", "mentor"}:
+    """Нормо-часы сотрудника: свои видит любой, чужие — управляющий."""
+    if user_id != user["id"] and not access_roles.is_manager(user):
         raise HTTPException(status_code=403, detail="Доступны только свои нормо-часы")
     try:
         return get_user_workload(engine, user_id)
@@ -881,8 +938,8 @@ def user_workload(user_id: int, user: dict[str, Any] = Depends(require_user)):
 
 @app.patch("/api/users/{user_id}/workload")
 async def update_user_workload_route(user_id: int, request: Request, user: dict[str, Any] = Depends(require_csrf)):
-    """Правка нормо-часов (x ≤ y ≤ z): сам сотрудник в профиле или наставник в команде."""
-    if user_id != user["id"] and user["role"] not in {"senior", "mentor"}:
+    """Правка нормо-часов (x ≤ y ≤ z): сам сотрудник в профиле или управляющий в команде."""
+    if user_id != user["id"] and not access_roles.is_manager(user):
         raise HTTPException(status_code=403, detail="Можно менять только свои нормо-часы")
     payload = await _read_json_object(request)
     try:
@@ -917,8 +974,9 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
     change_type = payload.get("change_type", "swap")
     if change_type not in {"swap", "schedule"}:
         raise HTTPException(status_code=422, detail="Неизвестный тип правки")
-    # Тип «Расписание» — только наставник. Проверка на сервере, не только в UI.
-    if change_type == "schedule" and user["role"] != "mentor":
+    # Тип «Расписание» — только наставник (уровень не ниже порога наставника).
+    # Проверка на сервере, не только в UI.
+    if change_type == "schedule" and not access_roles.is_mentor(user):
         raise HTTPException(status_code=403, detail="Тип «Расписание» доступен только наставникам")
     # publish=False — тихое сохранение расписания: без лога, без снимка, без рассылки.
     publish = payload.get("publish", True)
@@ -963,8 +1021,8 @@ def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
 
 @app.post("/api/preview")
 async def set_preview(request: Request, user: dict[str, Any] = Depends(require_csrf)) -> JSONResponse:
-    """Включает/выключает предпросмотр «глазами бариста» (только старший/наставник)."""
-    if user["role"] not in {"senior", "mentor"}:
+    """Включает/выключает предпросмотр «глазами бариста» (только управляющие)."""
+    if not access_roles.is_manager(user):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     payload = await _read_json_object(request)
     role = payload.get("role") or ""
@@ -1181,7 +1239,7 @@ def list_announcements(category: str | None = None, limit: int = 30, user: dict[
         ),
         "unread": announcements.unread_counts(engine, user["id"]),
         "categories": announcements.all_categories(engine),
-        "can_publish": user["role"] in {"senior", "mentor"},
+        "can_publish": access_roles.is_manager(user),
     }
 
 
@@ -1417,7 +1475,7 @@ def list_tasks(assignee: str = "all", category: str | None = None,
         "items": _with_permissions(tasks.list_active(engine, user, assignee, code), user),
         "counts": tasks.counts(engine, user, assignee),
         "categories": tasks.all_categories(engine),
-        "can_manage_categories": user["role"] in {"senior", "mentor"},
+        "can_manage_categories": access_roles.is_manager(user),
         "auto_archive_days": tasks.archive_after_days(),
     }
 
@@ -1439,7 +1497,7 @@ def list_tasks_archive(assignee: str = "all", category: str | None = None,
         "items": _with_permissions(tasks.list_archive(engine, user, assignee, code), user),
         "counts": tasks.counts(engine, user, assignee),
         "categories": tasks.all_categories(engine),
-        "can_manage_categories": user["role"] in {"senior", "mentor"},
+        "can_manage_categories": access_roles.is_manager(user),
     }
 
 
@@ -1509,14 +1567,21 @@ async def delete_task(task_id: int, permanent: bool = False,
 
 @app.get("/api/users")
 def list_users(_: dict[str, Any] = Depends(require_manager)):
+    """Сотрудники с названием должности и уровнем доступа из справочника."""
     with engine.connect() as connection:
         users = connection.execute(text("""
-            SELECT id, name, display_name, avatar_rev, iiko_id, telegram_username, role, is_active, telegram_id, access_code
-            FROM users ORDER BY is_active DESC, COALESCE(display_name, name) COLLATE NOCASE
+            SELECT u.id, u.name, u.display_name, u.avatar_rev, u.iiko_id, u.telegram_username,
+                   u.role, u.is_active, u.telegram_id, u.access_code,
+                   COALESCE(r.access_level, 0) AS access_level,
+                   COALESCE(r.title, u.role) AS role_title
+            FROM users u
+            LEFT JOIN role_access_config r ON r.role_key = u.role
+            ORDER BY u.is_active DESC, COALESCE(u.display_name, u.name) COLLATE NOCASE
         """)).mappings().all()
-    role_names = {**ROLE_NAMES, "guest": "Ожидает доступа"}
+    role_names = {**access_roles.labels(), access_roles.PENDING_ROLE: "Ожидает доступа"}
     return [
-        {**dict(user), "role_name": role_names.get(user["role"], user["role"]), "access_pending": user["role"] == "guest"}
+        {**dict(user), "role_name": role_names.get(user["role"], user["role"]),
+         "access_pending": user["role"] == access_roles.PENDING_ROLE}
         for user in users
     ]
 
@@ -1540,8 +1605,9 @@ def _validate_user_payload(payload: Any, partial: bool = False) -> dict[str, Any
             raise HTTPException(status_code=422, detail="Имя должно содержать от 1 до 100 символов")
         values["name"] = name
     if not partial or "role" in values:
-        if values.get("role") not in ROLE_VALUES:
-            raise HTTPException(status_code=422, detail="Неизвестная роль")
+        # Должность проверяем по справочнику: он же источник списка для интерфейса.
+        if values.get("role") not in access_roles.role_keys(active_only=False):
+            raise HTTPException(status_code=422, detail="Неизвестная должность")
     if "iiko_id" in values:
         try:
             values["iiko_id"] = int(values["iiko_id"]) if values["iiko_id"] not in (None, "") else None
@@ -1572,8 +1638,8 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
             )
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
-        # Бариста и старшему — базовый опыт сразу при создании: наставнику не
-        # нужно помнить о дополнительном действии, уровень появляется сам.
+        # Должность с возможностью `xp_base` (бариста, старший) сразу даёт базовый
+        # опыт: наставнику не нужно помнить о дополнительном действии.
         gamification.grant_base_xp(connection, int(result.lastrowid), values["role"])
         new_user_id = int(result.lastrowid)
     # id возвращаем, чтобы интерфейс сразу дописал нормо-часы новому сотруднику.
@@ -1599,23 +1665,16 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
             raise HTTPException(status_code=404, detail="Пользователь не найден")
         target_role = values.get("role", current_user["role"])
         target_active = values.get("is_active", current_user["is_active"])
-        if target_role == "guest" and target_active:
-            raise HTTPException(status_code=400, detail="Назначьте роль сотрудника до выдачи доступа")
-        # Любая роль ниже менеджерской (в том числе новая «стажёр») снимает права,
-        # поэтому проверяем именно принадлежность к менеджерам, а не «стал баристой».
+        if target_role == access_roles.PENDING_ROLE and target_active:
+            raise HTTPException(status_code=400, detail="Назначьте должность до выдачи доступа")
+        # Права определяет справочник должностей: если правка снимает
+        # управленческий доступ, в команде должен остаться другой управляющий.
         will_remove_manager = (
-            current_user["role"] in {"senior", "mentor"}
-            and current_user["is_active"]
-            and (values.get("role", current_user["role"]) not in {"senior", "mentor"}
-                 or values.get("is_active", 1) == 0)
+            access_roles.is_manager(current_user["role"]) and bool(current_user["is_active"])
+            and not (access_roles.is_manager(target_role) and bool(target_active))
         )
-        if will_remove_manager:
-            other_managers = connection.execute(text("""
-                SELECT COUNT(*) FROM users
-                WHERE id != :user_id AND is_active = 1 AND role IN ('senior', 'mentor')
-            """), {"user_id": user_id}).scalar_one()
-            if not other_managers:
-                raise HTTPException(status_code=400, detail="Нельзя убрать последнего активного менеджера")
+        if will_remove_manager and not access_roles.other_manager_count(connection, user_id):
+            raise HTTPException(status_code=400, detail="Нельзя убрать последнего активного управляющего")
         try:
             if has_fields:
                 result = connection.execute(text(f"UPDATE users SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"), values)
@@ -1623,8 +1682,8 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
                     raise HTTPException(status_code=404, detail="Пользователь не найден")
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
-        # Повышение до бариста/старшего сразу даёт базовый опыт. Понижение до
-        # стажёра и деактивация опыт не обнуляют: начисления остаются в логе.
+        # Повышение до должности с базовым опытом сразу его начисляет. Понижение
+        # до стажёра и деактивация опыт не обнуляют: начисления остаются в логе.
         if "role" in values and target_active:
             gamification.grant_base_xp(connection, user_id, target_role)
     if regenerate:
@@ -1636,12 +1695,23 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
 # Развитие: уровень, ветки навыков и оценки наставника
 #
 # Уровень считается по сумме хард-веток (сенсорика, молоко, стандарты); ветка
-# «Команда» копится параллельно и на бейдж не влияет. Оценивают только старшие
-# и наставники, стажёр видит расписание и свой прогресс без права правок.
+# «Команда» копится параллельно и на бейдж не влияет. Оценивают управляющие и
+# наставники, правка и удаление оценок — только наставники; стажёр видит
+# расписание и свой прогресс без права правок.
 # --------------------------------------------------------------------------- #
 
-EVALUATION_ROLES = {"senior", "mentor"}
-EVALUATED_ROLES = {"newbie", "barista", "senior"}
+# Наборы «кто оценивает» и «кого оценивают» задаёт справочник должностей
+# (`bot/web/access_roles.py`): в коде остаются только имена возможностей.
+
+
+def _can_evaluate(user: dict[str, Any]) -> bool:
+    """Право ставить оценки: управляющий или наставник."""
+    return access_roles.is_manager(user) or access_roles.is_mentor(user)
+
+
+def _is_evaluated(user_or_role: Any) -> bool:
+    """Должность, которую оценивают в контроле качества."""
+    return access_roles.is_evaluated(user_or_role)
 
 
 def _optional_reference_id(payload: dict[str, Any], key: str) -> int | None:
@@ -1711,7 +1781,7 @@ def _cleanliness_employee_ids(connection, payload: dict[str, Any], point: str | 
         if not point:
             raise HTTPException(status_code=422, detail="Укажите торговую точку")
         active = active_staff(engine, point, None)
-        candidates = [int(person["id"]) for person in active if person["role"] in EVALUATED_ROLES]
+        candidates = [int(person["id"]) for person in active if _is_evaluated(person["role"])]
     else:
         if not isinstance(raw, list):
             raise HTTPException(status_code=422, detail="Некорректный список сотрудников")
@@ -1728,7 +1798,7 @@ def _cleanliness_employee_ids(connection, payload: dict[str, Any], point: str | 
         row = connection.execute(
             text("SELECT role, is_active FROM users WHERE id = :id"), {"id": candidate}
         ).mappings().first()
-        if not row or not row["is_active"] or row["role"] not in EVALUATED_ROLES:
+        if not row or not row["is_active"] or not _is_evaluated(row["role"]):
             raise HTTPException(status_code=422, detail="Сотрудник недоступен для оценки")
         if candidate not in employee_ids:
             employee_ids.append(candidate)
@@ -1760,8 +1830,8 @@ def evaluation_photo(filename: str, _: dict[str, Any] = Depends(require_user)):
 @app.post("/api/evaluations/photo")
 async def upload_evaluation_photo(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     """Тело запроса — сам файл изображения (без multipart). Шаг перед оценкой."""
-    if user["role"] not in EVALUATION_ROLES:
-        raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
+    if not _can_evaluate(user):
+        raise HTTPException(status_code=403, detail="Оценивать может только управляющий или наставник")
     data = await request.body()
     if not data or len(data) > gamification.MAX_PHOTO_BYTES:
         raise HTTPException(status_code=413, detail="Файл пустой или больше 8 МБ")
@@ -1788,7 +1858,7 @@ def shifts_active_staff(point: str, timestamp: str | None = None,
         except ValueError as error:
             raise HTTPException(status_code=422, detail="Некорректное время") from error
     staff = active_staff(engine, point, when)
-    active = [person for person in staff if person["role"] in EVALUATED_ROLES]
+    active = [person for person in staff if _is_evaluated(person["role"])]
     return {"point": point, "active": active, "found": len(active)}
 
 
@@ -1802,13 +1872,13 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
     Роли: напитки оценивает только наставник (`mentor`); старший (`senior`)
     ведёт лишь чистоту и порядок заведения.
     """
-    if evaluator["role"] not in EVALUATION_ROLES:
-        raise HTTPException(status_code=403, detail="Оценивать может только старший или наставник")
+    if not _can_evaluate(evaluator):
+        raise HTTPException(status_code=403, detail="Оценивать может только управляющий или наставник")
     payload = await _read_json_object(request)
     evaluation_type = payload.get("evaluation_type") or "drink"
     if evaluation_type not in {"drink", "cleanliness"}:
         raise HTTPException(status_code=422, detail="Неизвестный тип оценки")
-    if evaluation_type == "drink" and evaluator["role"] != "mentor":
+    if evaluation_type == "drink" and not access_roles.is_mentor(evaluator):
         raise HTTPException(status_code=403, detail="Напитки может оценивать только наставник")
     point = payload.get("point")
     try:
@@ -1852,7 +1922,7 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
         ).mappings().first()
         if not employee or not employee["is_active"]:
             raise HTTPException(status_code=404, detail="Сотрудник не найден или отключён")
-        if employee["role"] not in EVALUATED_ROLES:
+        if employee["role"] not in access_roles.role_keys(active_only=False):
             raise HTTPException(status_code=400, detail="Оценивать можно только сотрудников")
         if int(employee["id"]) == int(evaluator["id"]):
             raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
@@ -1892,16 +1962,17 @@ def evaluation_sessions(request: Request, limit: int = 10, offset: int = 0,
                         user: dict[str, Any] = Depends(require_user)):
     """Страница сессий контроля качества (по 10).
 
-    Наставник и старший видят всю команду; бариста и стажёр — только свои сессии,
-    чтобы читать детальную оценку и пояснения наставника. Область видимости
-    вычисляется на сервере, поэтому запросить чужие оценки нельзя. В режиме
-    предпросмотра «как бариста» менеджер тоже видит только свои сессии.
+    Наставник и управляющий видят всю команду; бариста и стажёр — только свои
+    сессии, чтобы читать детальную оценку и пояснения наставника. Область
+    видимости вычисляется на сервере, поэтому запросить чужие оценки нельзя. В
+    режиме предпросмотра «как бариста» управляющий видит только свои сессии.
     """
+    is_manager = access_roles.is_manager(user)
     preview_active = bool(
-        user["role"] in {"senior", "mentor"}
-        and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+        is_manager and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
     )
-    is_manager = user["role"] in {"senior", "mentor"} and not preview_active
+    if preview_active:
+        is_manager = False
     employee_id = None if is_manager else int(user["id"])
     return gamification.evaluation_sessions(
         engine, limit=limit, offset=offset, employee_id=employee_id,
@@ -1916,9 +1987,9 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
     Разрешены баллы, комментарии, фото, а для напитка — ещё напиток и зерно.
     Дополнительно можно сменить сотрудника (`employee_id`) и дату оценки
     (`created_at`); тип оценки фиксирован, XP и баланс веток пересчитываются.
-    Изменять оценки может только наставник (`mentor`).
+    Изменять оценки может только наставник (должность с возможностью `mentor`).
     """
-    if evaluator["role"] != "mentor":
+    if not access_roles.is_mentor(evaluator):
         raise HTTPException(status_code=403, detail="Изменять оценки может только наставник")
     payload = await _read_json_object(request)
     photo_url = payload.get("photo_url")
@@ -1957,7 +2028,7 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
             ).mappings().first()
             if not employee or not employee["is_active"]:
                 raise HTTPException(status_code=404, detail="Сотрудник не найден или отключён")
-            if employee["role"] not in EVALUATED_ROLES:
+            if not _is_evaluated(employee["role"]):
                 raise HTTPException(status_code=400, detail="Оценивать можно только сотрудников")
             if int(new_employee_id) == int(evaluator["id"]):
                 raise HTTPException(status_code=400, detail="Нельзя оценить самого себя")
@@ -2009,9 +2080,9 @@ async def delete_evaluation_route(evaluation_id: int,
 
     Опыт не пропадает бесследно: в append-only логе `xp_transactions` пишутся
     компенсирующие транзакции, а баланс веток синхронно уменьшается. Удалять
-    оценки может только наставник (`mentor`).
+    оценки может только наставник (должность с возможностью `mentor`).
     """
-    if evaluator["role"] != "mentor":
+    if not access_roles.is_mentor(evaluator):
         raise HTTPException(status_code=403, detail="Удалять оценки может только наставник")
     with engine.begin() as connection:
         try:

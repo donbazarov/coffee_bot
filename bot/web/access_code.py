@@ -26,6 +26,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import access_roles
+
 logger = logging.getLogger("bot.web.access")
 
 CODE_LENGTH = 4
@@ -37,8 +39,6 @@ MAX_IP_ATTEMPTS = 20  # неудач с одного адреса за окно
 
 # Формат совпадает с SQLite CURRENT_TIMESTAMP, поэтому сравнение в SQL строковое.
 STAMP = "%Y-%m-%d %H:%M:%S"
-
-STAFF_ROLES = ("newbie", "barista", "senior", "mentor")
 
 
 def _stamp(moment: datetime) -> str:
@@ -113,7 +113,8 @@ def code_matches(user: dict[str, Any], code: Any) -> bool:
 
 
 def is_staff(user: dict[str, Any]) -> bool:
-    return bool(user.get("is_active")) and user.get("role") in STAFF_ROLES
+    """Активный сотрудник с должностью из справочника (заявка `guest` не входит)."""
+    return bool(user.get("is_active")) and user.get("role") in access_roles.staff_roles()
 
 
 def find_user_by_login(engine: Engine, raw: Any) -> dict[str, Any] | None:
@@ -167,7 +168,8 @@ def ensure_active_codes(engine: Engine) -> int:
     with engine.connect() as connection:
         missing = connection.execute(text("""
             SELECT id FROM users
-            WHERE is_active = 1 AND role IN ('newbie', 'barista', 'senior', 'mentor')
+            WHERE is_active = 1
+              AND role IN (SELECT role_key FROM role_access_config WHERE is_active = 1)
               AND (access_code IS NULL OR access_code = '')
         """)).scalars().all()
     for user_id in missing:

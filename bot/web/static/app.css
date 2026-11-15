@@ -322,6 +322,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .user-person strong { overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .user-detail { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .user-role { color: var(--accent); }
+.user-role-level { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; }
 .user-actions { display: flex; justify-self: end; gap: 6px; }
 .user-edit { padding: 6px 8px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 10px; cursor: pointer; }
 .user-edit:hover { border-color: var(--line-strong); color: var(--text); }
@@ -2205,6 +2206,29 @@ body { transition: background-color .3s ease, color .3s ease; }
 .control-tree-fab.is-visible { opacity: 1; transform: none; pointer-events: auto; }
 .control-tree-fab .icon { width: 16px; height: 16px; }
 .control-tree-fab:hover { border-color: var(--accent); }
+
+/* --- Должности и допуски: уровни, возможности и вычисленные пороги --------- */
+.roles-thresholds { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0 0 14px; }
+.roles-threshold { display: grid; gap: 3px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-sunken); }
+.roles-threshold span { color: var(--muted); font: 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+.roles-threshold strong { font-size: 20px; }
+.roles-threshold small { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.roles-list { display: grid; gap: 10px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.role-row { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); }
+.role-row.is-inactive { opacity: .6; }
+.role-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.role-heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.role-heading strong { font-size: 15px; }
+.role-heading code { color: var(--muted); font: 11px var(--mono); }
+.role-level { flex: 0 0 auto; padding: 3px 10px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--text); font: 11px var(--mono); }
+.role-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.role-capabilities-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.role-capability { padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-sunken); color: var(--text-soft); font: 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+.role-capability.is-muted { color: var(--muted); }
+.role-meta { display: flex; flex-wrap: wrap; gap: 14px; color: var(--muted); font-size: 11px; }
+.role-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.role-capabilities { display: grid; gap: 8px; }
+.roles-status { margin: 12px 0 0; min-height: 1em; color: var(--muted); font-size: 12px; }
 @media (min-width: 900px) {
   .control-layout { grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); align-items: start; }
 }

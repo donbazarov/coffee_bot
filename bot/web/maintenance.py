@@ -34,7 +34,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from bot.database.models import engine
-from bot.web import modules, page_links, tasks
+from bot.web import access_roles, modules, page_links, tasks
 from bot.web.announcements import TRANSLIT
 from bot.web.deps import require_manager_csrf, require_user
 
@@ -741,11 +741,14 @@ def overview(engine: Engine) -> dict[str, Any]:
 
 
 def _system_author(engine: Engine) -> int | None:
-    """Автор авто-задач: активный старший/наставник, иначе без автора."""
+    """Автор авто-задач: активный управляющий, иначе задача без автора."""
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT id FROM users WHERE is_active = 1 AND role IN ('senior','mentor')
-            ORDER BY id LIMIT 1
+            SELECT u.id FROM users u
+            JOIN role_access_config r ON r.role_key = u.role AND r.is_active = 1
+            WHERE u.is_active = 1
+              AND instr(',' || r.capabilities || ',', ',manage,') > 0
+            ORDER BY r.access_level DESC, u.id LIMIT 1
         """)).first()
     return int(row[0]) if row else None
 
@@ -764,7 +767,9 @@ def _has_open_task(engine: Engine, token: str) -> bool:
 def _create_auto_task(engine: Engine, author_id: int | None, token: str,
                       title: str, description: str, priority: str) -> bool:
     try:
-        tasks.create_task(engine, {"id": author_id, "role": "senior"}, {
+        # Автор — системный: должность берём самую старшую из справочника, чтобы
+        # задача не зависела от того, кто из управляющих сейчас в смене.
+        tasks.create_task(engine, {"id": author_id, "role": access_roles.highest_role()["role_key"]}, {
             "title": title,
             "description": description,
             "priority": priority,
