@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-default-accent="{{ default_accent }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10110f">
   <meta name="robots" content="noindex, nofollow">
-  <title>Подтвердите вход · НЕФТЬ</title>
+  <title>Подтвердите вход · {{ project_name }}</title>
   <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
@@ -20,7 +20,7 @@
 
     <header class="brand brand-login">
       <span class="brand-symbol" aria-hidden="true"></span>
-      <span class="brand-name">НЕФТЬ<small>CREW DESK</small></span>
+      <span class="brand-name">{{ project_name }}<small>CREW DESK</small></span>
     </header>
 
     <section class="login-content">

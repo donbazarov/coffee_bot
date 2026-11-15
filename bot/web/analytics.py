@@ -33,7 +33,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import gamification, workload_service
+from bot.web import gamification, workload_service, work_points
 
 # Ветки хард-скиллов образуют колонки тепловой карты (социальная «Команда» — нет).
 HARD_BRANCH_CODES = gamification.HARD_SKILL_CODES
@@ -373,7 +373,7 @@ def shifts_report(engine: Engine, year: int, month: int) -> dict[str, Any]:
     fact_total = sum(entry["hours"] for entry in fact.values())
 
     points_out: list[dict[str, Any]] = []
-    for point in workload_service.POINTS:
+    for point in work_points.active_codes(engine):
         entry = fact.get(point, {"hours": 0.0, "shifts": 0})
         share = (entry["hours"] / fact_total) if fact_total else 0.0
         plan_hours = round(opt_total * share, 1) if fact_total else 0.0

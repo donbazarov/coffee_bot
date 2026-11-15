@@ -1,7 +1,7 @@
 """Снимок графика смен для типа правки «Расписание».
 
 Рисует JPEG-таблицу: месяц и год, колонки «день недели / число», строки —
-задействованные баристы, ячейки — время смены (цвет кодирует точку УЯ/ДЕ).
+задействованные баристы, ячейки — время смены (цвет кодирует точку присутствия).
 Файлы лежат в ``SNAPSHOTS_DIR`` и раздаются роутом ``/calendar/snapshots/{filename}``.
 
 Модуль намеренно переиспользуемый: тот же рендер понадобится, когда Telegram-бот
@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from datetime import date, datetime, timedelta
 from functools import lru_cache
@@ -20,6 +21,8 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
+
+from bot.web import work_points
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,16 +43,50 @@ WEEKDAYS = ["ПН", "ВТ", "СР", "ЧТ", "ПТ", "СБ", "ВС"]
 MONTHS = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
           "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"]
 
-# Палитра согласована с интерфейсом сайта.
+# Палитра согласована с интерфейсом сайта. Цвета точек приходят из БД
+# (`work_points.color`), это фолбэк для неизвестных/удалённых значений.
 BG = (16, 17, 15)
 PANEL = (32, 33, 29)
 PANEL_WEEKEND = (24, 25, 21)
 LINE = (58, 59, 52)
 TEXT = (222, 219, 210)
 MUTED = (150, 150, 140)
-UY_FILL = (150, 45, 40)
-DE_FILL = (40, 90, 170)
+FALLBACK_FILL = (123, 135, 148)
 WHITE = (255, 255, 255)
+DARK_INK = (16, 17, 15)
+
+
+def _hex_rgb(value: Any, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    """`#rrggbb` → RGB. Некорректный цвет не роняет публикацию снимка."""
+    match = re.fullmatch(r"#?([0-9a-fA-F]{6})", str(value or "").strip())
+    if not match:
+        return fallback
+    number = int(match.group(1), 16)
+    return ((number >> 16) & 255, (number >> 8) & 255, number & 255)
+
+
+def _ink_on(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Контрастный текст на плашке точки (по относительной яркости)."""
+    def channel(part: int) -> float:
+        value = part / 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    luminance = 0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2])
+    return DARK_INK if luminance > 0.45 else WHITE
+
+
+def _snapshot_points(connection: Connection) -> list[dict[str, Any]]:
+    rows = connection.execute(text("""
+        SELECT code, title_alias, title, color FROM work_points
+        WHERE is_active = 1 ORDER BY sort_order, id
+    """)).mappings().all()
+    return [{**dict(row), "rgb": _hex_rgb(row["color"], FALLBACK_FILL)} for row in rows]
+
+
+def _snapshot_project(connection: Connection) -> str:
+    row = connection.execute(text(
+        "SELECT value FROM web_app_settings WHERE key = 'app.project_name'"
+    )).first()
+    return (row[0] if row and row[0] else work_points.DEFAULT_PROJECT_NAME)
 
 # Публикация «Расписания» режется на снимки не длиннее этого окна: диапазон
 # 01–15 превращается в два снимка (01–08 и 09–15), чтобы таблица читалась на телефоне.
@@ -179,6 +216,9 @@ def render_schedule_snapshot(connection: Connection, user_ids: list[int], start_
 
     days = [start + timedelta(days=offset) for offset in range((end - start).days + 1)]
     shifts = _load_shifts(connection, user_ids, start, end)
+    point_rows = _snapshot_points(connection)
+    points_by_code = {str(row["code"]): row for row in point_rows}
+    project = _snapshot_project(connection)
 
     content_w = BASE_W - NAME_W - PAD * 2
     day_w = max(MIN_DAY_W, min(MAX_DAY_W, content_w // max(1, len(days))))
@@ -238,12 +278,13 @@ def render_schedule_snapshot(connection: Connection, user_ids: list[int], start_
                 weekend = day.weekday() >= 5
                 draw.rectangle(cell, fill=PANEL_WEEKEND if weekend else BG, outline=LINE)
                 continue
-            fill = UY_FILL if shift["point"] == "УЯ" else DE_FILL
+            fill = points_by_code.get(str(shift["point"]), {}).get("rgb", FALLBACK_FILL)
+            ink = _ink_on(fill)
             draw.rectangle(cell, fill=fill)
             center = left + day_w / 2
-            draw.text((center, top + row_h * 0.42), shift["start"], font=time_font, fill=WHITE, anchor="mm")
+            draw.text((center, top + row_h * 0.42), shift["start"], font=time_font, fill=ink, anchor="mm")
             if shift["end"]:
-                draw.text((center, top + row_h * 0.72), shift["end"], font=end_font, fill=(235, 235, 230), anchor="mm")
+                draw.text((center, top + row_h * 0.72), shift["end"], font=end_font, fill=ink, anchor="mm")
 
     # Сетка и подписи.
     for index in range(len(days) + 1):
@@ -257,12 +298,16 @@ def render_schedule_snapshot(connection: Connection, user_ids: list[int], start_
     # Легенда и время генерации.
     footer_y = head_bottom + row_h * len(employees) + FOOTER_H / 2
     swatch = 14
-    draw.rectangle([PAD, footer_y - swatch / 2, PAD + swatch, footer_y + swatch / 2], fill=UY_FILL)
-    draw.text((PAD + swatch + 7, footer_y), "УЯ", font=legend_font, fill=MUTED, anchor="lm")
-    draw.rectangle([PAD + 70, footer_y - swatch / 2, PAD + 70 + swatch, footer_y + swatch / 2], fill=DE_FILL)
-    draw.text((PAD + 70 + swatch + 7, footer_y), "ДЕ", font=legend_font, fill=MUTED, anchor="lm")
+    legend_x = PAD
+    for point in point_rows:
+        draw.rectangle([legend_x, footer_y - swatch / 2, legend_x + swatch, footer_y + swatch / 2],
+                       fill=point["rgb"])
+        draw.text((legend_x + swatch + 7, footer_y), point["title_alias"],
+                  font=legend_font, fill=MUTED, anchor="lm")
+        legend_x += swatch + 22 + draw.textlength(point["title_alias"], font=legend_font)
     stamp = datetime.now().strftime("%d.%m.%Y %H:%M")
-    draw.text((width - PAD, footer_y), f"НЕФТЬ · сформировано {stamp}", font=legend_font, fill=MUTED, anchor="rm")
+    draw.text((width - PAD, footer_y), f"{project} · сформировано {stamp}",
+              font=legend_font, fill=MUTED, anchor="rm")
 
     SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{datetime.now():%Y%m%d}-{datetime.now():%H%M%S}-{uuid.uuid4().hex[:10]}{EXTENSION}"

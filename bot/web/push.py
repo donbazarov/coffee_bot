@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import page_links
+from bot.web import page_links, work_points
 
 logger = logging.getLogger("bot.web.push")
 
@@ -241,7 +241,8 @@ def _deliver(engine: Engine, row: dict[str, Any], payload: dict[str, Any]) -> st
         return "error"
 
 
-def notification_payload(announcement: dict[str, Any]) -> dict[str, Any]:
+def notification_payload(announcement: dict[str, Any],
+                         project_name: str = work_points.DEFAULT_PROJECT_NAME) -> dict[str, Any]:
     """Текст уведомления и ссылка, по которой его откроет клиент.
 
     Ссылки на статьи (`@[Заголовок](kb:12)`) в уведомлении превращаются в
@@ -252,7 +253,7 @@ def notification_payload(announcement: dict[str, Any]) -> dict[str, Any]:
     if len(body) > MAX_BODY:
         body = body[: MAX_BODY - 1].rstrip() + "…"
     return {
-        "title": str(announcement.get("title") or "НЕФТЬ · Анонс")[:120],
+        "title": str(announcement.get("title") or f"{project_name} · Анонс")[:120],
         "body": body,
         "category": announcement.get("category"),
         "url": f"/?view=announcements&announcement={announcement.get('id')}",
@@ -299,7 +300,7 @@ def notify_category(engine: Engine, category: str, announcement: dict[str, Any],
                     exclude_user_id: int | None = None) -> int:
     """Рассылает уведомление о новом анонсе. Ошибки только логируются."""
     try:
-        payload = notification_payload(announcement)
+        payload = notification_payload(announcement, work_points.project_name(engine))
         delivered = 0
         for user_id in recipients(engine, category, exclude_user_id):
             delivered += send_to_user(engine, user_id, payload)

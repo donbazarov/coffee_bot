@@ -13,6 +13,66 @@ let editMode = false;
 // Глобальное состояние модулей (вкл/выкл разделов) и выбранный модуль панели управления.
 let modulesState = {};
 const controlState = { current: null, treeOpen: true };
+// Все точки (включая выключенные) для панели «Основное».
+const mainAdminState = { points: [] };
+// Настройки «Основного» и справочник точек: приходят с сервера, используются
+// всеми бейджами/фильтрами. byKey ищет и по коду, и по старому alias.
+let mainSettings = { project_name: '', default_accent: '' };
+const pointsState = { list: [], all: [], byKey: new Map() };
+// Спец-значение описаний напитков: смена в графике не найдена.
+const OTHER_POINT = 'другое';
+
+function pointKey(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function setPoints(list, all = null) {
+  pointsState.list = Array.isArray(list) ? list.filter((point) => point && point.code) : [];
+  const directory = Array.isArray(all) ? all : pointsState.list;
+  pointsState.all = directory.filter((point) => point && point.code);
+  pointsState.byKey = new Map();
+  // Индекс строится по ВСЕМ точкам: история может ссылаться на выключенную.
+  pointsState.all.forEach((point) => {
+    pointsState.byKey.set(pointKey(point.code), point);
+    pointsState.byKey.set(pointKey(point.title_alias), point);
+  });
+}
+
+function pointOf(value) {
+  return pointsState.byKey.get(pointKey(value)) || null;
+}
+
+function pointCode(value) {
+  return pointOf(value)?.code || String(value ?? '').trim();
+}
+
+function pointLabel(value) {
+  const point = pointOf(value);
+  return point ? point.title_alias : (value == null ? '' : String(value));
+}
+
+function pointTitle(value) {
+  const point = pointOf(value);
+  return point ? point.title : pointLabel(value);
+}
+
+function pointColor(value) {
+  return pointOf(value)?.color || '';
+}
+
+/* Инлайн-переменная цвета: все бейджи/ячейки красятся через color-mix. */
+function pointColorStyle(value) {
+  const color = pointColor(value);
+  return color ? ` style="--point-color:${escapeHtml(color)}"` : '';
+}
+
+function pointSwatch(value, extra = '') {
+  return `<i class="point-swatch ${extra}"${pointColorStyle(value)} aria-hidden="true"></i>`;
+}
+
+function pointBadge(value, extra = '') {
+  return `<span class="point-badge ${extra}"${pointColorStyle(value)}>${escapeHtml(pointLabel(value))}</span>`;
+}
 const managerRole = document.body.dataset.manager === 'true';
 const userRole = document.body.dataset.role || '';
 const isMentor = userRole === 'mentor';
@@ -663,7 +723,7 @@ async function fillQualityDrinks() {
 async function loadQualityActiveStaff() {
   const container = document.querySelector('#quality-active-staff');
   if (!container || qualityType !== 'drink') return;
-  const point = document.querySelector('#quality-point')?.value || 'ДЕ';
+  const point = document.querySelector('#quality-point')?.value || pointsState.list[0]?.code || '';
   container.innerHTML = '<span class="quality-staff-empty">Ищем бариста на смене…</span>';
   try {
     const data = await api(`/api/shifts/active-staff?point=${encodeURIComponent(point)}`);
@@ -959,9 +1019,8 @@ function renderDrinksQuality() {
   const cleanHtml = cleanliness.length
     ? `<div class="analytics-clean">${cleanliness.map((row) => {
         const percent = Math.max(2, Math.min(100, (Number(row.average) / 5) * 100));
-        const pointClass = row.point === 'УЯ' ? 'is-uy' : 'is-de';
         return `<div class="analytics-clean-row">
-          <span class="analytics-point-tag ${pointClass}">${escapeHtml(row.point)}</span>
+          <span class="analytics-point-tag"${pointColorStyle(row.point)}>${escapeHtml(pointLabel(row.point))}</span>
           <div class="analytics-bar"><i class="${analyticsScoreClass(row.average)}" style="width:${percent}%"></i></div>
           <b>${analyticsScore(row.average)}</b>
           <small>${Number(row.evaluations) || 0} оц.</small>
@@ -1002,9 +1061,8 @@ function renderShiftsReport() {
     const percent = plan > 0 ? Math.max(2, Math.min(100, (fact / plan) * 100)) : 0;
     const delta = Number(point.delta_hours) || 0;
     const quality = point.quality || {};
-    const pointClass = point.point === 'УЯ' ? 'is-uy' : 'is-de';
-    return `<article class="analytics-point ${pointClass}">
-      <div class="analytics-point-head"><span class="analytics-point-tag ${pointClass}">${escapeHtml(point.point)}</span><span class="analytics-point-shifts">${Number(point.shift_count) || 0} смен</span></div>
+    return `<article class="analytics-point"${pointColorStyle(point.point)}>
+      <div class="analytics-point-head"><span class="analytics-point-tag"${pointColorStyle(point.point)}>${escapeHtml(pointLabel(point.point))}</span><span class="analytics-point-shifts">${Number(point.shift_count) || 0} смен</span></div>
       <div class="analytics-point-hours"><strong>${fact.toFixed(1)}</strong><span>/ ${plan.toFixed(1)} ч</span></div>
       <div class="analytics-bar"><i class="${delta < 0 ? 'is-low' : 'is-high'}" style="width:${percent}%"></i></div>
       <div class="analytics-point-meta"><span>Δ ${delta > 0 ? '+' : ''}${delta.toFixed(1)} ч</span><span>ср. смена ${point.avg_shift_hours == null ? '—' : Number(point.avg_shift_hours).toFixed(1)} ч</span></div>
@@ -1240,7 +1298,7 @@ function openSessionDetail(item) {
     meta.innerHTML = `
       <div class="session-detail-fact"><span>Дата</span><strong>${escapeHtml(date)}</strong></div>
       <div class="session-detail-fact"><span>Наставник</span><strong>${escapeHtml(item.evaluator || '—')}</strong></div>
-      ${item.shift_point ? `<div class="session-detail-fact"><span>Точка</span><strong>${escapeHtml(item.shift_point)}</strong></div>` : ''}
+      ${item.shift_point ? `<div class="session-detail-fact"><span>Точка</span><strong>${escapeHtml(pointLabel(item.shift_point))}</strong></div>` : ''}
       <div class="session-detail-fact"><span>Предмет</span><strong>${subject}</strong></div>
       <div class="session-detail-fact"><span>Итог</span><strong class="session-detail-overall">${overall}</strong></div>
       <div class="session-detail-fact"><span>Опыт</span><strong>+${Number(item.xp_awarded || 0)} XP</strong></div>`;
@@ -1316,7 +1374,7 @@ function renderQualitySessions() {
       : escapeHtml(item.drink || 'Напиток');
     const category = item.category ? ` · ${escapeHtml(item.category)}` : '';
     const edited = item.updated_at ? ' · <span class="session-edited">изменено</span>' : '';
-    const point = item.shift_point ? `<span class="session-point">${escapeHtml(item.shift_point)}</span>` : '';
+    const point = item.shift_point ? `<span class="session-point">${escapeHtml(pointLabel(item.shift_point))}</span>` : '';
     // Наставник правит и удаляет; бариста открывает детальную карточку (read-only).
     const actions = canEdit
       ? `<div class="session-actions"><button class="icon-button session-edit" type="button" data-edit-id="${item.id}" aria-label="Изменить оценку" title="Изменить оценку"><svg class="icon" aria-hidden="true"><use href="#i-edit"></use></svg></button><button class="icon-button session-delete" type="button" data-delete-id="${item.id}" aria-label="Удалить оценку" title="Удалить оценку"><svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg></button></div>`
@@ -1366,7 +1424,7 @@ async function openQualityEditor(item) {
   if (editEmployee) editEmployee.value = String(item.employee_id || '');
 
   const pointSelect = document.querySelector('#quality-point');
-  if (pointSelect && item.shift_point) pointSelect.value = item.shift_point;
+  if (pointSelect && item.shift_point) pointSelect.value = pointCode(item.shift_point);
   document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((button) => {
     button.classList.toggle('is-selected', button.dataset.qualityType === item.evaluation_type);
   });
@@ -1534,10 +1592,6 @@ async function loadUsers() {
 
 /* --- Команда: суб-табы «Доступ и роли» / «Расчет часов» ---------------- */
 
-const WORKLOAD_POINTS = [
-  { code: 'УЯ', cls: 'is-uy' },
-  { code: 'ДЕ', cls: 'is-de' },
-];
 const SATURATION_LABEL = {
   plan: { overload: 'Перепланировано', normal: 'Норма', deficit: 'Недопланировано', unknown: 'Нет данных' },
   norms: { overload: 'Штат с запасом', normal: 'Штата хватает', deficit: 'Дефицит штата', unknown: 'Нет данных' },
@@ -1551,9 +1605,16 @@ let workloadState = null;
 let workloadRequiredTotal = 0;
 let workloadCursor = { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
 // Доля дней с пересменом (ползунок «n% дней с пересменом») — отдельно для каждой
-// точки. Стартовое положение приходит с сервера (настройка модуля «Команда»),
-// 0 — фолбэк, если ответ статистики ещё не получен.
-const workloadOverlap = { 'УЯ': 0, 'ДЕ': 0 };
+// точки. Ключи — коды из справочника `/api/settings/main`; стартовое положение
+// приходит с сервера (настройка модуля «Команда»), 0 — фолбэк.
+const workloadOverlap = {};
+let workloadDefaultShare = 0;
+
+function syncWorkloadPointState() {
+  const codes = new Set(pointsState.list.map((point) => point.code));
+  Object.keys(workloadOverlap).forEach((code) => { if (!codes.has(code)) delete workloadOverlap[code]; });
+  codes.forEach((code) => { if (!(code in workloadOverlap)) workloadOverlap[code] = workloadDefaultShare; });
+}
 
 function setText(selector, value) {
   const node = document.querySelector(selector);
@@ -1827,15 +1888,17 @@ function renderWorkloadTeam(employees) {
 function applyWorkloadOverlapDefault(state) {
   const raw = Number(state?.overlap_share_default);
   const share = Number.isFinite(raw) ? Math.min(100, Math.max(0, Math.round(raw / 5) * 5)) : 0;
-  WORKLOAD_POINTS.forEach((config) => { workloadOverlap[config.code] = share; });
+  workloadDefaultShare = share;
+  syncWorkloadPointState();
+  pointsState.list.forEach((point) => { workloadOverlap[point.code] = share; });
 }
 
-function pointCard(point, config) {
-  const share = workloadOverlap[point];
+function pointCard(point) {
+  const share = workloadOverlap[point.code] ?? 0;
   return `
-    <section class="panel settings-panel workload-point ${config.cls}" data-point="${point}">
+    <section class="panel settings-panel workload-point" data-point="${escapeHtml(point.code)}"${pointColorStyle(point.code)}>
       <div class="panel-heading">
-        <div><p class="eyebrow">ТОЧКА</p><h3>${point}</h3></div>
+        <div><p class="eyebrow">ТОЧКА</p><h3>${escapeHtml(point.title_alias)}</h3></div>
         <span class="workload-point-total"><strong data-point-total>—</strong><small>часов всего</small></span>
       </div>
       <div class="workload-point-grid">
@@ -1846,7 +1909,7 @@ function pointCard(point, config) {
       </div>
       <label class="workload-slider">
         <span class="workload-slider-value"><b data-point-share>${share}%</b> дней с пересменом</span>
-        <input type="range" min="0" max="100" step="5" value="${share}" data-point-range data-point-code="${point}" aria-label="${point}: доля дней с пересменом">
+        <input type="range" min="0" max="100" step="5" value="${share}" data-point-range data-point-code="${escapeHtml(point.code)}" aria-label="${escapeHtml(point.title_alias)}: доля дней с пересменом">
       </label>
     </section>`;
 }
@@ -1854,7 +1917,7 @@ function pointCard(point, config) {
 function renderWorkloadPoints() {
   const container = document.querySelector('#workload-points');
   if (!container || !workloadState) return;
-  container.innerHTML = WORKLOAD_POINTS.map((config) => pointCard(config.code, config)).join('');
+  container.innerHTML = pointsState.list.map((point) => pointCard(point)).join('');
   recalcWorkloadPoints();
   container.querySelectorAll('[data-point-range]').forEach((input) => {
     input.addEventListener('input', () => {
@@ -1870,7 +1933,7 @@ function renderWorkloadPoints() {
 function pointNumbers(code) {
   const means = workloadState.points[code] || {};
   const calendar = workloadState.calendar;
-  const share = workloadOverlap[code] / 100;
+  const share = (workloadOverlap[code] ?? 0) / 100;
   const mult = 2 - share;
   const morning = calendar.working_days * (means.morning_weekday_hours || 0) * mult;
   const weekend = calendar.holidays * (means.morning_weekend_hours || 0) * mult;
@@ -1882,10 +1945,11 @@ function pointNumbers(code) {
 function recalcWorkloadPoints() {
   if (!workloadState) return;
   let grand = 0;
-  WORKLOAD_POINTS.forEach((config) => {
-    const card = document.querySelector(`.workload-point[data-point="${config.code}"]`);
+  pointsState.list.forEach((point) => {
+    const code = point.code;
+    const card = document.querySelector(`.workload-point[data-point="${code}"]`);
     if (!card) return;
-    const numbers = pointNumbers(config.code);
+    const numbers = pointNumbers(code);
     grand += numbers.total;
     const set = (selector, value) => { const node = card.querySelector(selector); if (node) node.textContent = value; };
     set('[data-point-morning]', workloadHours(numbers.morning));
@@ -1893,7 +1957,7 @@ function recalcWorkloadPoints() {
     set('[data-point-overlap]', workloadHours(numbers.overlap));
     set('[data-point-evening]', workloadHours(numbers.evening));
     set('[data-point-total]', workloadHours(numbers.total));
-    set('[data-point-share]', `${workloadOverlap[config.code]}%`);
+    set('[data-point-share]', `${workloadOverlap[code] ?? 0}%`);
   });
   workloadRequiredTotal = Math.round(grand);
   renderWorkloadRequired();
@@ -2032,7 +2096,7 @@ function renderUpcoming(shifts) {
   list.innerHTML = shifts.map((shift) => `
     <div class="upcoming-item"><span class="upcoming-date">${escapeHtml(displayDate(shift.date))}</span>
       <span class="upcoming-time">${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</span>
-      <span class="upcoming-point">${escapeHtml(shift.point)}</span></div>`).join('');
+      <span class="upcoming-point"${pointColorStyle(shift.point)}>${escapeHtml(pointLabel(shift.point))}</span></div>`).join('');
 }
 
 function updateEditControls() {
@@ -2087,9 +2151,9 @@ function setDraftCell(userId, date, value, redraw = true) {
 
 function describeChange(row) {
   const date = displayDate(row.shift_date, true);
-  if (row.action === 'created') return `${date} · ${row.employee_name}: ${row.new_start_time}–${row.new_end_time}, ${row.new_point}`;
-  if (row.action === 'deleted') return `${date} · ${row.employee_name}: выходной (было ${row.old_start_time}–${row.old_end_time}, ${row.old_point})`;
-  return `${date} · ${row.employee_name}: ${row.old_start_time}–${row.old_end_time}, ${row.old_point} → ${row.new_start_time}–${row.new_end_time}, ${row.new_point}`;
+  if (row.action === 'created') return `${date} · ${row.employee_name}: ${row.new_start_time}–${row.new_end_time}, ${pointLabel(row.new_point)}`;
+  if (row.action === 'deleted') return `${date} · ${row.employee_name}: выходной (было ${row.old_start_time}–${row.old_end_time}, ${pointLabel(row.old_point)})`;
+  return `${date} · ${row.employee_name}: ${row.old_start_time}–${row.old_end_time}, ${pointLabel(row.old_point)} → ${row.new_start_time}–${row.new_end_time}, ${pointLabel(row.new_point)}`;
 }
 
 /* --- Перенос смен перетаскиванием ----------------------------------------
@@ -2121,7 +2185,7 @@ function startShiftDrag(event, cell) {
   if (!shift) return false;
   const ghost = document.createElement('div');
   ghost.className = 'shift-drag-ghost';
-  ghost.innerHTML = `<strong>${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</strong><span>${escapeHtml(shift.point)}</span>`;
+  ghost.innerHTML = `<strong>${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</strong><span>${escapeHtml(pointLabel(shift.point))}</span>`;
   ghost.hidden = true;
   document.body.appendChild(ghost);
   shiftDrag = {
@@ -2453,7 +2517,7 @@ function touchDistance(touches) {
 /* --- Шаблоны смен и тип правки ---------------------------------------- */
 
 function templateLabel(template) {
-  return `${template.name} · ${template.start}–${template.end} ${template.point}`;
+  return `${template.name} · ${template.start}–${template.end} ${pointLabel(template.point)}`;
 }
 
 /* Флаги типа смены: по ним «Расчет часов» раскладывает нагрузку УЯ/ДЕ. */
@@ -2525,8 +2589,7 @@ function applyActiveTemplateToSelection() {
 
 function templateClass(template, active) {
   if (template.builtin) return `matrix-template is-dayoff ${active ? 'is-active' : ''}`;
-  const point = template.point === 'УЯ' ? 'point-uy' : 'point-de';
-  return `matrix-template ${point} ${active ? 'is-active' : ''}`;
+  return `matrix-template ${active ? 'is-active' : ''}`;
 }
 
 function renderTemplateBar() {
@@ -2538,7 +2601,7 @@ function renderTemplateBar() {
   const buttons = templates.map((template) => {
     const active = activeTemplate && activeTemplate.id === template.id;
     const title = template.builtin ? 'Выходной: снять смену' : templateLabel(template);
-    return `<button type="button" class="${templateClass(template, active)}" data-template-id="${template.id}" title="${escapeHtml(title)}">${escapeHtml(template.name)}</button>`;
+    return `<button type="button" class="${templateClass(template, active)}" data-template-id="${template.id}"${pointColorStyle(template.point)} title="${escapeHtml(title)}">${escapeHtml(template.name)}</button>`;
   }).join('');
   const hint = shiftTemplates.length ? '' : '<span class="matrix-template-empty">свои шаблоны — в личном кабинете</span>';
   bar.innerHTML = `<span class="matrix-templates-label">ШАБЛОНЫ</span>${buttons}${hint}`;
@@ -2592,8 +2655,8 @@ function renderTemplateSettings() {
   list.innerHTML = shiftTemplates.map((template, index) => `
     <div class="template-row" data-template-row="${template.id}" draggable="true">
       <span class="template-drag" title="Перетащите, чтобы изменить порядок" aria-hidden="true">⠿</span>
-      <span class="template-row-name"><i class="point-swatch ${template.point === 'УЯ' ? 'point-uy' : 'point-de'}"></i>${escapeHtml(template.name)}</span>
-      <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(template.point)}${templateFlagTags(template)}</span>
+      <span class="template-row-name">${pointSwatch(template.point)}${escapeHtml(template.name)}</span>
+      <span class="template-row-meta">${escapeHtml(template.start)}–${escapeHtml(template.end)} · ${escapeHtml(pointLabel(template.point))}${templateFlagTags(template)}</span>
       <span class="template-row-actions">
         ${templateReorderMode ? `
           <button class="button button-quiet template-move" type="button" data-template-move="up" data-template-id="${template.id}" ${index === 0 ? 'disabled' : ''} title="Выше">▲</button>
@@ -2611,7 +2674,7 @@ function resetTemplateForm() {
   if (!form) return;
   form.reset();
   form.elements.template_id.value = '';
-  form.elements.point.value = 'УЯ';
+  form.elements.point.value = pointsState.list[0]?.code || '';
   writeTemplateFlags(form, null);
   const error = document.querySelector('#template-form-error');
   if (error) { error.textContent = ''; error.hidden = true; }
@@ -2628,7 +2691,7 @@ function editTemplate(template) {
   form.elements.name.value = template.name;
   form.elements.start_time.value = template.start;
   form.elements.end_time.value = template.end;
-  form.elements.point.value = template.point;
+  form.elements.point.value = pointCode(template.point);
   writeTemplateFlags(form, template);
   const submit = document.querySelector('#template-submit');
   if (submit) submit.textContent = 'Сохранить шаблон';
@@ -2823,13 +2886,13 @@ function renderCalendar(data) {
       const shift = pending === null ? null : pending ? {
         ...cellShifts[0], start: pending.start_time, end: pending.end_time, ...pending,
       } : cellShifts[0];
-      const pointClass = shift?.point === 'УЯ' ? 'point-uy-cell' : shift ? 'point-de-cell' : '';
+      const pointClass = shift ? 'point-cell' : '';
       const shiftContents = shift
-        ? `<span class="matrix-shift-time">${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</span><span class="matrix-shift-compact">${escapeHtml(compactHour(shift.start))}</span><span class="matrix-shift-point">${escapeHtml(shift.point)}</span>${cellShifts.length > 1 ? `<span class="matrix-shift-extra">+${cellShifts.length - 1}</span>` : ''}`
+        ? `<span class="matrix-shift-time">${escapeHtml(shift.start)}–${escapeHtml(shift.end)}</span><span class="matrix-shift-compact">${escapeHtml(compactHour(shift.start))}</span><span class="matrix-shift-point">${escapeHtml(pointLabel(shift.point))}</span>${cellShifts.length > 1 ? `<span class="matrix-shift-extra">+${cellShifts.length - 1}</span>` : ''}`
         : '<span class="matrix-empty-mark">Вых</span>';
       const rowData = `data-cell-date="${cellDate}" data-employee-id="${employee.id}" ${editMode ? `data-matrix-cell data-matrix-row="${rowIndex}" data-matrix-col="${day - 1}"` : ''}`;
       const pendingClass = pending !== undefined ? 'is-pending' : '';
-      return `<td class="matrix-cell-wrap ${cellDate === today ? 'is-today' : ''}"><button type="button" class="matrix-cell ${shift ? 'has-shift' : 'is-empty'} ${pointClass} ${pendingClass}" ${editMode ? rowData : ''} data-cell-date="${cellDate}" data-employee-id="${employee.id}" data-shift-id="${shift?.id || ''}" aria-label="${escapeHtml(employee.name)}, ${day} ${monthNames[data.month - 1]}${shift ? `, ${shift.start}–${shift.end}, ${shift.point}` : ', выходной'}">${shiftContents}</button></td>`;
+      return `<td class="matrix-cell-wrap ${cellDate === today ? 'is-today' : ''}"><button type="button" class="matrix-cell ${shift ? 'has-shift' : 'is-empty'} ${pointClass} ${pendingClass}"${shift ? pointColorStyle(shift.point) : ''} ${editMode ? rowData : ''} data-cell-date="${cellDate}" data-employee-id="${employee.id}" data-shift-id="${shift?.id || ''}" aria-label="${escapeHtml(employee.name)}, ${day} ${monthNames[data.month - 1]}${shift ? `, ${shift.start}–${shift.end}, ${pointLabel(shift.point)}` : ', выходной'}">${shiftContents}</button></td>`;
     }).join('');
     return `<tr><th class="matrix-employee sticky-column"><span class="matrix-avatar">${avatarMarkup(employee.id, employee.avatar_rev, employee.name)}</span><span class="matrix-employee-name" title="${escapeHtml(employee.name)}">${escapeHtml(employee.name)}</span></th>${cells}</tr>`;
   }).join('');
@@ -2991,7 +3054,7 @@ function openShiftDialog(date, shift = null, employeeId = null) {
     form.elements.user_id.value = shift.employee_id;
     form.elements.start_time.value = shift.start;
     form.elements.end_time.value = shift.end;
-    form.querySelector(`input[name="point"][value="${shift.point}"]`).checked = true;
+    form.querySelector(`input[name="point"][value="${pointCode(shift.point)}"]`).checked = true;
   }
   document.querySelector('#delete-shift-button').textContent = 'Выходной';
   dialog.showModal();
@@ -3454,6 +3517,12 @@ const DEFAULT_ACCENT = '#f47369';
 const ACCENT_PRESETS = ['#f47369', '#f4a259', '#e9c46a', '#2a9d8f', '#4a7ede', '#9b6bd6'];
 const GLASS_KEY = 'neft-glass';
 
+/* Дефолтный акцент проекта: пока пользователь не выбрал свой, интерфейс
+   следует за настройкой «Основное» (server: app.default_accent). */
+function defaultAccent() {
+  return validAccent(mainSettings.default_accent) ? mainSettings.default_accent : DEFAULT_ACCENT;
+}
+
 function storedItem(key) { try { return localStorage.getItem(key); } catch (error) { return null; } }
 function storeItem(key, value) { try { localStorage.setItem(key, value); } catch (error) { /* приватный режим */ } }
 
@@ -3514,7 +3583,7 @@ function syncAppearanceControls() {
   const pref = storedItem(THEME_KEY) || 'system';
   document.querySelectorAll('[data-theme-choice]').forEach((button) => button.classList.toggle('is-selected', button.dataset.themeChoice === pref));
   const storedAccent = String(storedItem(ACCENT_KEY) || '').toLowerCase();
-  const current = validAccent(storedAccent) ? storedAccent : DEFAULT_ACCENT;
+  const current = validAccent(storedAccent) ? storedAccent : defaultAccent();
   document.querySelectorAll('#accent-row [data-accent]').forEach((swatch) => swatch.classList.toggle('is-selected', swatch.dataset.accent === current));
 }
 
@@ -3528,7 +3597,17 @@ function validAccent(value) {
 
 function applyServerAppearance(prefs) {
   if (prefs && prefs.theme) { storeItem(THEME_KEY, prefs.theme); applyThemePreference(prefs.theme); }
-  if (prefs && validAccent(prefs.accent)) { storeItem(ACCENT_KEY, prefs.accent); applyAccent(prefs.accent); }
+  if (prefs && validAccent(prefs.accent)) {
+    if (prefs.accent_custom) {
+      // Явный выбор пользователя (сохранён в аккаунте) — запоминаем локально.
+      storeItem(ACCENT_KEY, prefs.accent);
+      applyAccent(prefs.accent);
+    } else if (!storedItem(ACCENT_KEY)) {
+      // Пользователь ничего не выбирал — применяем дефолт проекта, но НЕ
+      // записываем его как локальный выбор, иначе смена дефолта не подхватится.
+      applyAccent(prefs.accent);
+    }
+  }
   syncAppearanceControls();
 }
 
@@ -3540,11 +3619,11 @@ function renderAccentSwatches() {
   const row = document.querySelector('#accent-row');
   if (!row) return;
   const storedAccent = String(storedItem(ACCENT_KEY) || '').toLowerCase();
-  const current = validAccent(storedAccent) ? storedAccent : DEFAULT_ACCENT;
+  const current = validAccent(storedAccent) ? storedAccent : defaultAccent();
   const swatches = ACCENT_PRESETS
     .map((color) => `<button type="button" class="accent-swatch" style="--swatch:${color}" data-accent="${color}" aria-label="Акцент ${color}"></button>`)
     .join('');
-  row.innerHTML = `${swatches}<label class="accent-custom">Свой<input type="color" id="accent-custom-input" value="${/^#[0-9a-f]{6}$/.test(current) ? current : DEFAULT_ACCENT}" aria-label="Свой акцентный цвет"></label>`;
+  row.innerHTML = `${swatches}<label class="accent-custom">Свой<input type="color" id="accent-custom-input" value="${validAccent(current) ? current : DEFAULT_ACCENT}" aria-label="Свой акцентный цвет"></label>`;
   row.querySelectorAll('[data-accent]').forEach((swatch) => swatch.addEventListener('click', () => {
     storeItem(ACCENT_KEY, swatch.dataset.accent);
     applyAccent(swatch.dataset.accent);
@@ -3578,6 +3657,109 @@ function setupAppearance() {
   renderAccentSwatches();
   syncAppearanceControls();
   setupGlass();
+}
+
+/* --- «Основное»: бренд, дефолтный акцент и точки ------------------------- */
+
+async function loadMainSettings() {
+  try {
+    // Активные точки приходят с настройками, полный справочник — отдельно:
+    // история графика/оценок может ссылаться на уже выключенную точку.
+    const [data, directory] = await Promise.all([
+      api('/api/settings/main'),
+      api('/api/points'),
+    ]);
+    mainSettings = {
+      project_name: data.project_name || '',
+      default_accent: data.default_accent || '',
+    };
+    setPoints(data.points || [], directory.points || []);
+  } catch (error) {
+    // Не смогли прочитать настройки — интерфейс остаётся на встроенных
+    // значениях, точки подтянутся при следующем входе.
+    setPoints([]);
+  }
+  applyBrand();
+  applyDefaultAccent();
+  refreshPointUi();
+}
+
+function applyBrand() {
+  const name = mainSettings.project_name || 'Crew Desk';
+  document.title = `${name} · Crew Desk`;
+  document.querySelectorAll('[data-brand-name]').forEach((node) => {
+    const small = node.querySelector('small');
+    node.textContent = name;
+    if (small) node.appendChild(small);
+  });
+  document.querySelectorAll('[data-brand-footer]').forEach((node) => {
+    node.textContent = `${name} / CREW DESK`;
+  });
+  document.querySelectorAll('[data-brand-pwa]').forEach((node) => {
+    node.textContent = `ПРИЛОЖЕНИЕ ${name.toUpperCase()}`;
+  });
+  document.querySelectorAll('[data-brand-link]').forEach((node) => {
+    node.setAttribute('aria-label', `${name}, главная`);
+  });
+  const apple = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+  if (apple) apple.setAttribute('content', name);
+}
+
+/* Дефолт проекта применяется, только если пользователь не выбрал акцент
+   локально (localStorage) — личный выбор всегда приоритетнее. */
+function applyDefaultAccent() {
+  if (storedItem(ACCENT_KEY)) return;
+  applyAccent(defaultAccent());
+  syncAppearanceControls();
+}
+
+function renderCalendarLegend() {
+  const legend = document.querySelector('#calendar-legend');
+  if (!legend) return;
+  const items = pointsState.list.map((point) =>
+    `<span>${pointSwatch(point.code)}${escapeHtml(point.title_alias)}</span>`).join('');
+  legend.innerHTML = `${items}<span class="legend-note">Время локальное</span>`;
+}
+
+function renderPointPicker(container, autoSelect) {
+  if (!container) return;
+  const current = container.querySelector('input[name="point"]:checked')?.value || '';
+  const selected = pointCode(current) || (autoSelect ? pointsState.list[0]?.code : '');
+  container.innerHTML = `<legend>Точка</legend>${pointsState.list.map((point) => {
+    const checked = point.code === selected ? ' checked' : '';
+    return `<label class="point-option"${pointColorStyle(point.code)}><input type="radio" name="point" value="${escapeHtml(point.code)}"${checked} required><span>${pointSwatch(point.code)}${escapeHtml(point.title_alias)}</span></label>`;
+  }).join('')}`;
+}
+
+function renderPointPickers() {
+  renderPointPicker(document.querySelector('#template-form .point-picker'), true);
+  renderPointPicker(document.querySelector('#shift-form .point-picker'), false);
+}
+
+function renderQualityPointOptions() {
+  const select = document.querySelector('#quality-point');
+  if (!select) return;
+  const current = pointCode(select.value);
+  select.innerHTML = pointsState.list.map((point) =>
+    `<option value="${escapeHtml(point.code)}">${escapeHtml(point.title_alias)}</option>`).join('');
+  if (pointsState.list.some((point) => point.code === current)) select.value = current;
+  else if (pointsState.list[0]) select.value = pointsState.list[0].code;
+}
+
+/* Перерисовка всех мест, где точки показываются или выбираются. */
+function refreshPointUi() {
+  renderCalendarLegend();
+  renderPointPickers();
+  renderQualityPointOptions();
+  syncWorkloadPointState();
+  if (workloadState) renderWorkloadPoints();
+  if (calendarState) renderCalendar(calendarState);
+  renderTemplateBar();
+  renderTemplateSettings();
+  if (drinkState.loaded) renderDrinkFilters();
+  if (analyticsState.drinks) renderDrinksQuality();
+  if (analyticsState.shifts) renderShiftsReport();
+  if (qualitySessionsState.items.length) renderQualitySessions();
 }
 
 /* --- Профиль: имя и фото ------------------------------------------------ */
@@ -7170,7 +7352,6 @@ function setupMediaViewer() {
 }
 /* --- Описание напитков -------------------------------------------------- */
 
-const DRINK_POINT_LABELS = { 'ДЕ': 'Декабристов', 'УЯ': 'Университетская', 'другое': 'Другое' };
 const DRINK_ITEM_LABELS = { 'черный кофе': 'Чёрный кофе', 'кофе с молоком': 'Молочный напиток' };
 const DRINK_LABELS = { acidity: 'Кислотность', sweetness: 'Сладость', bitterness: 'Горечь' };
 const drinkState = {
@@ -7185,7 +7366,8 @@ const drinkState = {
 const drinkCarousel = { index: 0 };
 
 function drinkPointLabel(point) {
-  return DRINK_POINT_LABELS[point] || point || 'Другое';
+  if (point === OTHER_POINT) return 'Другое';
+  return pointTitle(point) || 'Другое';
 }
 
 function formatDrinkDate(value) {
@@ -7734,7 +7916,7 @@ function fillDrinkShift(shift, options) {
   if (pointSelect) {
     pointSelect.innerHTML = (options.points || []).map((point) =>
       `<option value="${escapeHtml(point)}">${escapeHtml(drinkPointLabel(point))}</option>`).join('');
-    pointSelect.value = shift.point || 'другое';
+    pointSelect.value = pointCode(shift.point) || OTHER_POINT;
   }
   const partnerSelect = document.querySelector('#drink-partner');
   if (partnerSelect) {
@@ -9946,6 +10128,181 @@ function ensureControlSelection() {
   if (controlState.current) selectControlModule(controlState.current);
 }
 
+/* --- «Основное»: форма бренда и CRUD точек -------------------------------- */
+
+function applyPointsList(points) {
+  mainAdminState.points = Array.isArray(points) ? points : [];
+  setPoints(mainAdminState.points.filter((point) => point.is_active), mainAdminState.points);
+  refreshPointUi();
+  renderPointsAdmin();
+}
+
+async function loadPointsAdmin() {
+  try {
+    const data = await api('/api/points');
+    applyPointsList(data.points || []);
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+function renderPointsAdmin() {
+  const list = document.querySelector('#main-points-list');
+  if (!list) return;
+  if (!mainAdminState.points.length) {
+    list.innerHTML = '<p class="main-points-empty">Точек пока нет — добавьте первую.</p>';
+    return;
+  }
+  list.innerHTML = mainAdminState.points.map((point) => `
+    <div class="main-point-row"${pointColorStyle(point.code)}>
+      <span class="main-point-swatch" aria-hidden="true"></span>
+      <span class="main-point-copy">
+        <strong>${escapeHtml(point.title_alias)} · ${escapeHtml(point.code)}</strong>
+        <small>${escapeHtml(point.title)} · порядок ${Number(point.sort_order) || 0}</small>
+      </span>
+      <span class="main-point-state${point.is_active ? ' is-on' : ''}">${point.is_active ? 'Активна' : 'Выключена'}</span>
+      <span class="main-point-actions">
+        <button class="button button-quiet" type="button" data-point-edit="${point.id}">Изменить</button>
+        <button class="button button-quiet" type="button" data-point-delete="${point.id}">Удалить</button>
+      </span>
+    </div>`).join('');
+}
+
+function openPointDialog(point = null) {
+  const dialog = document.querySelector('#point-dialog');
+  const form = document.querySelector('#point-form');
+  if (!dialog || !form) return;
+  form.reset();
+  form.elements.point_id.value = point ? String(point.id) : '';
+  form.elements.code.value = point?.code || '';
+  form.elements.title_alias.value = point?.title_alias || '';
+  form.elements.title.value = point?.title || '';
+  form.elements.color.value = point?.color || '#2a9d8f';
+  form.elements.sort_order.value = point?.sort_order ?? 0;
+  form.elements.is_active.checked = point ? Boolean(point.is_active) : true;
+  const title = document.querySelector('#point-dialog-title');
+  if (title) title.textContent = point ? 'Изменить точку' : 'Новая точка';
+  const remove = document.querySelector('#point-delete');
+  if (remove) remove.hidden = !point;
+  const error = document.querySelector('#point-form-error');
+  if (error) { error.textContent = ''; error.hidden = true; }
+  dialog.showModal();
+}
+
+function setupMainSettings() {
+  const form = document.querySelector('#main-settings-form');
+  if (form && !form.dataset.bound) {
+    form.dataset.bound = '1';
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const error = form.querySelector('.template-form-error');
+      if (error) error.hidden = true;
+      const submit = form.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      try {
+        const data = await api('/api/settings/main', {
+          method: 'PUT',
+          body: JSON.stringify({
+            project_name: form.elements.project_name.value.trim(),
+            default_accent: form.elements.default_accent.value,
+          }),
+        });
+        mainSettings = {
+          project_name: data.project_name || mainSettings.project_name,
+          default_accent: data.default_accent || mainSettings.default_accent,
+        };
+        applyBrand();
+        // Пока пользователь не выбрал свой акцент, следуем за проектом.
+        if (!storedItem(ACCENT_KEY)) applyAccent(defaultAccent());
+        syncAppearanceControls();
+        await loadPointsAdmin();
+        showToast('Основное сохранено');
+      } catch (requestError) {
+        if (error) { error.textContent = requestError.message; error.hidden = false; }
+        else showToast(requestError.message);
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+  }
+
+  const add = document.querySelector('#main-point-add');
+  if (add && !add.dataset.bound) {
+    add.dataset.bound = '1';
+    add.addEventListener('click', () => openPointDialog());
+  }
+
+  const list = document.querySelector('#main-points-list');
+  if (list && !list.dataset.bound) {
+    list.dataset.bound = '1';
+    list.addEventListener('click', (event) => {
+      const edit = event.target.closest('[data-point-edit]');
+      if (edit) {
+        const point = mainAdminState.points.find((item) => String(item.id) === edit.dataset.pointEdit);
+        if (point) openPointDialog(point);
+        return;
+      }
+      const remove = event.target.closest('[data-point-delete]');
+      if (remove) removePoint(Number(remove.dataset.pointDelete));
+    });
+  }
+
+  const pointForm = document.querySelector('#point-form');
+  if (pointForm && !pointForm.dataset.bound) {
+    pointForm.dataset.bound = '1';
+    pointForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const error = document.querySelector('#point-form-error');
+      if (error) error.hidden = true;
+      const submit = pointForm.querySelector('button[type="submit"]');
+      if (submit) submit.disabled = true;
+      const pointId = pointForm.elements.point_id.value;
+      const payload = {
+        code: pointForm.elements.code.value.trim().toLowerCase(),
+        title_alias: pointForm.elements.title_alias.value.trim(),
+        title: pointForm.elements.title.value.trim(),
+        color: pointForm.elements.color.value,
+        sort_order: Number(pointForm.elements.sort_order.value) || 0,
+        is_active: pointForm.elements.is_active.checked,
+      };
+      try {
+        const data = pointId
+          ? await api(`/api/points/${pointId}`, { method: 'PUT', body: JSON.stringify(payload) })
+          : await api('/api/points', { method: 'POST', body: JSON.stringify(payload) });
+        applyPointsList(data.points || []);
+        document.querySelector('#point-dialog')?.close();
+        showToast(pointId ? 'Точка обновлена' : 'Точка добавлена');
+      } catch (requestError) {
+        if (error) { error.textContent = requestError.message; error.hidden = false; }
+        else showToast(requestError.message);
+      } finally {
+        if (submit) submit.disabled = false;
+      }
+    });
+  }
+
+  document.querySelector('#point-delete')?.addEventListener('click', () => {
+    const pointId = pointForm?.elements.point_id.value;
+    if (pointId) removePoint(Number(pointId));
+  });
+
+  loadPointsAdmin();
+}
+
+async function removePoint(pointId) {
+  const point = mainAdminState.points.find((item) => Number(item.id) === pointId);
+  if (!point) return;
+  if (!window.confirm(`Удалить точку «${point.title_alias}»? Если она используется в графике, удаление будет отклонено.`)) return;
+  try {
+    const data = await api(`/api/points/${pointId}`, { method: 'DELETE' });
+    applyPointsList(data.points || []);
+    document.querySelector('#point-dialog')?.close();
+    showToast('Точка удалена');
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 function setupControlPanel() {
   const nav = document.querySelector('#control-nav');
   if (!nav) return;
@@ -10383,7 +10740,10 @@ function setupDashboard() {
   document.querySelectorAll('.dialog-close').forEach((button) => button.addEventListener('click', () => button.closest('dialog')?.close()));
 
   updateEditControls();
-  loadPreferences();
+  // Бренд/акцент/точки — раньше остальных загрузок: от справочника зависят
+  // подписи календаря, фильтров и карточек. Личные настройки применяем после,
+  // чтобы явный выбор пользователя перекрыл дефолт проекта.
+  loadMainSettings().finally(() => loadPreferences());
   loadModules().then(() => {
     if (!modulesState.calendar || modulesState.calendar.enabled) loadCalendar();
     if (managerRole && location.hash === '#control') setView('control');
@@ -10394,6 +10754,7 @@ function setupDashboard() {
     setupShiftTemplates();
     setupChannelSettings();
     setupTeamTabs();
+    setupMainSettings();
   }
 }
 

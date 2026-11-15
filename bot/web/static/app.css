@@ -4,7 +4,7 @@
    блокируется/висит, и страница оставалась без стилей. */
 
 /* =========================================================================
-   Дизайн-система НЕФТЬ · токены, темы, акценты
+   Дизайн-система Crew Desk · токены, темы, акценты
 
    Тема применяется атрибутом data-theme на <html> (значения light|dark —
    «система» разворачивается в конкретную тему в theme-boot.js до первой
@@ -442,7 +442,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .calendar-legend { display: flex; align-items: center; gap: 17px; margin: -7px 0 12px; color: var(--muted); font: 10px var(--mono); }
 .calendar-legend > span { display: inline-flex; align-items: center; gap: 7px; }
 .legend-note { margin-left: auto; color: var(--dim); }
-.point-swatch { display: inline-block; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+.point-swatch { display: inline-block; width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: var(--point-color, var(--muted)); }
 .point-uy { background: var(--point-uy); box-shadow: 0 0 9px color-mix(in srgb, var(--point-uy) 28%, transparent); }
 .point-de { background: var(--point-de); box-shadow: 0 0 9px color-mix(in srgb, var(--point-de) 28%, transparent); }
 .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); border-top: 1px solid var(--line-strong); border-left: 1px solid var(--line-strong); }
@@ -488,6 +488,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .point-option span { display: flex; min-height: 42px; align-items: center; gap: 9px; padding: 0 12px; border: 1px solid var(--line); background: var(--field-bg); color: var(--muted); }
 .point-option-uy input:checked + span { border-color: color-mix(in srgb, var(--point-uy) 60%, transparent); background: color-mix(in srgb, var(--point-uy) 9%, transparent); color: var(--text); }
 .point-option-de input:checked + span { border-color: color-mix(in srgb, var(--point-de) 60%, transparent); background: color-mix(in srgb, var(--point-de) 9%, transparent); color: var(--text); }
+.point-option input:checked + span { border-color: color-mix(in srgb, var(--point-color, var(--accent)) 60%, transparent); background: color-mix(in srgb, var(--point-color, var(--accent)) 9%, transparent); color: var(--text); }
 .feed-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .feed-status { min-height: 18px; color: var(--muted); font-size: 11px; }
 
@@ -562,6 +563,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .matrix-cell.has-shift { cursor: pointer; }
 .matrix-cell.has-shift.point-uy-cell { background: color-mix(in srgb, var(--point-uy) 48%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--point-uy) 34%, transparent); }
 .matrix-cell.has-shift.point-de-cell { background: color-mix(in srgb, var(--point-de) 48%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--point-de) 34%, transparent); }
+.matrix-cell.has-shift.point-cell { background: color-mix(in srgb, var(--point-color, var(--muted)) 48%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--point-color, var(--muted)) 34%, transparent); }
 .matrix-cell.is-own { box-shadow: inset 0 0 0 1px rgba(var(--hl), .14); }
 .matrix-shift-time { font: 8px var(--mono); white-space: nowrap; }
 .matrix-shift-point { position: absolute; right: 2px; bottom: 2px; color: rgba(255,255,255,.58); font: 7px var(--mono); }
@@ -644,6 +646,8 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .matrix-template.point-de { border-color: color-mix(in srgb, var(--point-de) 42%, transparent); background: color-mix(in srgb, var(--point-de) 16%, transparent); color: var(--point-de-ink); }
 .matrix-template.point-uy.is-active { border-color: var(--point-uy); background: color-mix(in srgb, var(--point-uy) 34%, transparent); color: #fff; }
 .matrix-template.point-de.is-active { border-color: var(--point-de); background: color-mix(in srgb, var(--point-de) 34%, transparent); color: #fff; }
+.matrix-template:not(.is-dayoff) { border-color: color-mix(in srgb, var(--point-color, var(--line)) 42%, transparent); background: color-mix(in srgb, var(--point-color, var(--surface)) 16%, transparent); color: var(--text); }
+.matrix-template:not(.is-dayoff).is-active { border-color: var(--point-color, var(--accent)); background: color-mix(in srgb, var(--point-color, var(--accent)) 34%, transparent); color: #fff; }
 .matrix-template.is-dayoff { border-style: dashed; border-color: var(--line-strong); background: transparent; color: var(--muted); }
 .matrix-template.is-dayoff.is-active { border-color: var(--muted); background: rgba(var(--hl), .07); color: var(--text); }
 .matrix-template-empty { color: var(--dim); font-size: 10px; }
@@ -1346,6 +1350,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .workload-point::before { position: absolute; top: 0; right: 0; left: 0; height: 2px; background: var(--line-strong); content: ""; }
 .workload-point.is-uy::before { background: var(--point-uy); }
 .workload-point.is-de::before { background: var(--point-de); }
+.workload-point[style*="--point-color"]::before { background: var(--point-color); }
 .workload-point-total { display: grid; justify-items: end; }
 .workload-point-total strong { font: 600 26px/1 var(--sans); font-variant-numeric: tabular-nums; }
 .workload-point-total small { color: var(--muted); font: 9px var(--mono); }
@@ -1367,6 +1372,9 @@ body { transition: background-color .3s ease, color .3s ease; }
 .workload-point.is-uy .workload-slider input[type="range"]::-moz-range-thumb { background: var(--point-uy); }
 .workload-point.is-de .workload-slider input[type="range"]::-webkit-slider-thumb { background: var(--point-de); }
 .workload-point.is-de .workload-slider input[type="range"]::-moz-range-thumb { background: var(--point-de); }
+.workload-point .workload-slider input[type="range"]::-webkit-slider-thumb { background: var(--point-color, var(--accent)); }
+.workload-point .workload-slider input[type="range"]::-moz-range-thumb { background: var(--point-color, var(--accent)); }
+.workload-point[style*="--point-color"] .workload-slider-value b { color: var(--point-color); }
 .workload-slider input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
 
 .workload-required { display: grid; gap: 14px; }
@@ -1577,12 +1585,14 @@ body { transition: background-color .3s ease, color .3s ease; }
 .analytics-point-tag { display: inline-flex; align-items: center; justify-content: center; padding: 3px 8px; border: 1px solid var(--line-strong); font: 9px var(--mono); letter-spacing: .05em; }
 .analytics-point-tag.is-uy { border-color: var(--point-uy); color: var(--point-uy-ink); background: color-mix(in srgb, var(--point-uy) 16%, transparent); }
 .analytics-point-tag.is-de { border-color: var(--point-de); color: var(--point-de-ink); background: color-mix(in srgb, var(--point-de) 16%, transparent); }
+.analytics-point-tag[style*="--point-color"] { border-color: var(--point-color); color: var(--text); background: color-mix(in srgb, var(--point-color) 16%, transparent); }
 
 /* Выработка часов по точкам. */
 .analytics-points { display: grid; gap: 14px; }
 .analytics-point { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
 .analytics-point.is-uy { border-left: 3px solid var(--point-uy); }
 .analytics-point.is-de { border-left: 3px solid var(--point-de); }
+.analytics-point[style*="--point-color"] { border-left: 3px solid var(--point-color); }
 .analytics-point-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .analytics-point-shifts { color: var(--muted); font: 10px var(--mono); }
 .analytics-point-hours { display: flex; align-items: baseline; gap: 6px; }
@@ -3061,4 +3071,23 @@ span.maintenance-qty { display: inline-flex; align-items: center; justify-conten
   .maintenance-head, .maintenance-row { padding: 9px 10px; gap: 8px; }
   .maintenance-card strong { font-size: 17px; }
   .maintenance-log-toolbar { flex-direction: column; align-items: stretch; }
+}
+
+/* --- «Основное»: бренд и точки присутствия ------------------------------- */
+.main-points-list { display: grid; gap: 8px; }
+.main-point-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface-sunken); }
+.main-point-swatch { width: 16px; height: 16px; border-radius: 50%; background: var(--point-color, var(--muted)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--point-color, var(--muted)) 55%, transparent); }
+.main-point-copy { display: grid; gap: 2px; min-width: 0; }
+.main-point-copy strong { font-size: 13px; }
+.main-point-copy small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.main-point-state { padding: 2px 7px; border: 1px solid var(--line-strong); color: var(--muted); font: 9px var(--mono); }
+.main-point-state.is-on { color: var(--mint); border-color: color-mix(in srgb, var(--mint) 45%, transparent); }
+.main-point-actions { display: flex; gap: 6px; }
+.main-points-empty { color: var(--muted); }
+#point-form input[type="color"] { min-height: 42px; padding: 2px; }
+.point-badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 7px; border: 1px solid color-mix(in srgb, var(--point-color, var(--line)) 55%, transparent); background: color-mix(in srgb, var(--point-color, var(--line)) 13%, transparent); color: var(--text); font: 9px var(--mono); }
+@media (max-width: 760px) {
+  .main-point-row { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .main-point-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .main-point-row .button { min-height: 44px; }
 }

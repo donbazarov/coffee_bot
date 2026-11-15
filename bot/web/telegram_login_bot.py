@@ -26,7 +26,7 @@ import urllib.request
 
 from bot.config import BotConfig, load_env_file
 from bot.database.models import engine, init_db
-from bot.web import telegram_login
+from bot.web import telegram_login, work_points
 from bot.web.auth import register_or_find_telegram_user
 
 logger = logging.getLogger("bot.login")
@@ -35,11 +35,13 @@ API_BASE = "https://api.telegram.org/bot{token}/{method}"
 LONG_POLL_SECONDS = 30
 ERROR_BACKOFF_SECONDS = 5
 
-HELP_TEXT = (
-    "Этот бот подтверждает вход в рабочий сайт кофейни НЕФТЬ.\n\n"
-    "Откройте сайт, нажмите «Войти через Telegram» — я получу ссылку "
-    "и подтвержу вход автоматически."
-)
+def help_text() -> str:
+    """Приветствие бота: название проекта берём из настроек, а не из кода."""
+    return (
+        f"Этот бот подтверждает вход в рабочий сайт кофейни {work_points.project_name(engine)}.\n\n"
+        "Откройте сайт, нажмите «Войти через Telegram» — я получу ссылку "
+        "и подтвержу вход автоматически."
+    )
 
 # Что бот отвечает по итогам проверки пользователя
 RESPONSES = {
@@ -103,7 +105,7 @@ def _handle_start(token: str, message: dict, login_token: str) -> None:
     sender = message.get("from") or {}
 
     if not login_token:
-        _send(token, chat_id, HELP_TEXT)
+        _send(token, chat_id, help_text())
         return
 
     user, status = register_or_find_telegram_user(sender)

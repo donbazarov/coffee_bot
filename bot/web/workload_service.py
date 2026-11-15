@@ -15,7 +15,7 @@
    (`min_hours` / `opt_hours` / `max_hours`), правит сам сотрудник в профиле
    или наставник в «Команда → Доступ и роли».
 
-3. **Необходимые часы по точкам УЯ и ДЕ.** Считаются из шаблонов смен
+3. **Необходимые часы по точкам присутствия.** Считаются из шаблонов смен
    (`web_shift_templates`) с флагами `is_morning` / `is_evening` /
    `is_overlap` / `is_weekend`. Результат — средние длительности смен по
    категориям; итоговые суммы пересчитывает клиент, чтобы ползунок «n%
@@ -37,11 +37,10 @@ from typing import Any, Iterable
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules
+from bot.web import modules, work_points
 
 ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
 WORK_ROLES = ("newbie", "barista", "senior", "mentor")
-POINTS = ("УЯ", "ДЕ")
 
 # Нормо-часы: значения по умолчанию и границы валидации.
 DEFAULT_MIN_HOURS = 80
@@ -561,7 +560,8 @@ def get_workload_stats(engine: Engine, year: int, month: int, refresh: bool = Fa
         "totals": totals,
         "plan": plan,
         "saturation": _saturation(plan, totals),
-        "points": {point: _point_means(templates, point) for point in POINTS},
+        "points": {point: _point_means(templates, point)
+                   for point in work_points.active_codes(engine)},
         # Стартовое положение ползунков «% дней с пересменом» — настройка
         # панели управления (модуль «Команда»), а не константа клиента.
         "overlap_share_default": int(_cfg("DEFAULT_OVERLAP_SHARE") or 0),

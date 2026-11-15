@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules
+from bot.web import modules, work_points
 from bot.web.schedule_snapshot import (
     active_employee_ids,
     prune_snapshots,
@@ -17,7 +17,6 @@ from bot.web.schedule_snapshot import (
 )
 
 ROLE_NAMES = {"newbie": "Стажёр", "barista": "Бариста", "senior": "Старший", "mentor": "Наставник"}
-SHIFT_TEMPLATE_POINTS = {"УЯ", "ДЕ"}
 # Максимум дней в одной публикации: 92 дня — это ровно 12 снимков по 8 дней.
 MAX_PUBLISH_DAYS = 92
 # Оформление аккаунта: тема и акцентный цвет (по умолчанию мягкий коралл).
@@ -170,7 +169,8 @@ def initialize_calendar_schema(engine: Engine) -> None:
 TEMPLATE_FLAGS = ("is_morning", "is_evening", "is_overlap", "is_weekend")
 
 
-def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -> dict[str, Any]:
+def _validate_template_payload(engine: Engine, payload: dict[str, Any],
+                               partial: bool = False) -> dict[str, Any]:
     allowed = {"name", "start_time", "end_time", "point", *TEMPLATE_FLAGS}
     if set(payload) - allowed:
         raise ValueError("Переданы неизвестные поля шаблона")
@@ -189,8 +189,8 @@ def _validate_template_payload(payload: dict[str, Any], partial: bool = False) -
     if not partial and values.get("start_time") == values.get("end_time"):
         raise ValueError("Время начала и окончания не должны совпадать")
     if "point" in values or not partial:
-        if values.get("point") not in SHIFT_TEMPLATE_POINTS:
-            raise ValueError("Точка должна быть УЯ или ДЕ")
+        # Проверяем по активному справочнику точек; принимаем и код, и alias.
+        values["point"] = work_points.normalize_point(engine, values.get("point"))
     for flag in TEMPLATE_FLAGS:
         if flag in values:
             if not isinstance(values[flag], bool):
@@ -229,7 +229,7 @@ def list_shift_templates(engine: Engine) -> list[dict[str, Any]]:
 def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Ожидался объект шаблона")
-    values = _validate_template_payload(payload)
+    values = _validate_template_payload(engine, payload)
     with engine.begin() as connection:
         order_index = connection.execute(text(
             "SELECT COALESCE(MAX(order_index), 0) + 1 FROM web_shift_templates"
@@ -257,7 +257,7 @@ def create_shift_template(engine: Engine, user_id: int, payload: Any) -> dict[st
 def update_shift_template(engine: Engine, template_id: int, payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Ожидался объект шаблона")
-    values = _validate_template_payload(payload, partial=True)
+    values = _validate_template_payload(engine, payload, partial=True)
     if not values:
         raise ValueError("Нет полей для обновления")
     with engine.begin() as connection:
@@ -543,26 +543,33 @@ def _shift_type_id(connection: Any, start_time: str, end_time: str, point: str) 
     """), {"start_time": start_time, "end_time": end_time, "point": point, "name": f"{label} {point}", "shift_kind": shift_kind}).scalar_one())
 
 
-def _swap_lines(changes: list[dict[str, Any]]) -> list[str]:
+def _swap_lines(engine: Engine, changes: list[dict[str, Any]]) -> list[str]:
     """Строки изменений для лога и для дублирования в канал замен."""
     lines: list[str] = []
+    # Значения в БД — коды точек; людям показываем короткий alias.
+    index = work_points.point_index(engine)
     for cell in changes:
         employee = cell["employee"]["name"]
         if cell["delete"]:
             for old in cell["old_rows"]:
                 lines.append(
                     f"{cell['date']} · {employee}: выходной "
-                    f"(было {_time_text(old['start_time'])}–{_time_text(old['end_time'])}, {old['point']})"
+                    f"(было {_time_text(old['start_time'])}–{_time_text(old['end_time'])}, "
+                    f"{work_points.label_with_index(index, old['point'])})"
                 )
             continue
         if cell["old_rows"]:
             old = cell["old_rows"][0]
             lines.append(
                 f"{cell['date']} · {employee}: {_time_text(old['start_time'])}–{_time_text(old['end_time'])}, "
-                f"{old['point']} → {cell['start_time']}–{cell['end_time']}, {cell['point']}"
+                f"{work_points.label_with_index(index, old['point'])} → "
+                f"{cell['start_time']}–{cell['end_time']}, {work_points.label_with_index(index, cell['point'])}"
             )
         else:
-            lines.append(f"{cell['date']} · {employee}: {cell['start_time']}–{cell['end_time']}, {cell['point']}")
+            lines.append(
+                f"{cell['date']} · {employee}: {cell['start_time']}–{cell['end_time']}, "
+                f"{work_points.label_with_index(index, cell['point'])}"
+            )
     return lines
 
 
@@ -615,6 +622,8 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
 
     prepared = []
     seen_cells = set()
+    # Один справочник на всю пачку: до 500 ячеек не должны давать 500 запросов.
+    point_lookup = work_points.point_index(engine)
     for operation in operations:
         shift_date = date.fromisoformat(str(operation["date"]))
         user_id = int(operation["user_id"])
@@ -627,9 +636,10 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
             continue
         start_time = time.fromisoformat(str(operation["start_time"])).strftime("%H:%M")
         end_time = time.fromisoformat(str(operation["end_time"])).strftime("%H:%M")
-        point = str(operation["point"])
-        if point not in {"УЯ", "ДЕ"}:
-            raise ValueError("Точка должна быть УЯ или ДЕ")
+        point_row = point_lookup.get(str(operation["point"] or "").strip().lower())
+        if point_row is None or not point_row["is_active"]:
+            raise ValueError("Неизвестная торговая точка")
+        point = point_row["code"]
         if start_time == end_time:
             raise ValueError("Время начала и окончания не должны совпадать")
         prepared.append({
@@ -790,7 +800,7 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         else:
             result = {
                 "changed": changed_count, "cleared": cleared_count, "change_type": "swap",
-                "logged": len(changes), "swap_lines": _swap_lines(changes),
+                "logged": len(changes), "swap_lines": _swap_lines(engine, changes),
             }
 
     if result.get("published"):
@@ -820,11 +830,16 @@ def get_user_preferences(engine: Engine, user_id: int) -> dict[str, Any]:
             FROM web_user_preferences WHERE user_id=:user_id
         """), {"user_id": user_id}).mappings().first()
     theme = row["theme"] if row and row["theme"] in THEME_VALUES else "system"
-    accent = row["accent"] if row and _HEX_COLOR.match(row["accent"] or "") else DEFAULT_ACCENT
+    # Дефолт акцента — настройка проекта, а не константа: пока пользователь не
+    # сохранял оформление, интерфейс должен следовать за «Основным».
+    accent_custom = bool(row and _HEX_COLOR.match(row["accent"] or ""))
+    accent = row["accent"] if accent_custom else work_points.default_accent(engine)
     chat_notify = row["chat_notify"] if row and row["chat_notify"] in CHAT_NOTIFY_VALUES else DEFAULT_CHAT_NOTIFY
     return {
         "theme": theme,
         "accent": accent,
+        # Клиент по этому флагу отличает явный выбор пользователя от дефолта.
+        "accent_custom": accent_custom,
         "chat_notify": chat_notify,
     }
 
@@ -844,7 +859,7 @@ def save_user_preferences(engine: Engine, user_id: int, values: dict[str, Any]) 
         """), {"user_id": user_id,
                "theme": updated["theme"], "accent": updated["accent"],
                "chat_notify": updated.get("chat_notify", DEFAULT_CHAT_NOTIFY)})
-    return updated
+    return get_user_preferences(engine, user_id)
 
 
 def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
@@ -876,19 +891,25 @@ def build_calendar_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -
         "X-PUBLISHED-TTL:PT1H",
         f"X-WR-CALNAME:Смены — {user['display_name'] or user['name']}",
     ]
+    # Точки в БД хранятся кодами: в календарь отдаём короткое и полное название.
+    project = work_points.project_name(engine)
+    index = work_points.point_index(engine)
     now = datetime.now(user_timezone).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     for shift in shifts:
         start, end = _shift_bounds(shift["shift_date"], shift["start_time"], shift["end_time"], user_timezone)
         start_utc = start.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         end_utc = end.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        point = index.get(str(shift["point"] or "").strip().lower())
+        alias = point["title_alias"] if point else (shift["point"] or "")
+        location = point["title"] if point else alias
         lines.extend([
             "BEGIN:VEVENT",
             f"UID:coffee-shift-{shift['shift_id']}@coffee-quality.local",
             f"DTSTAMP:{now}",
             f"DTSTART:{start_utc}",
             f"DTEND:{end_utc}",
-            f"SUMMARY:Смена {shift['point']} — НЕФТЬ",
-            f"LOCATION:{shift['point']}",
+            f"SUMMARY:Смена {alias} — {project}",
+            f"LOCATION:{location}",
             "END:VEVENT",
         ])
     lines.append("END:VCALENDAR")

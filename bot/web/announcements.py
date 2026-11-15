@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, page_links
+from bot.web import modules, page_links, work_points
 from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.announcements")
@@ -473,7 +473,7 @@ def build_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
         "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
         "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
         "X-PUBLISHED-TTL:PT1H",
-        "X-WR-CALNAME:Анонсы — НЕФТЬ",
+        f"X-WR-CALNAME:Анонсы — {work_points.project_name(engine)}",
     ]
     for row in rows:
         if row["category"] not in enabled:

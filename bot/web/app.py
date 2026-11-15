@@ -1,5 +1,6 @@
 import os
 import hashlib
+import json
 import logging
 import mimetypes
 import re
@@ -22,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service
+from bot.web import access_code, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
@@ -119,6 +120,9 @@ app.include_router(drink_descriptions.router)
 # Тех. обслуживание (bot/web/maintenance.py): точки сети, остатки и журнал замен.
 app.include_router(maintenance.maintenance_router)
 app.include_router(maintenance.locations_router)
+# Точки присутствия и общие настройки бренда (bot/web/work_points.py).
+app.include_router(work_points.points_router)
+app.include_router(work_points.settings_router)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
@@ -238,6 +242,9 @@ def migrate_database():
     gamification.initialize_schema(engine)
     # Описание напитков: лента смен, напитки постов и викторины «где чей латте-арт».
     drink_descriptions.initialize_schema(engine)
+    # Точки присутствия и настройки бренда. Схему создаём после таблиц графика,
+    # оценок и описаний: миграция legacy alias должна видеть все их колонки.
+    work_points.initialize_schema(engine)
     # Базовый опыт уже работающей команде выдаётся один раз: у каждого barista и
     # senior уровень должен появиться сразу после раскатки, а не после первой
     # оценки наставника. Повторные запуски ничего не добавляют (идемпотентно).
@@ -468,6 +475,15 @@ def home(request: Request):
     # Модули загружаем одним запросом: из него и словарь для Jinja-гейтов
     # навигации/вьюх, и список для левого оглавления панели управления.
     module_list = modules.load_modules(engine, is_manager=real_role in {"senior", "mentor"})
+    main_settings = work_points.get_main_settings(engine)
+    # «Основное» — не модуль, а первая вкладка панели управления: бренд,
+    # дефолтный акцент и справочник точек. Синтетическая запись нужна, чтобы
+    # левое оглавление и переключение блоков работали как у обычных модулей.
+    control_modules = [
+        {"code": "main", "title": "Основное", "icon": "i-overview",
+         "enabled": True, "settable": False},
+        *[item for item in module_list if item["settable"]],
+    ]
     response = templates.TemplateResponse(
         request=request,
         name="index.html",
@@ -475,6 +491,9 @@ def home(request: Request):
             "user": render_user,
             "tg_pending": tg_pending,
             "utm_source": utm_source or "",
+            "project_name": main_settings["project_name"],
+            "default_accent": main_settings["default_accent"],
+            "work_points": main_settings["points"],
             "login_error": LOGIN_ERRORS.get(request.query_params.get("login_error"), ""),
             "csrf_token": csrf_token or "",
             "bot_username": bot_username,
@@ -502,7 +521,7 @@ def home(request: Request):
             # Модули: глобальное вкл/выкл разделов. Навигация и вьюхи скрываются
             # на сервере (по `modules`), а панель управления строит из них список.
             "modules": {item["code"]: item for item in module_list},
-            "control_modules": [item for item in module_list if item["settable"]],
+            "control_modules": control_modules,
             # Редактируемые настройки (бывшие константы) — поля с текущими значениями.
             "module_settings": {
                 item["code"]: modules.module_settings_view(item["code"])
@@ -651,7 +670,9 @@ def telegram_start(request: Request, next: str = "/", force: int = 0):
         return templates.TemplateResponse(
             request=request,
             name="login-wait.html",
-            context={"bot_username": username, "next_path": existing["next_path"]},
+            context={"bot_username": username, "next_path": existing["next_path"],
+                     "project_name": work_points.project_name(engine),
+                     "default_accent": work_points.default_accent(engine)},
         )
 
     token = telegram_login.create_login_request(engine, next)
@@ -693,7 +714,9 @@ def telegram_wait(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="login-wait.html",
-        context={"bot_username": _bot_username(), "next_path": entry.get("next_path") or "/"},
+        context={"bot_username": _bot_username(), "next_path": entry.get("next_path") or "/",
+                 "project_name": work_points.project_name(engine),
+                 "default_accent": work_points.default_accent(engine)},
     )
 
 
@@ -998,7 +1021,7 @@ def push_test(user: dict[str, Any] = Depends(require_csrf)):
     if not push.user_endpoints(engine, user["id"]):
         raise HTTPException(status_code=409, detail="Это устройство ещё не подписано на уведомления")
     delivered = push.send_to_user(engine, user["id"], {
-        "title": "НЕФТЬ · проверка уведомлений",
+        "title": f"{work_points.project_name(engine)} · проверка уведомлений",
         "body": "Если вы это видите, уведомления работают.",
         "url": "/?view=announcements",
         "tag": "push-test",
@@ -1502,8 +1525,8 @@ def _require_active_reference(connection, table: str, ref_id: int | None, label:
         raise HTTPException(status_code=422, detail=f"{label} не найден или отключён")
 
 
-# Торговые точки, на которых проходит оценка (совпадает с shift_types.point).
-SHIFT_POINTS = {"УЯ", "ДЕ"}
+# Торговые точки живут в БД (bot/web/work_points.py): проверка ниже идёт по
+# активному справочнику, а в payload принимаются и код, и короткий alias.
 
 
 def _optional_text(payload: dict[str, Any], key: str, limit: int = 2000) -> str | None:
@@ -1612,8 +1635,12 @@ async def upload_evaluation_photo(request: Request, user: dict[str, Any] = Depen
 def shifts_active_staff(point: str, timestamp: str | None = None,
                         _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Бариста на смене в точке `point` в момент `timestamp` (ISO, по умолчанию — сейчас)."""
-    if point not in SHIFT_POINTS:
-        raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
+    try:
+        # Принимаем и код (`uya`), и старый alias (`УЯ`) — кеш клиента мог
+        # сохранить точки до миграции на коды.
+        point = work_points.normalize_point(engine, point)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     when = None
     if timestamp:
         try:
@@ -1644,8 +1671,10 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
     if evaluation_type == "drink" and evaluator["role"] != "mentor":
         raise HTTPException(status_code=403, detail="Напитки может оценивать только наставник")
     point = payload.get("point")
-    if point is not None and point not in SHIFT_POINTS:
-        raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
+    try:
+        point = work_points.normalize_point(engine, point, allow_none=True)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     photo_url = payload.get("photo_url")
     if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
         raise HTTPException(status_code=422, detail="Некорректная ссылка на фото")
@@ -1913,7 +1942,10 @@ def _guest_token(request: Request) -> str:
 
 @app.get("/stories", response_class=HTMLResponse)
 def stories_page(request: Request):
-    return templates.TemplateResponse(request=request, name="stories.html", context={})
+    return templates.TemplateResponse(
+        request=request, name="stories.html",
+        context={"project_name": work_points.project_name(engine)},
+    )
 
 
 @app.get("/stories/api/stories")
@@ -2050,7 +2082,23 @@ def service_worker():
 
 @app.get("/site.webmanifest")
 def web_manifest():
-    return FileResponse(ICONS_DIR / "site.webmanifest", media_type="application/manifest+json")
+    """Манифест PWA собирается из настроек проекта, а не из статичного файла.
+
+    Имя приложения меняется в панели управления, поэтому отдаём JSON каждый
+    раз заново (`no-cache`). Иконки по-прежнему берутся из статичного файла.
+    """
+    try:
+        data = json.loads((ICONS_DIR / "site.webmanifest").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    name = work_points.project_name(engine)
+    data.update({
+        "name": f"{name} · Quality Desk",
+        "short_name": name,
+        "description": f"Рабочее пространство кофейной команды {name}",
+    })
+    return JSONResponse(data, media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/favicon.ico")

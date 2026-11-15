@@ -42,8 +42,8 @@ class ShiftType(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     start_time = Column(Time, nullable=False)  # время прихода
     end_time = Column(Time, nullable=False)  # время ухода
-    point = Column(String(10), nullable=False)  # 'УЯ' или 'ДЕ'
-    name = Column(String(100), nullable=False)  # название смены (например, "утро ДЕ")
+    point = Column(String(40), nullable=False)  # код точки из work_points: 'uya', 'de'
+    name = Column(String(100), nullable=False)  # название смены (например, "утро uya")
     shift_type = Column(String(20), nullable=False)  # 'morning', 'hybrid', 'evening'
     created_at = Column(DateTime, default=datetime.utcnow)
 

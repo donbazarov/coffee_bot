@@ -1,7 +1,7 @@
 {
-  "name": "НЕФТЬ · Quality Desk",
-  "short_name": "НЕФТЬ",
-  "description": "Рабочее пространство кофейной команды НЕФТЬ",
+  "name": "Crew Desk",
+  "short_name": "Crew Desk",
+  "description": "Рабочее пространство кофейной команды",
   "lang": "ru",
   "start_url": "/?utm_source=pwa",
   "id": "/",

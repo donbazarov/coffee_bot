@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-default-accent="{{ default_accent }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#10110f">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="НЕФТЬ">
+  <meta name="apple-mobile-web-app-title" content="{{ project_name }}">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <title>НЕФТЬ · Crew Desk</title>
+  <title>{{ project_name }} · Crew Desk</title>
   <link rel="icon" href="/static/icons/favicon.ico" sizes="any">
   <link rel="icon" type="image/png" sizes="96x96" href="/static/icons/favicon-96x96.png">
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
@@ -124,10 +124,10 @@
     <div class="login-grain" aria-hidden="true"></div>
     <header class="brand brand-login">
       <span class="brand-symbol" aria-hidden="true"></span>
-      <span class="brand-name">НЕФТЬ<small>CREW DESK</small></span>
+      <span class="brand-name" data-brand-name>{{ project_name }}<small>CREW DESK</small></span>
     </header>
     <section class="login-content">
-      <p class="eyebrow">НЕЕЕЕЕЕЕЕЕЕФТЬ</p>
+      <p class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО КОМАНДЫ</p>
       <h1>Добро пожаловать<br>в ад.</h1>
       <p class="login-copy">От работяг • для работяг </p>
       {% if bot_login_enabled %}
@@ -499,7 +499,7 @@
           <div><p class="eyebrow">КОМАНДА / ГРАФИК</p><h2 id="calendar-month-title">График смен</h2></div>
           <div class="calendar-actions"><button type="button" class="icon-button" id="month-previous" aria-label="Предыдущий месяц" title="Предыдущий месяц"><svg class="icon" aria-hidden="true"><use href="#i-chevron-left"></use></svg></button><button type="button" class="icon-button" id="month-next" aria-label="Следующий месяц" title="Следующий месяц"><svg class="icon" aria-hidden="true"><use href="#i-chevron-right"></use></svg></button></div>
         </div>
-        <div class="calendar-legend"><span><i class="point-swatch point-uy"></i>УЯ</span><span><i class="point-swatch point-de"></i>ДЕ</span><span class="legend-note">Время локальное</span></div>
+        <div class="calendar-legend" id="calendar-legend">{% for point in work_points %}<span><i class="point-swatch" style="--point-color:{{ point.color }}"></i>{{ point.title_alias }}</span>{% endfor %}<span class="legend-note">Время локальное</span></div>
         <div class="matrix-toolbar">
           <span id="matrix-summary">Сотрудники × дни месяца</span>
           <div class="matrix-tools">
@@ -656,7 +656,7 @@
             </div>
             <div class="control-tree-fold is-open" id="control-tree-fold"><div class="control-tree-fold-inner">
               <nav class="control-nav" id="control-nav" aria-label="Модули сайта">
-                {% for module in control_modules %}<button class="control-nav-item{% if not module.enabled %} is-disabled{% endif %}" type="button" data-control-open="{{ module.code }}"><span class="control-nav-icon"><svg class="icon" aria-hidden="true"><use href="#{{ module.icon }}"></use></svg></span><span class="control-nav-title">{{ module.title }}</span><span class="control-nav-badge" data-control-badge="{{ module.code }}">{{ 'Вкл' if module.enabled else 'Выкл' }}</span></button>
+                {% for module in control_modules %}<button class="control-nav-item{% if not module.enabled %} is-disabled{% endif %}" type="button" data-control-open="{{ module.code }}"><span class="control-nav-icon"><svg class="icon" aria-hidden="true"><use href="#{{ module.icon }}"></use></svg></span><span class="control-nav-title">{{ module.title }}</span>{% if module.settable %}<span class="control-nav-badge" data-control-badge="{{ module.code }}">{{ 'Вкл' if module.enabled else 'Выкл' }}</span>{% endif %}</button>
                 {% endfor %}
               </nav>
               <p class="control-nav-status" id="control-nav-status" role="status"></p>
@@ -665,9 +665,26 @@
           <div class="control-body-panel">
             {% for module in control_modules %}<section class="control-module" data-control-module="{{ module.code }}" hidden>
               <div class="control-module-head">
-                <div><p class="eyebrow">МОДУЛЬ</p><h3>{{ module.title }}</h3></div>
-                <label class="module-setting module-setting-compact"><span><strong>Модуль включён</strong><small>Выключение скрывает раздел у всей команды</small></span><input type="checkbox" data-module-toggle="{{ module.code }}"{% if module.enabled %} checked{% endif %}><i></i></label>
+                <div><p class="eyebrow">{% if module.code == 'main' %}ОСНОВНОЕ{% else %}МОДУЛЬ{% endif %}</p><h3>{{ module.title }}</h3></div>
+                {% if module.settable %}<label class="module-setting module-setting-compact"><span><strong>Модуль включён</strong><small>Выключение скрывает раздел у всей команды</small></span><input type="checkbox" data-module-toggle="{{ module.code }}"{% if module.enabled %} checked{% endif %}><i></i></label>{% endif %}
               </div>
+              {% if module.code == 'main' %}
+              <section class="panel settings-panel" id="main-settings-panel">
+                <div class="panel-heading"><div><p class="eyebrow">БРЕНД</p><h3>Название и акцент</h3></div></div>
+                <p class="settings-hint">Название проекта видно в шапке, заголовке вкладки, PWA и календарях. Акцент применяется ко всем, кто ещё не выбрал свой цвет в профиле.</p>
+                <form class="template-form" id="main-settings-form">
+                  <label class="setting-row"><span><strong>Название проекта</strong><small>Короткое имя кофейни для шапки и вкладки</small></span><input name="project_name" maxlength="60" required autocomplete="off" value="{{ project_name }}"></label>
+                  <label class="setting-row"><span><strong>Акцентный цвет</strong><small>HEX-код основного цвета интерфейса</small></span><input name="default_accent" type="color" value="{{ default_accent }}" aria-label="Акцентный цвет"></label>
+                  <p class="template-form-error" role="alert" hidden></p>
+                  <div class="template-form-actions"><button class="button button-primary" type="submit">Сохранить</button></div>
+                </form>
+              </section>
+              <section class="panel settings-panel" id="main-points-panel">
+                <div class="panel-heading"><div><p class="eyebrow">ТОЧКИ ПРИСУТСТВИЯ</p><h3>Справочник точек</h3></div></div>
+                <div class="section-heading-inline"><p class="settings-hint">Точки используются в графике, оценках, аналитике и описаниях напитков. Код — латиницей (например, uya); короткое название показывается в бейджах, цвет — фон ячеек и плашек.</p><button class="button button-quiet" type="button" id="main-point-add">Новая точка</button></div>
+                <div class="main-points-list" id="main-points-list"></div>
+              </section>
+              {% endif %}
               {% set module_fields = module_settings[module.code] %}
               {% if module_fields %}<form class="template-form control-settings-form" data-module-settings="{{ module.code }}">
                 {% for field in module_fields %}{% if field.type == 'int' or field.type == 'float' %}<label class="setting-row"><span><strong>{{ field.label }}</strong>{% if field.hint %}<small>{{ field.hint }}</small>{% endif %}</span><input type="number" name="{{ field.key }}" value="{{ field.value_text }}" min="{{ field.min }}" max="{{ field.max }}" step="{{ field.step }}" inputmode="numeric" required></label>
@@ -688,8 +705,7 @@
               <label>Конец<input name="end_time" type="time" required></label>
             </div>
             <fieldset class="point-picker"><legend>Точка</legend>
-              <label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required checked><span><i class="point-swatch point-uy"></i>УЯ</span></label>
-              <label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label>
+              {% for point in work_points %}<label class="point-option" style="--point-color:{{ point.color }}"><input type="radio" name="point" value="{{ point.code }}" required{% if loop.first %} checked{% endif %}><span><i class="point-swatch" style="--point-color:{{ point.color }}"></i>{{ point.title_alias }}</span></label>{% endfor %}
             </fieldset>
             <fieldset class="template-flags"><legend>Тип смены</legend>
               <label class="checkbox-row"><input type="checkbox" name="is_morning"><span>Утро</span></label>
@@ -868,7 +884,7 @@
       {% endif %}
       {% endif %}
 
-      <footer class="app-footer"><span>НЕФТЬ / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
+      <footer class="app-footer"><span data-brand-footer>{{ project_name }} / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
     </main>
   </div>
 
@@ -910,7 +926,7 @@
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
   <aside class="drawer" id="drawer" aria-label="Меню">
     <div class="drawer-head">
-      <a class="brand" href="/" aria-label="НЕФТЬ, главная"><span class="brand-symbol" aria-hidden="true"></span><span class="brand-name">НЕФТЬ<small>CREW DESK</small></span></a>
+      <a class="brand" href="/" aria-label="{{ project_name }}, главная" data-brand-link><span class="brand-symbol" aria-hidden="true"></span><span class="brand-name" data-brand-name>{{ project_name }}<small>CREW DESK</small></span></a>
       <button class="icon-button" type="button" id="drawer-close" aria-label="Закрыть меню"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
     </div>
     <nav class="drawer-nav" aria-label="Меню">
@@ -1042,8 +1058,7 @@
 
       <label>Торговая точка
         <select id="quality-point">
-          <option value="ДЕ">ДЕ</option>
-          <option value="УЯ">УЯ</option>
+          {% for point in work_points %}<option value="{{ point.code }}">{{ point.title_alias }}</option>{% endfor %}
         </select>
       </label>
 
@@ -1097,6 +1112,20 @@
   <dialog class="user-dialog" id="maintenance-log-dialog"><form id="maintenance-log-form"><div class="dialog-top"><div><p class="eyebrow">ЖУРНАЛ ТО</p><h2 id="maintenance-log-title">Запись о замене</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Точка<select name="point_code" id="maintenance-log-point" required></select></label><label>Запчасть<select name="part_id" id="maintenance-log-part" required></select></label><div class="time-fields"><label>Дата замены<input name="replaced_at" type="date" required></label><label>Следующая замена <span class="optional">пусто — посчитаем</span><input name="next_due_date" type="date"></label></div><label>Комментарий <span class="optional">необязательно</span><textarea name="comment" rows="3" maxlength="1000" placeholder="Что заменили, что заметили"></textarea></label><p class="dialog-error" id="maintenance-log-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   <dialog class="user-dialog" id="maintenance-stock-dialog"><form id="maintenance-stock-form"><div class="dialog-top"><div><p class="eyebrow">ОСТАТОК</p><h2 id="maintenance-stock-title">Остаток на точке</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><input type="hidden" name="point_code"><input type="hidden" name="part_id"><label>Количество<input name="quantity" type="number" min="0" max="99999" step="1" inputmode="numeric" required></label><p class="dialog-error" id="maintenance-stock-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   <dialog class="user-dialog" id="maintenance-location-dialog"><form id="maintenance-location-form"><div class="dialog-top"><div><p class="eyebrow">ТОЧКА СЕТИ</p><h2 id="maintenance-location-title">Новая точка</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="name" maxlength="120" required placeholder="Например: УЯ"></label><label>Код <span class="optional">латиницей, можно оставить пустым</span><input name="code" maxlength="40" pattern="[A-Za-z0-9-]*" placeholder="ya"></label><label class="checkbox-row"><input name="is_active" type="checkbox" checked><span>Активна — показывать на дашборде</span></label><p class="dialog-error" id="maintenance-location-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
+<dialog class="user-dialog" id="point-dialog"><form id="point-form">
+    <div class="dialog-top"><div><p class="eyebrow">ТОЧКА ПРИСУТСТВИЯ</p><h2 id="point-dialog-title">Новая точка</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div>
+    <input type="hidden" name="point_id" value="">
+    <label>Код <span class="optional">латиницей, например uya; смена кода обновит связанные записи</span><input name="code" maxlength="40" pattern="[a-z][a-z0-9_-]*" required autocomplete="off" spellcheck="false" placeholder="uya"></label>
+    <label>Короткое название <span class="optional">для бейджей</span><input name="title_alias" maxlength="20" required autocomplete="off" placeholder="УЯ"></label>
+    <label>Полное название<input name="title" maxlength="120" required autocomplete="off" placeholder="Университетская"></label>
+    <div class="time-fields">
+      <label>Цвет<input name="color" type="color" value="#2a9d8f" required></label>
+      <label>Порядок<input name="sort_order" type="number" step="1" value="0" inputmode="numeric"></label>
+    </div>
+    <label class="checkbox-row"><input name="is_active" type="checkbox" checked><span>Активна — показывать в графике и фильтрах</span></label>
+    <p class="dialog-error" id="point-form-error" role="alert" hidden></p>
+    <div class="dialog-actions"><button class="button button-quiet" id="point-delete" type="button" hidden>Удалить</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div>
+  </form></dialog>
   <dialog class="user-dialog" id="maintenance-category-dialog"><form id="maintenance-category-form"><div class="dialog-top"><div><p class="eyebrow">КАТЕГОРИЯ ТО</p><h2 id="maintenance-category-title">Новая категория</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Название<input name="label" maxlength="120" required placeholder="Например: Фильтры"></label><label>Цвет<input name="color" type="color" value="#7b8794"></label><p class="dialog-error" id="maintenance-category-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Сохранить</button></div></form></dialog>
   <dialog class="user-dialog kb-dialog" id="kb-page-dialog"><form id="kb-page-form"><div class="dialog-top"><div><p class="eyebrow" id="kb-dialog-kicker">НОВАЯ СТРАНИЦА</p><h2 id="kb-dialog-title">Страница</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><input type="hidden" name="parent_id" value=""><label>Раздел<select name="category" id="kb-field-category"></select></label><label>Название<input name="title" maxlength="200" required placeholder="Например: Бразилия Серрадо"></label>
   <div class="kb-tags-editor" id="kb-tags-editor"><p class="kb-field-caption">Теги <span class="optional">Enter — добавить, до 12 штук</span></p><input type="hidden" name="tags" value="[]"><div class="kb-tag-chips" id="kb-tag-chips"></div><input type="text" id="kb-tag-input" class="kb-tag-input" maxlength="40" list="kb-tag-suggestions" autocomplete="off" placeholder="Например: латте-арт"><datalist id="kb-tag-suggestions"></datalist></div>
@@ -1107,7 +1136,7 @@
   <div class="kb-form-group" data-kb-for="beans drinks equipment"><label class="checkbox-row"><input name="is_active" type="checkbox" checked><span>Активно — показывать бариста</span></label></div>
   <p class="dialog-error" id="kb-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" id="kb-form-submit" type="submit">Создать</button></div></form></dialog>
   {% endif %}
-  <dialog class="user-dialog shift-dialog" id="shift-dialog"><form id="shift-form"><div class="dialog-top"><div><p class="eyebrow" id="shift-dialog-kicker">РАСПИСАНИЕ</p><h2 id="shift-dialog-title">Смена</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Бариста<select name="user_id" id="shift-employee" required></select></label><label>Дата<input name="date" type="date" required></label><div class="time-fields"><label>Приход<input name="start_time" type="time" required></label><label>Уход<input name="end_time" type="time" required></label></div><fieldset class="point-picker"><legend>Точка</legend><label class="point-option point-option-uy"><input type="radio" name="point" value="УЯ" required><span><i class="point-swatch point-uy"></i>УЯ</span></label><label class="point-option point-option-de"><input type="radio" name="point" value="ДЕ" required><span><i class="point-swatch point-de"></i>ДЕ</span></label></fieldset><p class="dialog-error" id="shift-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet" id="delete-shift-button" type="button">Выходной</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Готово</button></div></form></dialog>
+  <dialog class="user-dialog shift-dialog" id="shift-dialog"><form id="shift-form"><div class="dialog-top"><div><p class="eyebrow" id="shift-dialog-kicker">РАСПИСАНИЕ</p><h2 id="shift-dialog-title">Смена</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><label>Бариста<select name="user_id" id="shift-employee" required></select></label><label>Дата<input name="date" type="date" required></label><div class="time-fields"><label>Приход<input name="start_time" type="time" required></label><label>Уход<input name="end_time" type="time" required></label></div><fieldset class="point-picker"><legend>Точка</legend>{% for point in work_points %}<label class="point-option" style="--point-color:{{ point.color }}"><input type="radio" name="point" value="{{ point.code }}" required><span><i class="point-swatch" style="--point-color:{{ point.color }}"></i>{{ point.title_alias }}</span></label>{% endfor %}</fieldset><p class="dialog-error" id="shift-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet" id="delete-shift-button" type="button">Выходной</button><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Готово</button></div></form></dialog>
   <dialog class="user-dialog publish-dialog" id="publish-dialog"><form id="publish-form"><div class="dialog-top"><div><p class="eyebrow">ПУБЛИКАЦИЯ РАСПИСАНИЯ</p><h2>Диапазон снимков</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="publish-presets"><button class="button button-quiet" type="button" data-publish-preset="first">1–15</button><button class="button button-quiet" type="button" data-publish-preset="second">15–конец месяца</button></div><div class="time-fields"><label>С какого числа<input name="publish_start" type="date" required></label><label>По какое число<input name="publish_end" type="date" required></label></div><p class="publish-preview" id="publish-preview" role="status"></p><p class="dialog-error" id="publish-form-error" role="alert" hidden></p><div class="dialog-actions"><button class="button button-quiet dialog-close" type="button">Отмена</button><button class="button button-primary" type="submit">Опубликовать</button></div></form></dialog>
   <dialog class="user-dialog feed-dialog" id="feed-dialog"><div class="dialog-top"><div><p class="eyebrow">ЛИЧНЫЕ СОБЫТИЯ</p><h2>Мой календарь</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="feed-actions"><a class="button button-primary" id="webcal-open" href="#">Подключить календарь</a><button class="button button-quiet" id="feed-copy" type="button">Копировать ссылку</button></div><p class="feed-status" id="feed-status" role="status"></p></dialog>
   <dialog class="user-dialog feed-dialog" id="announcements-feed-dialog"><div class="dialog-top"><div><p class="eyebrow">КАЛЕНДАРЬ АНОНСОВ</p><h2>События с датой</h2></div><button class="icon-button dialog-close" type="button" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button></div><div class="feed-actions"><a class="button button-primary" id="announcements-webcal-open" href="#">Подключить календарь</a><button class="button button-quiet" id="announcements-feed-copy" type="button">Копировать ссылку</button></div><p class="feed-status" id="announcements-feed-status" role="status"></p><p class="settings-hint">В календарь попадают анонсы с указанной датой из категорий, отмеченных в уведомлениях.</p></dialog>
@@ -1127,7 +1156,7 @@
     <div class="pwa-install-card">
       <button class="icon-button pwa-install-close" type="button" id="pwa-install-close" aria-label="Закрыть"><svg class="icon" aria-hidden="true"><use href="#i-close"></use></svg></button>
       <span class="pwa-install-logo" aria-hidden="true"></span>
-      <p class="pwa-install-kicker">ПРИЛОЖЕНИЕ НЕФТЬ</p>
+      <p class="pwa-install-kicker" data-brand-pwa>ПРИЛОЖЕНИЕ {{ project_name }}</p>
       <h2 class="pwa-install-title" id="pwa-install-title">Установите на телефон</h2>
       <p class="pwa-install-copy">Запуск с домашнего экрана — в один тап, как обычное приложение. Без браузера и лишних окон.</p>
       <div class="pwa-install-steps" id="pwa-install-steps" hidden>

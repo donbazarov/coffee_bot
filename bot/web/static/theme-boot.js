@@ -48,7 +48,7 @@
   var metaColor = document.querySelector('meta[name="theme-color"]');
   if (metaColor) metaColor.setAttribute('content', theme === 'light' ? '#f4f1ea' : '#10110f');
 
-  var accent = readStored(ACCENT_KEY) || DEFAULT_ACCENT;
+  var accent = readStored(ACCENT_KEY) || root.getAttribute('data-default-accent') || DEFAULT_ACCENT;
   if (/^#[0-9a-f]{6}$/i.test(accent)) {
     root.style.setProperty('--accent', accent);
     root.style.setProperty('--accent-contrast', contrastOn(accent));

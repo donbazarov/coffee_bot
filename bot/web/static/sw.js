@@ -1,4 +1,4 @@
-/* НЕФТЬ · Crew Desk — Service Worker (app shell).
+/* Crew Desk — Service Worker (app shell).
  *
  * Зачем: приложение, сохранённое на домашний экран, при каждом запуске заново
  * скачивало HTML, CSS и JS. Если в этот момент соединение до сервера «висит»
@@ -230,7 +230,7 @@ self.addEventListener('push', (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch (error) {
-    payload = { title: 'НЕФТЬ', body: event.data ? event.data.text() : '' };
+    payload = { title: 'Crew Desk', body: event.data ? event.data.text() : '' };
   }
   const options = {
     body: payload.body || '',
@@ -239,7 +239,7 @@ self.addEventListener('push', (event) => {
     tag: payload.tag || 'neft-announcement',
     data: { url: payload.url || '/?view=announcements' },
   };
-  event.waitUntil(self.registration.showNotification(payload.title || 'НЕФТЬ · Анонс', options));
+  event.waitUntil(self.registration.showNotification(payload.title || 'Анонс', options));
 });
 
 /* Тап по уведомлению: фокусируем уже открытое окно и просим его открыть

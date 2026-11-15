@@ -46,7 +46,7 @@ from sqlalchemy.engine import Connection, Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import gamification, modules
+from bot.web import gamification, modules, work_points
 from bot.web.calendar_service import active_staff, app_timezone
 from bot.web.deps import require_csrf, require_user
 
@@ -56,8 +56,10 @@ router = APIRouter(prefix="/api/drink-descriptions", tags=["drink-descriptions"]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Торговые точки (совпадает с shift_types.point и app.SHIFT_POINTS) + фоллбэк.
-POINT_VALUES = ("ДЕ", "УЯ", "другое")
+# Точки присутствия берутся из справочника work_points; «другое» — фоллбэк,
+# когда смена в графике не найдена.
+def _point_values(engine: Engine) -> list[str]:
+    return [*work_points.active_codes(engine), work_points.OTHER_POINT]
 # Категории напитков описания (совпадает с menu_drinks.category / DRINK_PARAMS).
 BLACK_COFFEE = "черный кофе"
 MILK_COFFEE = "кофе с молоком"
@@ -401,7 +403,7 @@ def current_shift(user_id: int) -> dict[str, Any]:
     shift_date = now.date().isoformat()
     point: str | None = None
     partners: list[dict[str, Any]] = []
-    for candidate in ("ДЕ", "УЯ"):
+    for candidate in work_points.active_codes(engine):
         staff = active_staff(engine, candidate, now)
         if any(int(person["id"]) == int(user_id) for person in staff):
             point = candidate
@@ -417,7 +419,7 @@ def current_shift(user_id: int) -> dict[str, Any]:
         {**person, "on_shift": False} for person in staff_list if person["id"] not in partner_ids
     ]
     return {
-        "point": point or "другое",
+        "point": point or work_points.OTHER_POINT,
         "on_shift": point is not None,
         "shift_date": shift_date,
         "partners": partners,
@@ -815,8 +817,11 @@ def list_descriptions(point: str | None = None, author_id: int | None = None,
                       state: str | None = None, limit: int | None = None, offset: int = 0,
                       user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Лента описаний с фильтрами по точке, бариста и статусу голосования."""
-    if point not in (None, "all") and point not in POINT_VALUES:
-        raise HTTPException(status_code=422, detail="Неизвестная торговая точка")
+    if point not in (None, "all", work_points.OTHER_POINT):
+        try:
+            point = work_points.normalize_point(engine, point, require_active=False)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     if state not in (None, "all", "unvoted", "voted"):
         raise HTTPException(status_code=422, detail="Неизвестный фильтр голосования")
     limit = max(1, min(int(limit or _cfg("DEFAULT_PAGE")), _cfg("MAX_PAGE")))
@@ -861,7 +866,7 @@ def list_descriptions(point: str | None = None, author_id: int | None = None,
                                    photos.get(int(row["id"]), {}), int(user["id"]))
             for row in rows
         ],
-        "points": list(POINT_VALUES),
+        "points": _point_values(engine),
         "authors": [{"id": int(row["id"]), "name": row["name"]} for row in authors],
         "has_more": has_more,
         "limit": limit,
@@ -896,7 +901,7 @@ def description_options(_: dict[str, Any] = Depends(require_user)) -> dict[str, 
             "milk_drop": list(MILK_DROP_LEVELS),
             "balance_score": list(BALANCE_SCORES),
         },
-        "points": list(POINT_VALUES),
+        "points": _point_values(engine),
     }
 
 
@@ -1022,8 +1027,13 @@ async def create_description(request: Request,
     payload = await _json_object(request)
     items = _normalize_items(payload)
     point = payload.get("point")
-    if point not in POINT_VALUES:
-        raise HTTPException(status_code=422, detail="Укажите торговую точку")
+    if point == work_points.OTHER_POINT:
+        point = work_points.OTHER_POINT
+    else:
+        try:
+            point = work_points.normalize_point(engine, point, require_active=False)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Укажите торговую точку") from error
     partner_id = _optional_reference_id(payload, "partner_id", "Напарник")
     if partner_id == int(user["id"]):
         partner_id = None
