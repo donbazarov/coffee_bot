@@ -724,10 +724,16 @@
               {% if module.code == 'roles' %}
               <section class="panel settings-panel" id="roles-panel">
                 <div class="panel-heading"><div><p class="eyebrow">ДОЛЖНОСТИ И ДОПУСКИ</p><h3>Должности команды</h3></div><div class="role-actions"><button class="button button-primary" type="button" id="role-add">Добавить</button><button class="button button-quiet" type="button" id="roles-refresh">Обновить</button></div></div>
-                <p class="settings-hint">Должность — это название и уровень доступа: права даёт уровень, а не должность. Шкала уровней захардкожена (пять ступеней), должности заводят и правят руками здесь, а сотрудникам назначают их в разделе «Команда». Пока в системе есть хотя бы один активный супер-пользователь (уровень 4), система не даст снять доступ у всех.</p>
-                <div class="roles-thresholds" id="role-levels"></div>
+                <p class="settings-hint">Должность — это название и уровень доступа. Заводите и правьте должности здесь, а назначайте их сотрудникам в разделе «Команда».</p>
                 <div class="roles-list" id="roles-list"></div>
                 <p class="roles-status" id="roles-status" role="status"></p>
+                {# Пояснение по уровням — под списком должностей: наверху остаётся то,
+                   с чем идёт работа, а справка живёт ниже и не растягивает панель. #}
+                <section class="role-levels-panel">
+                  <div class="panel-heading"><div><p class="eyebrow">ШКАЛА УРОВНЕЙ</p><h3>Что даёт каждый уровень</h3></div></div>
+                  <p class="settings-hint">Права накапливаются: каждый следующий уровень добавляет к предыдущему, поэтому в списке — только новое. Уровни захардкожены (пять ступеней), XP на права не влияет. Пока есть хотя бы один активный супер-пользователь (уровень 4), снять доступ у всех не получится.</p>
+                  <div class="role-levels" id="role-levels"></div>
+                </section>
               </section>
               {% elif module.code == 'calendar' %}
         <section class="panel settings-panel" id="shift-templates-panel">

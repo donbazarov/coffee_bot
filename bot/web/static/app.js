@@ -10453,23 +10453,29 @@ function rolesSetStatus(message) {
   if (node) node.textContent = message || '';
 }
 
-/* Легенда уровней: что даёт каждая ступень (права приходят с сервера). */
+/* Легенда уровней: компактный список вместо сетки карточек. Права не повторяются
+   по ступеням — показываем только то, что уровень добавляет к предыдущему. */
 function renderRoleLevels() {
   const box = document.querySelector('#role-levels');
   if (!box) return;
+  const levels = rolesState.levels || [];
   const permissions = rolesState.permissions || [];
-  box.innerHTML = (rolesState.levels || []).map((level) => {
-    const granted = permissions
-      .filter((permission) => Number(permission.level) <= Number(level.level))
+  box.innerHTML = levels.map((level, index) => {
+    const current = Number(level.level);
+    const added = permissions
+      .filter((permission) => Number(permission.level) === current)
       .map((permission) => `<span class="role-capability">${escapeHtml(permission.title)}</span>`)
       .join('');
+    const previous = index > 0 ? Number(levels[index - 1].level) : null;
+    const lead = previous === null
+      ? ''
+      : `<p class="role-level-lead">То же, что в уровне ${previous}, плюс:</p>`;
     return `
-    <div class="roles-threshold">
-      <span>Уровень ${Number(level.level)}</span>
-      <strong>${escapeHtml(level.title)}</strong>
-      <small>${escapeHtml(level.summary)}</small>
-      ${granted ? `<div class="role-capabilities-row">${granted}</div>` : ''}
-    </div>`;
+    <article class="role-level-row">
+      <div class="role-level-head"><span class="role-level-badge">Уровень ${current}</span><strong>${escapeHtml(level.title)}</strong></div>
+      <p class="role-level-summary">${escapeHtml(level.summary)}</p>
+      ${lead}${added ? `<div class="role-capabilities-row">${added}</div>` : ''}
+    </article>`;
   }).join('');
 }
 
