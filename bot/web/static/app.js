@@ -10533,8 +10533,9 @@ function currentUserRoles(root) {
   return [...root.querySelectorAll('input[name="roles"]:checked')].map((input) => input.value);
 }
 
-/* Основная должность — первая отмеченная по порядку справочника: по ней работают
-   график смен и нормо-часы, а права берутся как максимум по всем должностям. */
+/* Основная должность — самая высокая по уровню: она идёт первой, потому что
+   список отсортирован от высоких должностей к низким. По ней работают график
+   смен и нормо-часы, а права берутся как максимум по всем должностям. */
 function markPrimaryRole() {
   const picker = document.querySelector('#user-form-roles');
   if (!picker) return;
@@ -11036,8 +11037,8 @@ function setupDashboard() {
     if (!rolesState.roles.length) await loadRoles();
     if (user) {
       form.elements.name.value = user.name;
-      // Должности приходят списком (`/api/users` → roles): отмечаем все, первая
-      // по порядку справочника станет основной.
+    // Должности приходят списком (`/api/users` → roles, от высоких к низким):
+    // отмечаем все, основной станет самая высокая по уровню.
       renderUserRolePicker((user.roles || []).map((item) => item.key));
       form.elements.iiko_id.value = user.iiko_id ?? '';
       form.elements.telegram_username.value = user.telegram_username ?? '';

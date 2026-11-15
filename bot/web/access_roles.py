@@ -439,13 +439,13 @@ def levels() -> list[dict[str, Any]]:
 
 
 def roles_of(connection: Any, user_id: int) -> list[str]:
-    """Должности сотрудника в порядке справочника (первая — основная)."""
+    """Должности сотрудника: от высокой к низкой (первая — основная)."""
     return [str(row[0]) for row in connection.execute(text("""
         SELECT ur.role_key
         FROM user_roles ur
         LEFT JOIN role_access_config r ON r.role_key = ur.role_key
         WHERE ur.user_id = :user_id
-        ORDER BY COALESCE(r.sort_order, 2147483647), ur.role_key
+        ORDER BY COALESCE(r.access_level, -1) DESC, COALESCE(r.sort_order, 2147483647), ur.role_key
     """), {"user_id": user_id}).all()]
 
 
@@ -455,7 +455,7 @@ def user_level(roles: Iterable[str]) -> int:
 
 
 def user_roles_map(connection: Any) -> dict[int, list[dict[str, Any]]]:
-    """Все назначения разом: `user_id` → должности в порядке справочника.
+    """Все назначения разом: `user_id` → должности от высокой к низкой.
 
     Нужен панели (`/api/users`), чтобы не делать отдельный запрос на сотрудника.
     """
@@ -463,7 +463,8 @@ def user_roles_map(connection: Any) -> dict[int, list[dict[str, Any]]]:
         SELECT ur.user_id, ur.role_key, r.title, r.access_level, r.is_active
         FROM user_roles ur
         LEFT JOIN role_access_config r ON r.role_key = ur.role_key
-        ORDER BY ur.user_id, COALESCE(r.sort_order, 2147483647), ur.role_key
+        ORDER BY ur.user_id, COALESCE(r.access_level, -1) DESC,
+                 COALESCE(r.sort_order, 2147483647), ur.role_key
     """)).mappings().all()
     result: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
@@ -480,8 +481,9 @@ def user_roles_map(connection: Any) -> dict[int, list[dict[str, Any]]]:
 def set_user_roles(connection: Any, user_id: int, role_keys: Iterable[str]) -> list[str]:
     """Записывает должности сотрудника и синхронизирует основную (`users.role`).
 
-    Порядок задаёт справочник (`sort_order`), первая должность становится
-    основной. Без должности сотрудник остаться не может: «нет должности» — это
+    Основной становится самая высокая по уровню должность (при равных уровнях —
+    выше в списке справочника): по ней работают график смен, нормо-часы, чат и
+    push. Без должности сотрудник остаться не может: «нет должности» — это
     состояние заявки на доступ, а не рабочая конфигурация.
     """
     keys = [str(key or "").strip() for key in role_keys]
@@ -493,7 +495,8 @@ def set_user_roles(connection: Any, user_id: int, role_keys: Iterable[str]) -> l
     unknown = [key for key in keys if key not in _roles]
     if unknown:
         raise ValueError(f"Неизвестная должность: {', '.join(unknown)}")
-    ordered = sorted(keys, key=lambda key: (int(_roles[key]["sort_order"]), key))
+    ordered = sorted(keys, key=lambda key: (-int(_roles[key]["access_level"]),
+                                            int(_roles[key]["sort_order"]), key))
     connection.execute(text("DELETE FROM user_roles WHERE user_id = :user_id"), {"user_id": user_id})
     for key in ordered:
         connection.execute(
@@ -575,7 +578,7 @@ def list_roles(engine: Engine) -> list[dict[str, Any]]:
                    (SELECT COUNT(*) FROM user_roles ur JOIN users u ON u.id = ur.user_id
                     WHERE ur.role_key = r.role_key AND u.is_active = 1) AS active_user_count
             FROM role_access_config r
-            ORDER BY r.sort_order, r.access_level, r.role_key
+            ORDER BY r.access_level DESC, r.sort_order, r.role_key
         """)).mappings().all()
     result: list[dict[str, Any]] = []
     for row in rows:
