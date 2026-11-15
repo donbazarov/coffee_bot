@@ -7581,7 +7581,7 @@ function taskWidgetMarkup(task) {
   const meta = `${escapeHtml(stage.label)} · ${escapeHtml(who)}`;
   return `<article class="announcement${due && due.overdue ? ' is-unread' : ''}" data-task-id="${task.id}" role="button" tabindex="0" style="--announcement-color: ${escapeHtml(task.category_color || '#7b8794')}">
     <header class="announcement-top">${chip}<h4 class="announcement-title">${escapeHtml(task.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
-    ${task.description ? `<p class="announcement-body">${escapeHtml(task.description.slice(0, 160))}</p>` : ''}
+    ${task.description ? `<p class="announcement-body">${taskNoteMarkup(task.description)}</p>` : ''}
     <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span></footer>
   </article>`;
 }
@@ -7592,6 +7592,8 @@ function bindTasksWidget() {
   if (!list || list.dataset.bound) return;
   list.dataset.bound = '1';
   const open = (event) => {
+    // Ссылка на статью БЗ внутри описания — переход по ссылке, а не на доску.
+    if (event.target.closest('[data-kb-page]')) return;
     if (!event.target.closest('.announcement[data-task-id]')) return;
     setView('tasks');
   };
@@ -8412,6 +8414,20 @@ function taskDueInfo(task) {
   return { label, overdue: open && due.getTime() < now.getTime() };
 }
 
+/* Описание на карточке: обрезаем до 160 символов, но не рвём маркер ссылки
+   `@[Заголовок](kb:12)` — иначе читатель увидит огрызок «@[Заголовок](kb:1».
+   Рендер тот же, что у анонсов: ссылки БЗ и обычные URL. */
+function taskNoteMarkup(text, limit = 160) {
+  const value = String(text || '');
+  if (!value) return '';
+  let cut = value.slice(0, limit);
+  if (cut.length < value.length) {
+    const start = cut.lastIndexOf('@[');
+    if (start !== -1 && !cut.slice(start).match(/^@\[[^\]\n]{1,200}\]\(kb:\d{1,12}\)/)) cut = cut.slice(0, start);
+  }
+  return announcementBodyMarkup(cut);
+}
+
 /* Карточка: бейджи (категория + приоритет), название, мета-подвал и быстрые
    кнопки перевода статуса — на узком экране они видны всегда (см. app.css). */
 function taskCardMarkup(task) {
@@ -8429,7 +8445,7 @@ function taskCardMarkup(task) {
   const due = taskDueInfo(task);
   const metas = [
     due ? `<span class="task-meta-item${due.overdue ? ' is-overdue' : ''}"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>` : '',
-    ...(task.meta || []).slice(0, 2).map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`),
+    ...(task.meta || []).slice(0, 2).map((line) => `<span class="task-meta-item"><span class="task-meta-dot" aria-hidden="true"></span>${escapeHtml(line)}</span>`),
   ].join('');
   const who = task.assignee.type === 'role'
     ? task.assignee.role_label
@@ -8450,7 +8466,7 @@ function taskCardMarkup(task) {
       ${task.can_edit ? '<span class="task-grip" aria-hidden="true"><svg class="icon"><use href="#i-drag"></use></svg></span>' : ''}
     </header>
     <p class="task-card-title${done ? ' is-done' : ''}">${escapeHtml(task.title)}</p>
-    ${task.description ? `<p class="task-card-note">${escapeHtml(task.description.slice(0, 160))}</p>` : ''}
+    ${task.description ? `<p class="task-card-note">${taskNoteMarkup(task.description)}</p>` : ''}
     <footer class="task-card-foot">
       <div class="task-card-meta">${metas || `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-profile"></use></svg>${escapeHtml(who)}</span>`}</div>
       <div class="task-card-owner"><b class="task-avatar">${escapeHtml((who || '?').slice(0, 1).toUpperCase())}</b>${escapeHtml(who)}</div>
@@ -8890,8 +8906,8 @@ function openTaskViewDialog(taskId) {
       ${task.priority !== 'normal' ? `<span class="task-badge is-priority-${escapeHtml(task.priority)}">${escapeHtml(TASK_PRIORITY_LABELS[task.priority] || '')}</span>` : ''}
     </div>
     <h3 class="task-view-title">${escapeHtml(task.title)}</h3>
-    ${task.description ? `<p class="task-view-text">${escapeHtml(task.description)}</p>` : ''}
-    ${(task.meta || []).length || due ? `<div class="task-view-meta">${due ? `<span class="task-meta-item${due.overdue ? ' is-overdue' : ''}"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>` : ''}${task.meta.map((line) => `<span class="task-meta-item"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(line)}</span>`).join('')}</div>` : ''}
+    ${task.description ? `<p class="task-view-text">${announcementBodyMarkup(task.description)}</p>` : ''}
+    ${(task.meta || []).length || due ? `<div class="task-view-meta">${due ? `<span class="task-meta-item${due.overdue ? ' is-overdue' : ''}"><svg class="icon" aria-hidden="true"><use href="#i-timer"></use></svg>${escapeHtml(due.label)}</span>` : ''}${task.meta.map((line) => `<span class="task-meta-item"><span class="task-meta-dot" aria-hidden="true"></span>${escapeHtml(line)}</span>`).join('')}</div>` : ''}
     <dl class="task-view-facts">
       <div><dt>Автор</dt><dd>${escapeHtml(task.author_name || '—')}</dd></div>
       <div><dt>Кому</dt><dd>${escapeHtml(task.assignee.type === 'all' ? 'Всем' : (task.assignee.role_label || task.assignee.name || '—'))}</dd></div>
@@ -9320,6 +9336,10 @@ function setupTasks() {
       button.addEventListener('click', () => dialog.close());
     });
   });
+
+  // Ссылки на статьи БЗ в описании — тот же маркер `@[Заголовок](kb:12)`, что в анонсах.
+  attachPageLinkSuggest(document.querySelector('#task-form textarea[name="description"]'), 'textarea');
+  document.querySelector('#task-dialog')?.addEventListener('close', pageLinkClose);
 }
 
 /* --- Панель управления: навигация по модулям и вкл/выкл ------------------- */

@@ -34,7 +34,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules
+from bot.web import modules, page_links
 from bot.web.announcements import COLOR_RE, TRANSLIT
 from bot.web.calendar_service import ROLE_NAMES as ROLE_LABELS, _ensure_columns
 
@@ -650,9 +650,12 @@ def create_task(engine: Engine, user: dict[str, Any], payload: dict[str, Any]) -
     priority = str(payload.get("priority") or "normal").strip()
     if priority not in PRIORITIES:
         raise ValueError("Неизвестный приоритет")
-    description = str(payload.get("description") or "").strip()[
-        :modules.setting("tasks", "MAX_DESCRIPTION", MAX_DESCRIPTION)
-    ]
+    # Обрезка не рвёт маркер ссылки `@[Заголовок](kb:12)` — иначе в карточке
+    # останется служебный огрызок вместо читаемого текста.
+    description = page_links.truncate_safe(
+        str(payload.get("description") or "").strip(),
+        modules.setting("tasks", "MAX_DESCRIPTION", MAX_DESCRIPTION),
+    )
     assignee = _validate_assignee(engine, payload)
     with engine.begin() as connection:
         result = connection.execute(text("""
@@ -699,8 +702,10 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
             raise ValueError("Название задачи обязательно")
         values["title"] = title
     if "description" in payload:
-        values["description"] = str(payload.get("description") or "").strip()[
-            :modules.setting("tasks", "MAX_DESCRIPTION", MAX_DESCRIPTION)]
+        values["description"] = page_links.truncate_safe(
+            str(payload.get("description") or "").strip(),
+            modules.setting("tasks", "MAX_DESCRIPTION", MAX_DESCRIPTION),
+        )
     if "category_code" in payload:
         values["category_code"] = _clean_category(engine, payload.get("category_code"))
     if {"due_date", "due_time"} & set(payload):

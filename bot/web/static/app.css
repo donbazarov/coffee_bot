@@ -2815,6 +2815,8 @@ body { transition: background-color .3s ease, color .3s ease; }
 .task-card-meta { display: flex; flex-wrap: wrap; gap: 10px; min-width: 0; }
 .task-meta-item { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font: 400 10.5px var(--mono); }
 .task-meta-item .icon { width: 13px; height: 13px; color: var(--dim); }
+/* Мета-строка без иконки: нейтральная точка вместо часов (цвет наследуется от текста). */
+.task-meta-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .7; }
 /* Просроченный дедлайн подсвечиваем — смена видит, что горит. */
 .task-meta-item.is-overdue { color: var(--danger-text); font-weight: 600; }
 .task-meta-item.is-overdue .icon { color: var(--danger-text); }
