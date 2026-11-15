@@ -46,7 +46,7 @@ from sqlalchemy.engine import Connection, Engine
 from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
-from bot.web import gamification, modules, work_points
+from bot.web import gamification, modules, notifications, work_points
 from bot.web.calendar_service import active_staff, app_timezone
 from bot.web.deps import require_csrf, require_user
 
@@ -1104,6 +1104,17 @@ async def create_description(request: Request,
             connection, int(user["id"]), partner_id, items, photos["latte_art"],
             description_id, point, shift_date,
         )
+    # Единый центр уведомлений: о новом описании узнаёт вся команда. Отправляем
+    # уже после коммита — фоновая запись ленты не должна ловить блокировку SQLite.
+    try:
+        notifications.notify_audience_async(
+            engine, "drink_published", f"{author_name} выложил описание смены",
+            f"Точка: {work_points.point_label(engine, point)} · напитков: {len(items)}",
+            "/?view=drinks", entity_type="drink_description", entity_id=description_id,
+            actor_id=int(user["id"]),
+        )
+    except Exception as error:  # noqa: BLE001 — лента не должна ломать публикацию
+        logger.warning("Центр уведомлений: описание не разослано: %s", error)
     return {"ok": True, "id": description_id, "quizzes": quiz_ids,
             "xp": xp["author"], "partner_xp": xp["partner"]}
 

@@ -1098,9 +1098,9 @@ def notifications_unread_summary(user: dict[str, Any] = Depends(require_user)) -
 @app.post("/api/notifications/mark-read")
 async def mark_notifications_read(request: Request,
                                   user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
-    """Пометка прочитанным: список id, сущность (авто при открытии) или всё сразу."""
+    """Пометка прочитанным: список id, сущность, модуль (авто при открытии) или всё сразу."""
     payload = await _read_json_object(request)
-    if set(payload) - {"ids", "all", "entity_type", "entity_id"}:
+    if set(payload) - {"ids", "all", "entity_type", "entity_id", "module"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля")
     ids = payload.get("ids")
     if ids is not None and (not isinstance(ids, list)
@@ -1112,9 +1112,14 @@ async def mark_notifications_read(request: Request,
     entity_id = payload.get("entity_id")
     if entity_id is not None and (isinstance(entity_id, bool) or not isinstance(entity_id, int)):
         raise HTTPException(status_code=422, detail="Некорректный entity_id")
+    module = payload.get("module")
+    if module is not None and not isinstance(module, str):
+        raise HTTPException(status_code=422, detail="Некорректный module")
+    if module and not notification_registry.get_module(module):
+        raise HTTPException(status_code=422, detail="Неизвестный модуль уведомлений")
     count = notifications.mark_read(
         engine, int(user["id"]), ids, everything=bool(payload.get("all")),
-        entity_type=entity_type or None, entity_id=entity_id,
+        entity_type=entity_type or None, entity_id=entity_id, module=module or None,
     )
     return {"ok": True, "count": count,
             "unread": notifications.unread_summary(engine, int(user["id"]))}

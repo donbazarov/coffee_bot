@@ -356,8 +356,8 @@ def list_for_user(engine: Engine, user_id: int, limit: int = DEFAULT_LIMIT,
 
 def mark_read(engine: Engine, user_id: int, ids: Iterable[int] | None = None, *,
               everything: bool = False, entity_type: str | None = None,
-              entity_id: int | None = None) -> int:
-    """Помечает прочитанным: список id, всё сразу или сущность (авто при открытии)."""
+              entity_id: int | None = None, module: str | None = None) -> int:
+    """Помечает прочитанным: список id, сущность, модуль или всё сразу."""
     with engine.begin() as connection:
         if ids:
             values = [int(value) for value in ids if str(value).strip().lstrip("-").isdigit()]
@@ -382,6 +382,15 @@ def mark_read(engine: Engine, user_id: int, ids: Iterable[int] | None = None, *,
                 UPDATE notifications SET is_read = 1
                 WHERE user_id = :user_id AND is_read = 0 AND entity_type = :entity_type{suffix}
             """), params)
+            return int(result.rowcount or 0)
+        # Открытие раздела целиком: гасим непрочитанное конкретного модуля.
+        if module:
+            if not registry.get_module(module):
+                return 0
+            result = connection.execute(text("""
+                UPDATE notifications SET is_read = 1
+                WHERE user_id = :user_id AND is_read = 0 AND module = :module
+            """), {"user_id": user_id, "module": module})
             return int(result.rowcount or 0)
         # Остался режим «Прочитать всё»: остальные случаи обработаны выше.
         if not everything:

@@ -4016,8 +4016,11 @@ function renderAnnouncementBadge() {
   // Бейджи разделов здесь намеренно не трогаем: их ведёт Единый центр
   // уведомлений (`renderNotificationBadges`) — иначе счётчики перекрывались бы.
   const total = Number((announcementsState.unread || {}).total || 0);
-  const label = document.querySelector('#announcements-unread-label');
-  if (label) label.textContent = total ? `Непрочитанных: ${total}` : 'Всё прочитано';
+  // Подпись непрочитанного дублируется в разделе «Анонсы» и в центре уведомлений.
+  const caption = total ? `Непрочитанных: ${total}` : 'Всё прочитано';
+  document.querySelectorAll('[data-announcements-unread]').forEach((label) => {
+    label.textContent = caption;
+  });
   const enabled = (announcementsState.unread || {}).enabled || [];
   document.querySelectorAll('[data-ann-bell]').forEach((button) => {
     const on = enabled.includes(button.dataset.annBell);
@@ -4040,14 +4043,17 @@ function renderAnnouncementFilters() {
 }
 
 function renderAnnouncementBell() {
-  const target = document.querySelector('#announcements-bell');
-  if (!target) return;
+  // Чипы «что меня уведомляет» стоят и в разделе «Анонсы», и в центре уведомлений,
+  // поэтому рендерим во все контейнеры с data-announcements-bell.
+  const targets = document.querySelectorAll('[data-announcements-bell]');
+  if (!targets.length) return;
   const enabled = (announcementsState.unread || {}).enabled || [];
-  target.innerHTML = (announcementsState.categories || []).map((item) => `
+  const markup = (announcementsState.categories || []).map((item) => `
     <button class="chip chip-toggle ${enabled.includes(item.code) ? 'is-selected' : ''}" type="button"
             data-ann-bell="${escapeHtml(item.code)}" aria-pressed="${enabled.includes(item.code) ? 'true' : 'false'}">
       <svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>${escapeHtml(item.label)}
     </button>`).join('');
+  targets.forEach((target) => { target.innerHTML = markup; });
 }
 
 /* Закреплённые держим всегда, остальное — за последнюю неделю.
@@ -4330,7 +4336,7 @@ const notificationsState = {
 /* Модуль события → иконка спрайта: тот же код, что в notification_registry. */
 const NOTIF_MODULE_ICONS = {
   qc: 'i-poll', shifts: 'i-calendar', tasks: 'i-kanban', kb: 'i-book',
-  announcements: 'i-bell', chat: 'i-chat',
+  announcements: 'i-bell', drinks: 'i-latte', chat: 'i-chat',
 };
 
 function renderNotificationBadges() {
@@ -4631,9 +4637,26 @@ function pushPermissionGranted() {
   return typeof Notification !== 'undefined' && Notification.permission === 'granted';
 }
 
+/* Ряды push-уведомлений на устройстве дублируются: панель раздела «Анонсы» и
+   Единый центр уведомлений в профиле. Держим их синхронными. */
+const PUSH_ROWS = [
+  { status: '#push-status', enable: '#push-enable', disable: '#push-disable', test: '#push-test' },
+  { status: '#push-status-center', enable: '#push-enable-center', disable: '#push-disable-center', test: '#push-test-center' },
+];
+
+function pushRowNodes() {
+  return PUSH_ROWS.map((row) => ({
+    status: document.querySelector(row.status),
+    enable: document.querySelector(row.enable),
+    disable: document.querySelector(row.disable),
+    test: document.querySelector(row.test),
+  }));
+}
+
 function setPushStatus(message) {
-  const node = document.querySelector('#push-status');
-  if (node) node.textContent = message;
+  pushRowNodes().forEach(({ status }) => {
+    if (status) status.textContent = message;
+  });
 }
 
 function urlBase64ToUint8Array(base64) {
@@ -4653,23 +4676,21 @@ async function pushRegistration() {
 }
 
 function renderPushState() {
-  const enableButton = document.querySelector('#push-enable');
-  const disableButton = document.querySelector('#push-disable');
-  const testButton = document.querySelector('#push-test');
   const granted = pushPermissionGranted();
-  if (pushState.subscribed) {
-    setPushStatus(pushState.devices > 1
+  const message = pushState.subscribed
+    ? (pushState.devices > 1
       ? `Уведомления включены · устройств: ${pushState.devices}`
-      : 'Уведомления включены на этом устройстве');
-  } else if (!pushState.supported) {
-    setPushStatus('Этот браузер не поддерживает уведомления');
-  } else {
-    setPushStatus('Уведомления на этом устройстве выключены');
-  }
-  // «Включить» держим в панели анонсов, только пока разрешение ещё не выдано.
-  if (enableButton) enableButton.hidden = pushState.subscribed || !pushState.supported || granted;
-  if (disableButton) disableButton.hidden = !pushState.subscribed;
-  if (testButton) testButton.hidden = !pushState.subscribed;
+      : 'Уведомления включены на этом устройстве')
+    : (!pushState.supported
+      ? 'Этот браузер не поддерживает уведомления'
+      : 'Уведомления на этом устройстве выключены');
+  pushRowNodes().forEach(({ status, enable, disable, test }) => {
+    if (status) status.textContent = message;
+    // «Включить» показываем, только пока разрешение не выдано и подписки нет.
+    if (enable) enable.hidden = pushState.subscribed || !pushState.supported || granted;
+    if (disable) disable.hidden = !pushState.subscribed;
+    if (test) test.hidden = !pushState.subscribed;
+  });
   renderPushEntryPoints();
 }
 
@@ -4755,21 +4776,6 @@ function renderPushEntryPoints() {
   const granted = pushPermissionGranted();
   const enabled = pushState.subscribed;
   const ready = standalone && pushState.supported;
-
-  const panel = document.querySelector('#profile-push-panel');
-  const enableProfile = document.querySelector('#push-enable-profile');
-  const disableProfile = document.querySelector('#push-disable-profile');
-  const statusProfile = document.querySelector('#push-status-profile');
-  if (panel) panel.hidden = !ready;
-  if (enableProfile) enableProfile.hidden = enabled || granted;
-  if (disableProfile) disableProfile.hidden = !enabled;
-  if (statusProfile) {
-    statusProfile.textContent = enabled
-      ? (pushState.devices > 1
-        ? `Уведомления включены · устройств: ${pushState.devices}`
-        : 'Уведомления включены на этом устройстве')
-      : 'Уведомления на этом устройстве выключены';
-  }
 
   const prompt = document.querySelector('#push-prompt');
   if (!prompt) return;
@@ -5065,18 +5071,20 @@ function setupAnnouncements() {
   });
   document.querySelectorAll('#announcements-feed-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => feedDialog?.close()));
 
-  document.querySelector('#push-enable')?.addEventListener('click', enablePush);
-  document.querySelector('#push-disable')?.addEventListener('click', disablePush);
-  document.querySelector('#push-test')?.addEventListener('click', async () => {
+  const testPush = async () => {
     setPushStatus('Отправляем…');
     try {
       const result = await api('/api/push/test', { method: 'POST' });
       setPushStatus(`Уведомление отправлено на устройств: ${result.delivered}`);
     } catch (error) { setPushStatus(error.message); }
+  };
+  // Оба ряда push (панель «Анонсы» и центр уведомлений) вешаем на одни действия.
+  PUSH_ROWS.forEach((row) => {
+    document.querySelector(row.enable)?.addEventListener('click', enablePush);
+    document.querySelector(row.disable)?.addEventListener('click', disablePush);
+    document.querySelector(row.test)?.addEventListener('click', testPush);
   });
-  // Профиль и PWA-баннер про уведомления (показываются только в standalone).
-  document.querySelector('#push-enable-profile')?.addEventListener('click', enablePush);
-  document.querySelector('#push-disable-profile')?.addEventListener('click', disablePush);
+  // PWA-баннер про уведомления (показывается только в standalone).
   document.querySelector('#push-prompt-enable')?.addEventListener('click', enablePush);
   document.querySelector('#push-prompt-later')?.addEventListener('click', dismissPushPrompt);
   document.querySelector('#push-prompt-close')?.addEventListener('click', dismissPushPrompt);
@@ -7681,6 +7689,18 @@ async function openDrinks() {
   setDrinksTab(drinkState.tab || 'feed');
   await loadDrinks(!drinkState.loaded);
   if (drinkState.tab === 'memes' && !drinkState.memes.loaded) loadMemes(true);
+  // Раздел открыли — счётчик «Описание напитков» в сайдбаре гасим (как в «Анонсах»).
+  if (Number(((notificationsState.summary || {}).by_module || {}).drinks || 0) > 0) {
+    try {
+      const data = await api('/api/notifications/mark-read', {
+        method: 'POST', body: JSON.stringify({ module: 'drinks' }),
+      });
+      if (data.unread) {
+        notificationsState.summary = data.unread;
+        renderNotificationBadges();
+      }
+    } catch (error) { /* офлайн: счётчик погасится при следующей синхронизации */ }
+  }
 }
 
 /* Переход из базы знаний (история рецептов) или из галереи мемов в карточку ленты.

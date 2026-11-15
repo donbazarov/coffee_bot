@@ -33,6 +33,7 @@ NOTIFICATION_MODULES: tuple[dict[str, str], ...] = (
     {"code": "tasks", "title": "Задачи", "icon": "i-kanban", "view": "tasks"},
     {"code": "kb", "title": "База знаний", "icon": "i-book", "view": "kb"},
     {"code": "announcements", "title": "Анонсы", "icon": "i-bell", "view": "announcements"},
+    {"code": "drinks", "title": "Описание напитков", "icon": "i-latte", "view": "drinks"},
     {"code": "chat", "title": "Чат", "icon": "i-chat", "view": "chat"},
 )
 
@@ -79,6 +80,11 @@ NOTIFICATION_EVENTS: tuple[dict[str, Any], ...] = (
         "code": "announcement_new", "module": "announcements", "label": "Новый анонс",
         "hint": "Опубликован анонс: событие, расписание или общая информация",
         "roles": ALL_ROLES, "in_app": True, "push": True,
+    },
+    {
+        "code": "drink_published", "module": "drinks", "label": "Новое описание напитка",
+        "hint": "Коллега выложил описание смены: рецепты, фото латте-арта и мемы",
+        "roles": ALL_ROLES, "in_app": True, "push": False,
     },
     {
         "code": "chat_message", "module": "chat", "label": "Личное сообщение",

@@ -334,8 +334,8 @@
           </div>
         </div>
         <section class="panel settings-panel" id="announcements-bell-panel">
-          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Что меня уведомляет</h3></div><span class="panel-index" id="announcements-unread-label">—</span></div>
-          <div class="chip-row" id="announcements-bell" role="group" aria-label="Категории уведомлений"></div>
+          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Что меня уведомляет</h3></div><span class="panel-index" id="announcements-unread-label" data-announcements-unread>—</span></div>
+          <div class="chip-row" id="announcements-bell" data-announcements-bell role="group" aria-label="Категории уведомлений"></div>
           <div class="push-row">
             <span class="push-status" id="push-status" role="status">Проверяем устройство…</span>
             <button class="button button-quiet" type="button" id="push-enable">Включить на этом устройстве</button>
@@ -623,25 +623,27 @@
             </label>
           </div>
         </section>
-        {# Уведомления на устройстве. Панель показывается только в режиме PWA (standalone). #}
-        <section class="panel settings-panel" id="profile-push-panel" hidden>
-          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Push на этом устройстве</h3></div></div>
+        {# Единый центр уведомлений: одна панель на аккаунт и на это устройство —
+           push-уведомления, режим уведомлений чата, категории анонсов и тумблеры
+           событий. Ряды push и чипы категорий ведёт app.js, поэтому те же
+           контролы дублируются в разделе «Анонсы» (#announcements-bell-panel). #}
+        <section class="panel settings-panel" id="notification-center-panel">
+          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Центр уведомлений и Push</h3></div></div>
+          <p class="settings-hint">Одна панель на всё: системные уведомления на этом устройстве, push о сообщениях чата, категории анонсов и тумблеры «В приложении / Push» на каждое событие. «Push» работает только на устройствах, где включены уведомления.</p>
           <div class="appearance-group">
-            <strong>Уведомления в приложении</strong>
+            <strong>Уведомления на этом устройстве</strong>
             <small>Работают, когда сайт установлен на домашний экран. Включаются на каждом устройстве отдельно.</small>
             <div class="push-row">
-              <span class="push-status" id="push-status-profile" role="status">Проверяем устройство…</span>
-              <button class="button button-primary" type="button" id="push-enable-profile">Включить уведомления</button>
-              <button class="button button-quiet" type="button" id="push-disable-profile" hidden>Отключить</button>
+              <span class="push-status" id="push-status-center" role="status">Проверяем устройство…</span>
+              <button class="button button-primary" type="button" id="push-enable-center">Включить уведомления</button>
+              <button class="button button-quiet" type="button" id="push-disable-center" hidden>Отключить</button>
+              <button class="button button-quiet" type="button" id="push-test-center" hidden>Проверить</button>
             </div>
           </div>
-        </section>
-        {# Настройка уведомлений чата — это про аккаунт, а не устройство, поэтому доступна всегда. #}
-        <section class="panel settings-panel" id="chat-notify-panel">
-          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ ЧАТА</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg>Когда присылать push</h3></div></div>
+          {% if modules['chat'].enabled %}
           <div class="appearance-group">
             <strong>Push о сообщениях чата</strong>
-            <small>Работает, если на этом устройстве включены уведомления (панель выше). Личные сообщения приходят всегда, если не выбрать «Ничего».</small>
+            <small>Личные сообщения приходят всегда, если не выбрать «Ничего». Работает, если на этом устройстве включены уведомления (блок выше).</small>
             <div class="theme-switch" role="group" aria-label="Уведомления чата" id="chat-notify-switch">
               <button type="button" data-chat-notify="all">Все сообщения</button>
               <button type="button" data-chat-notify="dm_mentions">Личные и упоминания</button>
@@ -649,12 +651,15 @@
             </div>
           </div>
           <p class="account-note" id="chat-notify-note" role="status"></p>
-        </section>
-        {# Центр уведомлений: тумблеры «В приложении» и «Push» на каждое событие.
-           Список строит app.js из GET /api/notifications/settings. #}
-        <section class="panel settings-panel" id="notification-center-panel">
-          <div class="panel-heading"><div><p class="eyebrow">УВЕДОМЛЕНИЯ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg>Центр уведомлений и Push</h3></div></div>
-          <p class="settings-hint">Что показывать в приложении (колокольчик и бейджи разделов) и что дублировать системным push-уведомлением. «Push» работает только на устройствах, где включены уведомления.</p>
+          {% endif %}
+          {# Категории анонсов: тот же набор, что в разделе «Анонсы» — чипы и
+             подпись непрочитанного заполняет app.js::renderAnnouncementBell(). #}
+          <div class="appearance-group">
+            <strong>Уведомлять об анонсах категорий</strong>
+            <small>Счётчик раздела «Анонсы», push на подписанные устройства и попадание анонсов с датой в календарь. Сам список показывает всё.</small>
+            <div class="chip-row" data-announcements-bell role="group" aria-label="Категории уведомлений"></div>
+            <p class="account-note" data-announcements-unread role="status">—</p>
+          </div>
           <div class="notif-settings" id="notif-settings"></div>
           <div class="notif-settings-actions"><button class="button button-quiet" type="button" id="notif-settings-reset">Сбросить к стандартным</button></div>
           <p class="account-note" id="notif-settings-note" role="status"></p>
@@ -963,7 +968,7 @@
       <div class="drawer-divider"></div>
       {% if modules['development'].enabled %}<button class="nav-item" type="button" data-view="development"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-spark"></use></svg></span><span>Развитие</span></button>{% endif %}
       {% if modules['quality'].enabled %}<button class="nav-item" type="button" data-view="quality"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-poll"></use></svg><span class="nav-badge" data-badge-module="qc" hidden></span></span><span>Контроль качества</span></button>{% endif %}
-      {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg></span><span>Описание напитков</span></button>{% endif %}
+      {% if modules['drinks'].enabled %}<button class="nav-item" type="button" data-view="drinks"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-latte"></use></svg><span class="nav-badge" data-badge-module="drinks" hidden></span></span><span>Описание напитков</span></button>{% endif %}
       <div class="drawer-divider"></div>
       {% if modules['chat'].enabled %}<button class="nav-item" type="button" data-view="chat"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-chat"></use></svg><span class="nav-badge" data-badge-module="chat" hidden></span></span><span>Чат</span></button>{% endif %}
       {% if user.role in ['senior', 'mentor'] and modules['team'].enabled %}<button class="nav-item" type="button" data-view="team"><span class="nav-icon"><svg class="icon" aria-hidden="true"><use href="#i-team"></use></svg></span><span>Команда</span></button>{% endif %}
