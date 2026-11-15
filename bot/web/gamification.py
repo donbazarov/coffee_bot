@@ -23,19 +23,26 @@ import re
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from PIL import Image, ImageOps
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from bot.web import access_roles
+from bot.web import modules
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Базовая выдача при назначении на должность с возможностью `xp_base`
-# (по умолчанию бариста и старший): 2500 XP = 5 уровень.
+# Базовый опыт при назначении должности: 2500 XP = 5 уровень аккаунта. Сумму и
+# порог уровня доступа настраивают в панели управления (модуль «Развитие»);
+# геймификация не знает про справочник должностей — политику связки двух доменов
+# держит `bot/web/app.py` (`_grant_base_xp`).
 BASE_XP = 2500
+BASE_XP_MIN_LEVEL = 1
+modules.register_defaults("development", {
+    "BASE_XP_AMOUNT": BASE_XP,
+    "BASE_XP_MIN_LEVEL": BASE_XP_MIN_LEVEL,
+})
 
 # Хард-скиллы двигают общий уровень аккаунта; социальная ветка — нет.
 HARD_SKILL_CODES = ("sensory", "milk", "standards")
@@ -342,14 +349,16 @@ def active_branches(connection: Connection) -> list[dict[str, Any]]:
 # --- Начисление опыта -------------------------------------------------------- #
 
 
-def grant_base_xp(connection: Connection, user_id: int, role: str) -> int:
-    """Базовые 2500 XP во все активные ветки при должности с `xp_base`.
+def grant_base_xp(connection: Connection, user_id: int, amount: int = BASE_XP) -> int:
+    """Базовый опыт во все активные ветки — идемпотентно.
 
-    Начисляется только тем веткам, где опыт меньше базового; каждый раз — одной
-    `system`-транзакцией (идемпотентно при повторе). Стажёр и ожидающие доступа
-    ничего не получают: у их должностей возможности `xp_base` нет.
+    Начисляется только тем веткам, где опыт меньше базового; каждая ветка — одной
+    `system`-транзакцией, поэтому повторный вызов ничего не добавляет. Кому
+    выдавать (порог уровня доступа) решает вызывающий код: сама геймификация про
+    права ничего не знает.
     """
-    if not access_roles.grants_base_xp(role):
+    base = int(amount or 0)
+    if base <= 0:
         return 0
     granted = 0
     current = {
@@ -360,7 +369,7 @@ def grant_base_xp(connection: Connection, user_id: int, role: str) -> int:
     }
     for branch in active_branches(connection):
         balance = current.get(int(branch["id"]), 0)
-        delta = BASE_XP - balance
+        delta = base - balance
         if delta <= 0:
             continue
         connection.execute(text("""
@@ -379,24 +388,20 @@ def grant_base_xp(connection: Connection, user_id: int, role: str) -> int:
     return granted
 
 
-def backfill_base_xp(engine: Engine) -> int:
-    """Одноразовая (идемпотентная) выдача базового XP активным должностям.
+def backfill_base_xp(engine: Engine, user_ids: Iterable[int], amount: int = BASE_XP) -> int:
+    """Одноразовая (идемпотентная) выдача базового опыта переданным сотрудникам.
 
-    Вызывается на старте: у существующей команды уровень появляется сразу,
-    а не после первого действия. Стажёры и отключённые записи не трогаются:
-    должность должна иметь возможность `xp_base`.
+    Список id считает вызывающий код (в `app.py` — активные сотрудники, чья
+    должность проходит порог уровня доступа): у существующей команды уровень
+    появляется сразу после раскатки, а не после первого действия.
     """
     total = 0
+    ids = [int(user_id) for user_id in user_ids]
+    if not ids or int(amount or 0) <= 0:
+        return 0
     with engine.begin() as connection:
-        rows = connection.execute(text("""
-            SELECT id, role FROM users
-            WHERE is_active = 1
-              AND role IN (SELECT role_key FROM role_access_config
-                            WHERE is_active = 1
-                              AND instr(',' || capabilities || ',', ',xp_base,') > 0)
-        """)).mappings().all()
-        for row in rows:
-            total += grant_base_xp(connection, int(row["id"]), row["role"])
+        for user_id in ids:
+            total += grant_base_xp(connection, user_id, amount)
     return total
 
 
@@ -998,15 +1003,11 @@ def dashboard_me(engine: Engine, user_id: int) -> dict[str, Any]:
         })
 
     progress = _branch_progress(hard_xp)
-    role_key = role_row["role"] if role_row else ""
     return {
-        "role": role_key,
-        "role_title": access_roles.title_of(role_key),
-        "access_level": access_roles.level_of(role_key),
-        # Возможности должности: интерфейс не сравнивает ключи ролей строкой,
-        # а показывает состояния (стажёр / наставник) по данным справочника.
-        "xp_base": access_roles.grants_base_xp(role_key),
-        "mentor": access_roles.is_mentor(role_key),
+        "role": role_row["role"] if role_row else "",
+        # Должность здесь — только подпись: состояния панели уровня (стажёр /
+        # наставник) интерфейс считает по уровню доступа из <body>, а не по
+        # справочнику должностей — геймификация про права ничего не знает.
         "level": progress["level"],
         "account_xp": hard_xp,
         "account_xp_to_next": progress["xp_to_next"],

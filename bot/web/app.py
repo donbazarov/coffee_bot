@@ -25,7 +25,7 @@ from bot.config import BotConfig
 from bot.database.models import engine, init_db
 from bot.web import access_code, access_roles, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
 from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
-from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_manager, require_manager_csrf, require_user, session_user as _session_user
+from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_permission, require_permission_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
     active_staff,
     app_timezone,
@@ -54,15 +54,14 @@ from bot.web.workload_service import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-# Должности и уровни допуска живут в справочнике `role_access_config`
-# (`bot/web/access_roles.py`): здесь не остаётся перечисления ролей. Пороги
-# гейтов (manager/mentor) вычисляются из справочника, поэтому правка уровня в
-# панели управления сразу меняет права — без правки кода.
-# Предпросмотр «глазами бариста»: должность, которой сервер рендерит страницу
-# для управляющих. Хранится в cookie, чтобы гейты Jinja и data-атрибуты <body>
-# совпадали без клиентской имитации.
-PREVIEW_COOKIE = "preview_role"
-PREVIEW_ROLE = "barista"
+# Права сайта живут в `bot/web/access_roles.py`: здесь нет ни перечисления
+# должностей, ни порогов — роуты объявляют право (`require_permission`), а
+# уровень сотрудника приходит из справочника `role_access_config`.
+# Предпросмотр «глазами сотрудника»: супер-пользователь рендерит страницу с
+# пониженным уровнем доступа. Хранится в cookie, чтобы гейты Jinja и
+# data-атрибуты <body> совпадали без клиентской имитации.
+PREVIEW_COOKIE = "preview_level"
+PREVIEW_LEVEL = 1
 
 # Тексты ошибок входа. Формулировки для «нет такого сотрудника» и «неверный код»
 # намеренно разные только в одном: без кода нельзя понять, существует ли запись,
@@ -251,10 +250,10 @@ def migrate_database():
     # Точки присутствия и настройки бренда. Схему создаём после таблиц графика,
     # оценок и описаний: миграция legacy alias должна видеть все их колонки.
     work_points.initialize_schema(engine)
-    # Базовый опыт уже работающей команде выдаётся один раз: у каждого barista и
-    # senior уровень должен появиться сразу после раскатки, а не после первой
-    # оценки наставника. Повторные запуски ничего не добавляют (идемпотентно).
-    backfilled_xp = gamification.backfill_base_xp(engine)
+    # Базовый опыт уже работающей команде выдаётся один раз: у должностей выше
+    # настроенного порога уровень должен появиться сразу после раскатки, а не
+    # после первой оценки. Повторные запуски ничего не добавляют (идемпотентно).
+    backfilled_xp = _backfill_base_xp()
     if backfilled_xp:
         logger.info("Геймификация: базовый опыт выдан (%s XP)", backfilled_xp)
     # Коды активным сотрудникам выдаются сразу: раскатка входа по коду не требует
@@ -305,14 +304,13 @@ async def update_preferences(request: Request, user: dict[str, Any] = Depends(re
 @app.get("/api/modules")
 def list_modules(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Состояние модулей для навигации и панели управления (глобальное, не персональное)."""
-    is_manager = access_roles.is_manager(user)
-    return {"modules": modules.load_modules(engine, is_manager=is_manager)}
+    return {"modules": modules.load_modules(engine, user)}
 
 
 @app.patch("/api/modules/{code}")
 async def update_module(code: str, request: Request,
-                        _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
-    """Включает/выключает модуль целиком для всей команды (управляющий + CSRF)."""
+                        _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
+    """Включает/выключает модуль целиком для всей команды (право «панель» + CSRF)."""
     payload = await _read_json_object(request)
     if set(payload) - {"enabled"} or not isinstance(payload.get("enabled"), bool):
         raise HTTPException(status_code=422, detail="Ожидался флаг enabled (boolean)")
@@ -324,7 +322,7 @@ async def update_module(code: str, request: Request,
 
 
 @app.get("/api/modules/{code}/settings")
-def module_settings(code: str, _: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
+def module_settings(code: str, _: dict[str, Any] = Depends(require_permission("admin"))) -> dict[str, Any]:
     """Схема и текущие значения редактируемых настроек модуля (бывших констант)."""
     if modules.get_module(code) is None:
         raise HTTPException(status_code=404, detail="Модуль не найден")
@@ -333,8 +331,8 @@ def module_settings(code: str, _: dict[str, Any] = Depends(require_manager)) -> 
 
 @app.patch("/api/modules/{code}/settings")
 async def update_module_settings(code: str, request: Request,
-                                 _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
-    """Сохраняет настройки модуля (управляющий + CSRF) с валидацией по типам и границам."""
+                                 _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
+    """Сохраняет настройки модуля (супер-пользователь + CSRF) с валидацией по типам и границам."""
     payload = await _read_json_object(request)
     try:
         fields = modules.save_module_settings(engine, code, payload)
@@ -344,25 +342,35 @@ async def update_module_settings(code: str, request: Request,
 
 
 # --- Должности и допуски (панель управления) -------------------------------- #
+# Должности заводятся, правятся и удаляются руками; в коде хардкодится только
+# шкала уровней и таблица прав (`bot/web/access_roles.py`).
 
 @app.get("/api/roles")
-def list_roles(_: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
-    """Справочник должностей, вычисленные пороги и словарь возможностей.
-
-    Пороги не хранятся отдельно: они выводятся из уровней должностей с
-    возможностью `manage`/`mentor`, поэтому правка уровня сразу меняет права.
-    """
+def list_roles(_: dict[str, Any] = Depends(require_permission("admin"))) -> dict[str, Any]:
+    """Справочник должностей, шкала уровней и таблица прав для панели."""
     return access_roles.view(engine)
+
+
+@app.post("/api/roles", status_code=201)
+async def create_role(request: Request,
+                      _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
+    """Заводит новую должность с уровнем доступа (право «панель» + CSRF)."""
+    payload = await _read_json_object(request)
+    try:
+        role = access_roles.create_role(engine, payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {"ok": True, "role": role, "roles": access_roles.view(engine)["roles"]}
 
 
 @app.patch("/api/roles/{role_key}")
 async def update_role(role_key: str, request: Request,
-                      _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
-    """Правка должности: название, описание, уровень, возможности, активность.
+                      _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
+    """Правка должности: название, описание, уровень, порядок, активность.
 
     Ключ должности неизменен — на него ссылаются `users.role`, история оценок,
-    задач и графика. Инвариант: правка не может оставить систему без активного
-    управляющего (проверяется в `access_roles.update_role`).
+    задач и графика. Инвариант: правка не может оставить систему без
+    супер-пользователя (проверяется в `access_roles.update_role`).
     """
     payload = await _read_json_object(request)
     try:
@@ -371,7 +379,20 @@ async def update_role(role_key: str, request: Request,
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
-    return {"ok": True, "role": role, "thresholds": access_roles.view(engine)["thresholds"]}
+    return {"ok": True, "role": role, "roles": access_roles.view(engine)["roles"]}
+
+
+@app.delete("/api/roles/{role_key}")
+def delete_role(role_key: str,
+                _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
+    """Удаляет должность. Назначенную сотрудникам — нельзя, только отключить."""
+    try:
+        access_roles.delete_role(engine, role_key)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"ok": True, "roles": access_roles.view(engine)["roles"]}
 
 
 @app.patch("/api/profile")
@@ -498,26 +519,25 @@ def home(request: Request):
         except RuntimeError:
             pass
 
-    # Предпросмотр «глазами бариста»: управляющий рендерит страницу с уровнем и
-    # должностью бариста, поэтому весь manager-UI (Jinja + data-*) отключается
-    # единым механизмом: понижается и роль, и числовой уровень доступа.
+    # Предпросмотр «глазами сотрудника»: супер-пользователь рендерит страницу с
+    # пониженным уровнем доступа, поэтому весь админский UI (Jinja + data-*)
+    # отключается единым механизмом — сравнением уровня с порогами прав.
     real_role = user["role"] if user else ""
-    is_manager = bool(user and access_roles.is_manager(user))
+    real_admin = bool(user and access_roles.allows(user, "admin"))
     preview_active = bool(
-        is_manager and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+        real_admin and request.cookies.get(PREVIEW_COOKIE) == str(PREVIEW_LEVEL)
     )
     render_user = {
         **user,
-        "role": PREVIEW_ROLE,
-        "access_level": access_roles.level_of(PREVIEW_ROLE),
-        "role_title": access_roles.title_of(PREVIEW_ROLE),
+        "access_level": PREVIEW_LEVEL,
+        "role_title": f"Предпросмотр · {access_roles.level_title(PREVIEW_LEVEL)}",
     } if preview_active else user
 
     bot_username = _bot_username()
     telegram_callback_url = os.getenv("TELEGRAM_AUTH_CALLBACK_URL") or str(request.url_for("telegram_callback"))
     # Модули загружаем одним запросом: из него и словарь для Jinja-гейтов
     # навигации/вьюх, и список для левого оглавления панели управления.
-    module_list = modules.load_modules(engine, is_manager=is_manager)
+    module_list = modules.load_modules(engine, render_user)
     main_settings = work_points.get_main_settings(engine)
     # «Основное» — не модуль, а первая вкладка панели управления: бренд,
     # дефолтный акцент и справочник точек. Синтетическая запись нужна, чтобы
@@ -562,23 +582,21 @@ def home(request: Request):
                 "unknown": telegram_login.reason_message("unknown"),
                 "expired": telegram_login.reason_message("expired"),
             }.get(request.query_params.get("auth_error"), ""),
-            # Должности: названия и уровни приходят из справочника, поэтому в
-            # шаблоне и JS нет перечисления ролей, а гейты сравнивают числа.
+            # Права: шаблон получает набор доступных прав (`allowed`), сам
+            # уровень и таблицу «право → порог» для клиентского `can()`.
             "role_names": access_roles.labels(),
-            "access_level": int((render_user or {}).get("access_level") or 0),
-            "manager": bool(render_user and access_roles.is_manager(render_user)),
-            "mentor": bool(render_user and access_roles.is_mentor(render_user)),
-            "manager_min_level": access_roles.manager_min_level(),
-            "mentor_min_level": access_roles.mentor_min_level(),
-            "staff_level": access_roles.staff_level(),
+            "access_level": access_roles.level_of(render_user),
+            "allowed": access_roles.allowed_keys(render_user),
+            "permissions": access_roles.permission_levels(),
+            "levels": access_roles.levels(),
             # Справочник для вкладки «Должности и допуски» и селекта должностей:
             # рендерим на сервере, чтобы форма работала и до загрузки JS.
             "roles": access_roles.view(engine),
             "real_role": real_role,
-            "real_manager": bool(user and access_roles.is_manager(user)),
-            # Предпросмотр «глазами бариста»: должность-предпросмотр отдаём и в
-            # разметку, чтобы клиент не держал её ключ строкой.
-            "preview_role": PREVIEW_ROLE,
+            "real_admin": real_admin,
+            # Предпросмотр: уровень, которым рендерится страница, — в разметку,
+            # чтобы клиент не держал число строкой.
+            "preview_level": PREVIEW_LEVEL,
             "preview_active": preview_active,
             # Модули: глобальное вкл/выкл разделов. Навигация и вьюхи скрываются
             # на сервере (по `modules`), а панель управления строит из них список.
@@ -856,7 +874,7 @@ def shift_templates(_: dict[str, Any] = Depends(require_user)):
 
 
 @app.post("/api/shift-templates")
-async def create_shift_template_route(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def create_shift_template_route(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     payload = await _read_json_object(request)
     try:
         return create_shift_template(engine, user["id"], payload)
@@ -865,7 +883,7 @@ async def create_shift_template_route(request: Request, user: dict[str, Any] = D
 
 
 @app.patch("/api/shift-templates/{template_id}")
-async def update_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def update_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     payload = await _read_json_object(request)
     try:
         return update_shift_template(engine, template_id, payload)
@@ -876,14 +894,14 @@ async def update_shift_template_route(template_id: int, request: Request, _: dic
 
 
 @app.delete("/api/shift-templates/{template_id}")
-def delete_shift_template_route(template_id: int, _: dict[str, Any] = Depends(require_manager_csrf)):
+def delete_shift_template_route(template_id: int, _: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     if not delete_shift_template(engine, template_id):
         raise HTTPException(status_code=404, detail="Шаблон не найден")
     return {"ok": True}
 
 
 @app.post("/api/shift-templates/reorder")
-async def reorder_shift_templates_route(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def reorder_shift_templates_route(request: Request, _: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     payload = await _read_json_object(request)
     try:
         return reorder_shift_templates(engine, payload.get("order"))
@@ -892,7 +910,7 @@ async def reorder_shift_templates_route(request: Request, _: dict[str, Any] = De
 
 
 @app.put("/api/shift-templates/{template_id}")
-async def replace_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def replace_shift_template_route(template_id: int, request: Request, _: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     """Полное обновление шаблона. В ТЗ фигурирует POST/PUT, интерфейс шлёт PATCH —
     метод-алиас добавлен, чтобы API совпадал с описанием."""
     payload = await _read_json_object(request)
@@ -913,10 +931,10 @@ async def team_workload_stats(
     year: int,
     month: int,
     refresh: bool = False,
-    _: dict[str, Any] = Depends(require_manager),
+    _: dict[str, Any] = Depends(require_permission("admin")),
 ):
     """Сводка для дашборда: производственный календарь, факт/план команды,
-    средние длительности смен УЯ и ДЕ. Разрешено старшему и наставнику.
+    средние длительности смен УЯ и ДЕ. Право «панель управления».
 
     Расчёт может сходить в isdayoff.ru, поэтому уводим его из event loop.
     """
@@ -927,8 +945,8 @@ async def team_workload_stats(
 
 @app.get("/api/users/{user_id}/workload")
 def user_workload(user_id: int, user: dict[str, Any] = Depends(require_user)):
-    """Нормо-часы сотрудника: свои видит любой, чужие — управляющий."""
-    if user_id != user["id"] and not access_roles.is_manager(user):
+    """Нормо-часы сотрудника: свои видит любой, чужие — право «панель управления»."""
+    if user_id != user["id"] and not access_roles.allows(user, "admin"):
         raise HTTPException(status_code=403, detail="Доступны только свои нормо-часы")
     try:
         return get_user_workload(engine, user_id)
@@ -938,8 +956,8 @@ def user_workload(user_id: int, user: dict[str, Any] = Depends(require_user)):
 
 @app.patch("/api/users/{user_id}/workload")
 async def update_user_workload_route(user_id: int, request: Request, user: dict[str, Any] = Depends(require_csrf)):
-    """Правка нормо-часов (x ≤ y ≤ z): сам сотрудник в профиле или управляющий в команде."""
-    if user_id != user["id"] and not access_roles.is_manager(user):
+    """Правка нормо-часов (x ≤ y ≤ z): сам сотрудник в профиле или панель управления."""
+    if user_id != user["id"] and not access_roles.allows(user, "admin"):
         raise HTTPException(status_code=403, detail="Можно менять только свои нормо-часы")
     payload = await _read_json_object(request)
     try:
@@ -951,13 +969,13 @@ async def update_user_workload_route(user_id: int, request: Request, user: dict[
 
 
 @app.get("/api/app-settings")
-def app_settings(_: dict[str, Any] = Depends(require_manager)):
-    """Каналы Telegram для публикаций — видит и меняет только наставник/старший."""
+def app_settings(_: dict[str, Any] = Depends(require_permission("admin"))):
+    """Каналы Telegram для публикаций — право «панель управления»."""
     return get_app_settings(engine)
 
 
 @app.patch("/api/app-settings")
-async def update_app_settings(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def update_app_settings(request: Request, _: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     payload = await _read_json_object(request)
     try:
         return save_app_settings(engine, payload)
@@ -974,10 +992,10 @@ async def save_calendar_changes(request: Request, user: dict[str, Any] = Depends
     change_type = payload.get("change_type", "swap")
     if change_type not in {"swap", "schedule"}:
         raise HTTPException(status_code=422, detail="Неизвестный тип правки")
-    # Тип «Расписание» — только наставник (уровень не ниже порога наставника).
+    # Тип «Расписание» (правка и публикация) — право `schedule_publish`.
     # Проверка на сервере, не только в UI.
-    if change_type == "schedule" and not access_roles.is_mentor(user):
-        raise HTTPException(status_code=403, detail="Тип «Расписание» доступен только наставникам")
+    if change_type == "schedule" and not access_roles.allows(user, "schedule_publish"):
+        raise HTTPException(status_code=403, detail="Тип «Расписание» требует права на публикацию расписаний")
     # publish=False — тихое сохранение расписания: без лога, без снимка, без рассылки.
     publish = payload.get("publish", True)
     if not isinstance(publish, bool):
@@ -1021,19 +1039,20 @@ def logout(response: Response, _: dict[str, Any] = Depends(require_csrf)):
 
 @app.post("/api/preview")
 async def set_preview(request: Request, user: dict[str, Any] = Depends(require_csrf)) -> JSONResponse:
-    """Включает/выключает предпросмотр «глазами бариста» (только управляющие)."""
-    if not access_roles.is_manager(user):
+    """Включает/выключает предпросмотр «глазами сотрудника» (право «панель»)."""
+    if not access_roles.allows(user, "admin"):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     payload = await _read_json_object(request)
-    role = payload.get("role") or ""
-    if role not in {"", PREVIEW_ROLE}:
-        raise HTTPException(status_code=422, detail="Неизвестная роль предпросмотра")
-    response = JSONResponse({"ok": True, "preview": role or None})
-    if role:
-        response.set_cookie(PREVIEW_COOKIE, role, max_age=SESSION_MAX_AGE,
-                            httponly=True, samesite="strict", path="/")
-    else:
+    level = payload.get("level")
+    if level in (None, "", 0):
+        response = JSONResponse({"ok": True, "preview": None})
         response.delete_cookie(PREVIEW_COOKIE, path="/")
+        return response
+    if level != PREVIEW_LEVEL:
+        raise HTTPException(status_code=422, detail="Неизвестный уровень предпросмотра")
+    response = JSONResponse({"ok": True, "preview": PREVIEW_LEVEL})
+    response.set_cookie(PREVIEW_COOKIE, str(PREVIEW_LEVEL), max_age=SESSION_MAX_AGE,
+                        httponly=True, samesite="strict", path="/")
     return response
 
 
@@ -1239,7 +1258,7 @@ def list_announcements(category: str | None = None, limit: int = 30, user: dict[
         ),
         "unread": announcements.unread_counts(engine, user["id"]),
         "categories": announcements.all_categories(engine),
-        "can_publish": access_roles.is_manager(user),
+        "can_publish": access_roles.allows(user, "announcements"),
     }
 
 
@@ -1264,7 +1283,7 @@ def announcements_feed(token: str):
 
 
 @app.post("/api/announcements")
-async def create_announcement(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def create_announcement(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     payload = await _read_json_object(request)
     if set(payload) - {"category", "title", "body", "start_at", "pinned"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля анонса")
@@ -1292,7 +1311,7 @@ async def create_announcement(request: Request, user: dict[str, Any] = Depends(r
 
 
 @app.post("/api/announcements/categories")
-async def create_announcement_category(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def create_announcement_category(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     payload = await _read_json_object(request)
     if set(payload) - {"label", "color", "important"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -1307,7 +1326,7 @@ async def create_announcement_category(request: Request, user: dict[str, Any] = 
 
 
 @app.patch("/api/announcements/categories/{code}")
-async def update_announcement_category(code: str, request: Request, user: dict[str, Any] = Depends(require_manager_csrf)):
+async def update_announcement_category(code: str, request: Request, user: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     payload = await _read_json_object(request)
     if set(payload) - {"label", "color", "important"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -1323,7 +1342,7 @@ async def update_announcement_category(code: str, request: Request, user: dict[s
 
 
 @app.delete("/api/announcements/categories/{code}")
-def delete_announcement_category(code: str, _: dict[str, Any] = Depends(require_manager_csrf)):
+def delete_announcement_category(code: str, _: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     try:
         announcements.delete_category(engine, code)
     except LookupError as error:
@@ -1336,7 +1355,7 @@ def delete_announcement_category(code: str, _: dict[str, Any] = Depends(require_
 
 
 @app.delete("/api/announcements/{announcement_id}")
-def delete_announcement(announcement_id: int, _: dict[str, Any] = Depends(require_manager_csrf)):
+def delete_announcement(announcement_id: int, _: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     if not announcements.delete(engine, announcement_id):
         raise HTTPException(status_code=404, detail="Анонс не найден")
     return {"ok": True}
@@ -1376,7 +1395,7 @@ async def update_announcement_settings(request: Request, user: dict[str, Any] = 
 
 @app.patch("/api/announcements/{announcement_id}")
 async def update_announcement(announcement_id: int, request: Request,
-                             user: dict[str, Any] = Depends(require_manager_csrf)):
+                             user: dict[str, Any] = Depends(require_permission_csrf("announcements"))):
     """Правка анонса: текст, категория, дата и флажок закрепления."""
     payload = await _read_json_object(request)
     if set(payload) - {"title", "body", "category", "start_at", "pinned"}:
@@ -1411,7 +1430,7 @@ def list_task_categories(_: dict[str, Any] = Depends(require_user)) -> dict[str,
 
 @app.post("/api/tasks/categories")
 async def create_task_category(request: Request,
-                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                               _: dict[str, Any] = Depends(require_permission_csrf("tasks"))) -> dict[str, Any]:
     payload = await _read_json_object(request)
     if set(payload) - {"label", "color"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -1424,7 +1443,7 @@ async def create_task_category(request: Request,
 
 @app.patch("/api/tasks/categories/{code}")
 async def update_task_category(code: str, request: Request,
-                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                               _: dict[str, Any] = Depends(require_permission_csrf("tasks"))) -> dict[str, Any]:
     payload = await _read_json_object(request)
     if set(payload) - {"label", "color"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -1439,7 +1458,7 @@ async def update_task_category(code: str, request: Request,
 
 @app.delete("/api/tasks/categories/{code}")
 async def delete_task_category(code: str,
-                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                               _: dict[str, Any] = Depends(require_permission_csrf("tasks"))) -> dict[str, Any]:
     try:
         tasks.delete_category(engine, code)
     except LookupError as error:
@@ -1475,7 +1494,7 @@ def list_tasks(assignee: str = "all", category: str | None = None,
         "items": _with_permissions(tasks.list_active(engine, user, assignee, code), user),
         "counts": tasks.counts(engine, user, assignee),
         "categories": tasks.all_categories(engine),
-        "can_manage_categories": access_roles.is_manager(user),
+        "can_manage_categories": access_roles.allows(user, "tasks"),
         "auto_archive_days": tasks.archive_after_days(),
     }
 
@@ -1497,7 +1516,7 @@ def list_tasks_archive(assignee: str = "all", category: str | None = None,
         "items": _with_permissions(tasks.list_archive(engine, user, assignee, code), user),
         "counts": tasks.counts(engine, user, assignee),
         "categories": tasks.all_categories(engine),
-        "can_manage_categories": access_roles.is_manager(user),
+        "can_manage_categories": access_roles.allows(user, "tasks"),
     }
 
 
@@ -1566,7 +1585,7 @@ async def delete_task(task_id: int, permanent: bool = False,
 
 
 @app.get("/api/users")
-def list_users(_: dict[str, Any] = Depends(require_manager)):
+def list_users(_: dict[str, Any] = Depends(require_permission("admin"))):
     """Сотрудники с названием должности и уровнем доступа из справочника."""
     with engine.connect() as connection:
         users = connection.execute(text("""
@@ -1622,8 +1641,44 @@ def _validate_user_payload(payload: Any, partial: bool = False) -> dict[str, Any
     return values
 
 
+def _grant_base_xp(connection: Any, user_id: int, role: str) -> int:
+    """Базовый опыт при назначении должности — политика связки двух доменов.
+
+    Живёт в `app.py`, а не в `gamification`/`access_roles`: геймификация не знает
+    про уровни доступа, справочник должностей — про опыт. Порог и сумму
+    настраивают в панели управления (модуль «Развитие»).
+    """
+    amount = int(modules.setting("development", "BASE_XP_AMOUNT", 0) or 0)
+    min_level = int(modules.setting("development", "BASE_XP_MIN_LEVEL", 0) or 0)
+    if amount <= 0 or access_roles.level_of(role) < min_level:
+        return 0
+    return gamification.grant_base_xp(connection, user_id, amount)
+
+
+def _backfill_base_xp() -> int:
+    """Одноразовая (идемпотентная) выдача базового опыта активным должностям.
+
+    Список сотрудников считаем здесь: справочник должностей знает уровни, а
+    геймификация получает готовые id и сумму.
+    """
+    amount = int(modules.setting("development", "BASE_XP_AMOUNT", 0) or 0)
+    min_level = int(modules.setting("development", "BASE_XP_MIN_LEVEL", 0) or 0)
+    if amount <= 0:
+        return 0
+    roles = [key for key in access_roles.role_keys() if access_roles.level_of(key) >= min_level]
+    if not roles:
+        return 0
+    placeholders = ", ".join(f":role_{index}" for index in range(len(roles)))
+    params = {f"role_{index}": key for index, key in enumerate(roles)}
+    with engine.connect() as connection:
+        ids = connection.execute(text(f"""
+            SELECT id FROM users WHERE is_active = 1 AND role IN ({placeholders})
+        """), params).scalars().all()
+    return gamification.backfill_base_xp(engine, ids, amount)
+
+
 @app.post("/api/users")
-async def create_user(request: Request, manager: dict[str, Any] = Depends(require_manager_csrf)):
+async def create_user(request: Request, manager: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     values = _validate_user_payload(await request.json())
     values.setdefault("iiko_id", None)
     values.setdefault("telegram_username", None)
@@ -1638,16 +1693,16 @@ async def create_user(request: Request, manager: dict[str, Any] = Depends(requir
             )
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
-        # Должность с возможностью `xp_base` (бариста, старший) сразу даёт базовый
-        # опыт: наставнику не нужно помнить о дополнительном действии.
-        gamification.grant_base_xp(connection, int(result.lastrowid), values["role"])
+        # Должность выше настроенного порога сразу даёт базовый опыт: не нужно
+        # помнить о дополнительном действии (политика — `_grant_base_xp`).
+        _grant_base_xp(connection, int(result.lastrowid), values["role"])
         new_user_id = int(result.lastrowid)
     # id возвращаем, чтобы интерфейс сразу дописал нормо-часы новому сотруднику.
     return {"ok": True, "id": new_user_id}
 
 
 @app.patch("/api/users/{user_id}")
-async def update_user(user_id: int, request: Request, manager: dict[str, Any] = Depends(require_manager_csrf)):
+async def update_user(user_id: int, request: Request, manager: dict[str, Any] = Depends(require_permission_csrf("admin"))):
     payload = await request.json()
     # Выдача нового кода — отдельное действие: наставник видит код и отдаёт его лично.
     regenerate = bool(isinstance(payload, dict) and payload.pop("regenerate_code", False))
@@ -1667,14 +1722,11 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
         target_active = values.get("is_active", current_user["is_active"])
         if target_role == access_roles.PENDING_ROLE and target_active:
             raise HTTPException(status_code=400, detail="Назначьте должность до выдачи доступа")
-        # Права определяет справочник должностей: если правка снимает
-        # управленческий доступ, в команде должен остаться другой управляющий.
-        will_remove_manager = (
-            access_roles.is_manager(current_user["role"]) and bool(current_user["is_active"])
-            and not (access_roles.is_manager(target_role) and bool(target_active))
-        )
-        if will_remove_manager and not access_roles.other_manager_count(connection, user_id):
-            raise HTTPException(status_code=400, detail="Нельзя убрать последнего активного управляющего")
+        # Права определяет справочник должностей: если правка снимает доступ к
+        # панели управления, в команде должен остаться другой супер-пользователь.
+        # Проверяем состояние «после» — тогда стартовое состояние (уровня 4 ещё
+        # ни у кого нет) не мешает назначить первого супер-пользователя.
+        admins_before = access_roles.admin_user_count(connection)
         try:
             if has_fields:
                 result = connection.execute(text(f"UPDATE users SET {assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = :user_id"), values)
@@ -1682,35 +1734,37 @@ async def update_user(user_id: int, request: Request, manager: dict[str, Any] = 
                     raise HTTPException(status_code=404, detail="Пользователь не найден")
         except IntegrityError as error:
             raise HTTPException(status_code=409, detail="Iiko ID или Telegram username уже используется") from error
+        if admins_before and not access_roles.admin_user_count(connection):
+            raise HTTPException(status_code=400, detail="Нельзя убрать последнего супер-пользователя")
         # Повышение до должности с базовым опытом сразу его начисляет. Понижение
-        # до стажёра и деактивация опыт не обнуляют: начисления остаются в логе.
+        # до уровня 0 и деактивация опыт не обнуляют: начисления остаются в логе.
         if "role" in values and target_active:
-            gamification.grant_base_xp(connection, user_id, target_role)
+            _grant_base_xp(connection, user_id, target_role)
     if regenerate:
         return {"ok": True, "code": access_code.set_access_code(engine, user_id)}
     return {"ok": True}
 
 
 # --------------------------------------------------------------------------- #
-# Развитие: уровень, ветки навыков и оценки наставника
+# Развитие: уровень, ветки навыков и оценки
 #
 # Уровень считается по сумме хард-веток (сенсорика, молоко, стандарты); ветка
-# «Команда» копится параллельно и на бейдж не влияет. Оценивают управляющие и
-# наставники, правка и удаление оценок — только наставники; стажёр видит
-# расписание и свой прогресс без права правок.
+# «Команда» копится параллельно и на бейдж не влияет. Оценки ставит право
+# `quality_cleanliness` (чистота) и `quality_full` (напитки, правка оценок);
+# уровень 0 видит расписание и свой прогресс без права правок.
 # --------------------------------------------------------------------------- #
 
-# Наборы «кто оценивает» и «кого оценивают» задаёт справочник должностей
-# (`bot/web/access_roles.py`): в коде остаются только имена возможностей.
+# Наборы «кто оценивает» и «кого оценивают» задаёт таблица прав
+# (`bot/web/access_roles.py`): в коде остаются только имена прав.
 
 
 def _can_evaluate(user: dict[str, Any]) -> bool:
-    """Право ставить оценки: управляющий или наставник."""
-    return access_roles.is_manager(user) or access_roles.is_mentor(user)
+    """Право ставить оценки: «порядок и чистота» — уровень 2 и выше."""
+    return access_roles.allows(user, "quality_cleanliness")
 
 
 def _is_evaluated(user_or_role: Any) -> bool:
-    """Должность, которую оценивают в контроле качества."""
+    """Кого оценивают в контроле качества: должности ниже полного контроля."""
     return access_roles.is_evaluated(user_or_role)
 
 
@@ -1831,7 +1885,7 @@ def evaluation_photo(filename: str, _: dict[str, Any] = Depends(require_user)):
 async def upload_evaluation_photo(request: Request, user: dict[str, Any] = Depends(require_csrf)):
     """Тело запроса — сам файл изображения (без multipart). Шаг перед оценкой."""
     if not _can_evaluate(user):
-        raise HTTPException(status_code=403, detail="Оценивать может только управляющий или наставник")
+        raise HTTPException(status_code=403, detail="Оценивать может право «порядок и чистота»")
     data = await request.body()
     if not data or len(data) > gamification.MAX_PHOTO_BYTES:
         raise HTTPException(status_code=413, detail="Файл пустой или больше 8 МБ")
@@ -1869,17 +1923,17 @@ async def create_evaluation(request: Request, evaluator: dict[str, Any] = Depend
     Напиток оценивается по гранулярным параметрам категории; чистота — одной
     сессией, опыт за которую начисляется всем бариста на смене точки.
 
-    Роли: напитки оценивает только наставник (`mentor`); старший (`senior`)
-    ведёт лишь чистоту и порядок заведения.
+    Права: чистоту и порядок ведёт право «порядок и чистота» (уровень 2),
+    напитки — право «полный контроль качества» (уровень 3).
     """
     if not _can_evaluate(evaluator):
-        raise HTTPException(status_code=403, detail="Оценивать может только управляющий или наставник")
+        raise HTTPException(status_code=403, detail="Оценивать может право «порядок и чистота»")
     payload = await _read_json_object(request)
     evaluation_type = payload.get("evaluation_type") or "drink"
     if evaluation_type not in {"drink", "cleanliness"}:
         raise HTTPException(status_code=422, detail="Неизвестный тип оценки")
-    if evaluation_type == "drink" and not access_roles.is_mentor(evaluator):
-        raise HTTPException(status_code=403, detail="Напитки может оценивать только наставник")
+    if evaluation_type == "drink" and not access_roles.allows(evaluator, "quality_full"):
+        raise HTTPException(status_code=403, detail="Напитки оценивает право «полный контроль качества»")
     point = payload.get("point")
     try:
         point = work_points.normalize_point(engine, point, allow_none=True)
@@ -1962,18 +2016,19 @@ def evaluation_sessions(request: Request, limit: int = 10, offset: int = 0,
                         user: dict[str, Any] = Depends(require_user)):
     """Страница сессий контроля качества (по 10).
 
-    Наставник и управляющий видят всю команду; бариста и стажёр — только свои
-    сессии, чтобы читать детальную оценку и пояснения наставника. Область
+    Право «порядок и чистота» (уровень 2 и выше) видит всю команду; остальные —
+    только свои сессии, чтобы читать детальную оценку и пояснения. Область
     видимости вычисляется на сервере, поэтому запросить чужие оценки нельзя. В
-    режиме предпросмотра «как бариста» управляющий видит только свои сессии.
+    режиме предпросмотра управляющий видит только свои сессии.
     """
-    is_manager = access_roles.is_manager(user)
+    can_review = access_roles.allows(user, "quality_cleanliness")
     preview_active = bool(
-        is_manager and request.cookies.get(PREVIEW_COOKIE) == PREVIEW_ROLE
+        access_roles.allows(user, "admin")
+        and request.cookies.get(PREVIEW_COOKIE) == str(PREVIEW_LEVEL)
     )
     if preview_active:
-        is_manager = False
-    employee_id = None if is_manager else int(user["id"])
+        can_review = PREVIEW_LEVEL >= access_roles.min_level("quality_cleanliness")
+    employee_id = None if can_review else int(user["id"])
     return gamification.evaluation_sessions(
         engine, limit=limit, offset=offset, employee_id=employee_id,
     )
@@ -1981,16 +2036,16 @@ def evaluation_sessions(request: Request, limit: int = 10, offset: int = 0,
 
 @app.patch("/api/evaluations/{evaluation_id}")
 async def update_evaluation_route(evaluation_id: int, request: Request,
-                                  evaluator: dict[str, Any] = Depends(require_manager_csrf)):
+                                  evaluator: dict[str, Any] = Depends(require_permission_csrf("quality_full"))):
     """Правка уже сохранённой оценки задним числом.
 
     Разрешены баллы, комментарии, фото, а для напитка — ещё напиток и зерно.
     Дополнительно можно сменить сотрудника (`employee_id`) и дату оценки
     (`created_at`); тип оценки фиксирован, XP и баланс веток пересчитываются.
-    Изменять оценки может только наставник (должность с возможностью `mentor`).
+    Изменять оценки может право «полный контроль качества» (`quality_full`).
     """
-    if not access_roles.is_mentor(evaluator):
-        raise HTTPException(status_code=403, detail="Изменять оценки может только наставник")
+    if not access_roles.allows(evaluator, "quality_full"):
+        raise HTTPException(status_code=403, detail="Изменять оценки может право «полный контроль качества»")
     payload = await _read_json_object(request)
     photo_url = payload.get("photo_url")
     if photo_url is not None and not (isinstance(photo_url, str) and gamification.PHOTO_URL_RE.match(photo_url)):
@@ -2075,15 +2130,15 @@ async def update_evaluation_route(evaluation_id: int, request: Request,
 
 @app.delete("/api/evaluations/{evaluation_id}")
 async def delete_evaluation_route(evaluation_id: int,
-                                  evaluator: dict[str, Any] = Depends(require_manager_csrf)):
+                                  evaluator: dict[str, Any] = Depends(require_permission_csrf("quality_full"))):
     """Удаление оценки с откатом начисленного по ней опыта.
 
     Опыт не пропадает бесследно: в append-only логе `xp_transactions` пишутся
-    компенсирующие транзакции, а баланс веток синхронно уменьшается. Удалять
-    оценки может только наставник (должность с возможностью `mentor`).
+    компенсирующие транзакции, а баланс веток синхронно уменьшается. Удаление —
+    право «полный контроль качества» (`quality_full`).
     """
-    if not access_roles.is_mentor(evaluator):
-        raise HTTPException(status_code=403, detail="Удалять оценки может только наставник")
+    if not access_roles.allows(evaluator, "quality_full"):
+        raise HTTPException(status_code=403, detail="Удалять оценки может право «полный контроль качества»")
     with engine.begin() as connection:
         try:
             return gamification.delete_evaluation(
@@ -2094,21 +2149,21 @@ async def delete_evaluation_route(evaluation_id: int,
 
 
 @app.get("/api/evaluations/analytics")
-def evaluation_analytics(_: dict[str, Any] = Depends(require_manager)):
-    """Аналитика оценок для наставников: агрегаты команды без средних по бариста."""
+def evaluation_analytics(_: dict[str, Any] = Depends(require_permission("analytics"))):
+    """Аналитика оценок для полного контроля: агрегаты команды без средних по бариста."""
     return gamification.evaluation_analytics(engine)
 
 
 # --- Аналитика команды и качества (дашборд «Аналитика команды») --------------- #
 
 @app.get("/api/reports/team-overview")
-def analytics_team_overview(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
+def analytics_team_overview(days: int = 30, _: dict[str, Any] = Depends(require_permission("analytics"))):
     """Тепловая карта навыков команды: средние по веткам, активность и охват."""
     return analytics.team_overview(engine, days)
 
 
 @app.get("/api/reports/drinks-quality")
-def analytics_drinks_quality(days: int = 30, _: dict[str, Any] = Depends(require_manager)):
+def analytics_drinks_quality(days: int = 30, _: dict[str, Any] = Depends(require_permission("analytics"))):
     """Зоны риска по напиткам, проблемные параметры и чистота по точкам."""
     return analytics.drinks_quality(engine, days)
 
@@ -2117,7 +2172,7 @@ def analytics_drinks_quality(days: int = 30, _: dict[str, Any] = Depends(require
 async def analytics_shifts_report(
     year: int,
     month: int,
-    _: dict[str, Any] = Depends(require_manager),
+    _: dict[str, Any] = Depends(require_permission("analytics")),
 ):
     """Выработка часов по точкам УЯ/ДЕ и связка с качеством за месяц."""
     if year < 2000 or year > 2100 or month < 1 or month > 12:
@@ -2126,13 +2181,13 @@ async def analytics_shifts_report(
 
 
 @app.get("/api/achievements/manage")
-def manage_achievements(_: dict[str, Any] = Depends(require_manager)):
-    """Список ачивок для панели наставника: активные и выключенные."""
+def manage_achievements(_: dict[str, Any] = Depends(require_permission("achievements"))):
+    """Список ачивок для панели развития: активные и выключенные."""
     return gamification.manage_achievements(engine)
 
 
 @app.post("/api/achievements/manage", status_code=201)
-async def create_achievement(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def create_achievement(request: Request, _: dict[str, Any] = Depends(require_permission_csrf("achievements"))):
     """Создание ачивки с сырым JSON-правилом (`rule_payload`)."""
     payload = await _read_json_object(request)
     try:
@@ -2223,7 +2278,7 @@ def stories_upload(filename: str):
 
 
 @app.get("/api/stories/moderation")
-def stories_moderation_list(_: dict[str, Any] = Depends(require_manager)):
+def stories_moderation_list(_: dict[str, Any] = Depends(require_permission("stories"))):
     """Все истории для панели модерации в личном кабинете."""
     return {
         "stories": stories_service.list_all(),
@@ -2237,7 +2292,7 @@ def stories_moderation_list(_: dict[str, Any] = Depends(require_manager)):
 
 
 @app.patch("/api/stories/moderation/order")
-async def stories_moderation_order(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def stories_moderation_order(request: Request, _: dict[str, Any] = Depends(require_permission_csrf("stories"))):
     """Ручной порядок историй из панели модерации (drag-and-drop)."""
     body = await _read_json_object(request)
     stories_service.update_order(body.get("order") or [])
@@ -2249,7 +2304,7 @@ async def stories_moderation_order(request: Request, _: dict[str, Any] = Depends
 
 
 @app.patch("/api/stories/moderation/settings")
-async def stories_moderation_settings(request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def stories_moderation_settings(request: Request, _: dict[str, Any] = Depends(require_permission_csrf("stories"))):
     """Скорость автопрокрутки, лимит символов и ширина карточки истории."""
     body = await _read_json_object(request)
     settings = stories_service.update_settings(
@@ -2262,7 +2317,7 @@ async def stories_moderation_settings(request: Request, _: dict[str, Any] = Depe
 
 
 @app.patch("/api/stories/moderation/{story_id}")
-async def stories_moderation_update(story_id: str, request: Request, _: dict[str, Any] = Depends(require_manager_csrf)):
+async def stories_moderation_update(story_id: str, request: Request, _: dict[str, Any] = Depends(require_permission_csrf("stories"))):
     body = await _read_json_object(request)
     return {
         "ok": True,
@@ -2272,7 +2327,7 @@ async def stories_moderation_update(story_id: str, request: Request, _: dict[str
 
 
 @app.delete("/api/stories/moderation/{story_id}")
-def stories_moderation_delete(story_id: str, _: dict[str, Any] = Depends(require_manager_csrf)):
+def stories_moderation_delete(story_id: str, _: dict[str, Any] = Depends(require_permission_csrf("stories"))):
     if not stories_service.delete_story(story_id):
         raise HTTPException(status_code=404, detail="История не найдена")
     return {"ok": True, "stats": stories_service.stats()}

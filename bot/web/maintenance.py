@@ -36,7 +36,7 @@ from sqlalchemy.engine import Engine
 from bot.database.models import engine
 from bot.web import access_roles, modules, page_links, tasks
 from bot.web.announcements import TRANSLIT
-from bot.web.deps import require_manager_csrf, require_user
+from bot.web.deps import require_permission_csrf, require_user
 
 FALLBACK_COLOR = "#7b8794"
 # Порог «скоро дедлайн», дней (правится в панели управления).
@@ -740,17 +740,16 @@ def overview(engine: Engine) -> dict[str, Any]:
 # («где заказать», артикул, модель) экономит поиск по базе знаний.
 
 
-def _system_author(engine: Engine) -> int | None:
-    """Автор авто-задач: активный управляющий, иначе задача без автора."""
+def _system_author(engine: Engine) -> dict[str, Any] | None:
+    """Автор авто-задач: активный супер-пользователь (уровень 4), иначе нет автора."""
     with engine.connect() as connection:
         row = connection.execute(text("""
-            SELECT u.id FROM users u
+            SELECT u.id AS id, u.role AS role FROM users u
             JOIN role_access_config r ON r.role_key = u.role AND r.is_active = 1
-            WHERE u.is_active = 1
-              AND instr(',' || r.capabilities || ',', ',manage,') > 0
+            WHERE u.is_active = 1 AND r.access_level >= :admin_level
             ORDER BY r.access_level DESC, u.id LIMIT 1
-        """)).first()
-    return int(row[0]) if row else None
+        """), {"admin_level": access_roles.min_level("admin")}).mappings().first()
+    return dict(row) if row else None
 
 
 def _has_open_task(engine: Engine, token: str) -> bool:
@@ -764,12 +763,13 @@ def _has_open_task(engine: Engine, token: str) -> bool:
     return row is not None
 
 
-def _create_auto_task(engine: Engine, author_id: int | None, token: str,
+def _create_auto_task(engine: Engine, author: dict[str, Any] | None, token: str,
                       title: str, description: str, priority: str) -> bool:
     try:
-        # Автор — системный: должность берём самую старшую из справочника, чтобы
-        # задача не зависела от того, кто из управляющих сейчас в смене.
-        tasks.create_task(engine, {"id": author_id, "role": access_roles.highest_role()["role_key"]}, {
+        # Автор — системный: должность берём у самого старшего супер-пользователя,
+        # чтобы задача не зависела от того, кто из них сейчас в смене.
+        tasks.create_task(engine, {"id": author["id"] if author else None,
+                                   "role": author["role"] if author else ""}, {
             "title": title,
             "description": description,
             "priority": priority,
@@ -784,7 +784,7 @@ def _create_auto_task(engine: Engine, author_id: int | None, token: str,
 def run_automation(engine: Engine) -> dict[str, int]:
     """Авто-задачи: закупка (остаток ≤ `min_stock`) и замена (срок вышел)."""
     created = {"purchase": 0, "replacement": 0}
-    author_id = _system_author(engine)
+    author = _system_author(engine)
     with engine.connect() as connection:
         low = connection.execute(text("""
             SELECT s.point_code, l.name AS point_name, p.id AS part_id, p.name,
@@ -798,7 +798,7 @@ def run_automation(engine: Engine) -> dict[str, int]:
         token = f"auto:stock:{row['point_code']}:{row['part_id']}"
         if _has_open_task(engine, token):
             continue
-        if _create_auto_task(engine, author_id, token,
+        if _create_auto_task(engine, author, token,
                              f"Закупка: {row['name']} ({row['point_name']})",
                              f"{page_links.mention(row['page_id'], row['name'])} — остаток "
                              f"{row['quantity']} при минимуме {row['min_stock']}. "
@@ -825,7 +825,7 @@ def run_automation(engine: Engine) -> dict[str, int]:
         token = f"auto:due:{row['point_code']}:{row['part_id']}"
         if _has_open_task(engine, token):
             continue
-        if _create_auto_task(engine, author_id, token,
+        if _create_auto_task(engine, author, token,
                              f"Замена: {row['name']} ({row['point_name']})",
                              f"{page_links.mention(row['page_id'], row['name'])} — срок замены "
                              f"истёк {due}. Проведите замену и внесите запись в журнал ТО.",
@@ -880,7 +880,7 @@ async def _json_object(request: Request) -> dict[str, Any]:
     return payload
 
 
-# Точки сети: чтение — любой сотрудник, правка — старшие (senior/mentor) + CSRF.
+# Точки сети: чтение — любой сотрудник, правка — право «тех. обслуживание» + CSRF.
 
 
 @locations_router.get("")
@@ -891,7 +891,7 @@ def list_locations(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 @locations_router.post("", status_code=201)
 async def add_location(request: Request,
-                       _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                       _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
     if set(payload) - {"code", "name", "is_active"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля точки")
@@ -904,7 +904,7 @@ async def add_location(request: Request,
 
 @locations_router.patch("/{code}")
 async def edit_location(code: str, request: Request,
-                        _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                        _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
     if set(payload) - {"name", "is_active"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля точки")
@@ -919,7 +919,7 @@ async def edit_location(code: str, request: Request,
 
 @locations_router.delete("/{code}")
 def remove_location(code: str,
-                    _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                    _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     try:
         delete_location(engine, code)
     except LookupError as error:
@@ -937,7 +937,7 @@ def list_categories(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]
 
 @maintenance_router.post("/categories", status_code=201)
 async def add_category(request: Request,
-                       _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                       _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
     if set(payload) - {"label", "color"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -950,7 +950,7 @@ async def add_category(request: Request,
 
 @maintenance_router.patch("/categories/{code}")
 async def edit_category(code: str, request: Request,
-                        _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                        _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
     if set(payload) - {"label", "color"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля категории")
@@ -965,7 +965,7 @@ async def edit_category(code: str, request: Request,
 
 @maintenance_router.delete("/categories/{code}")
 def remove_category(code: str,
-                    _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                    _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     try:
         delete_category(engine, code)
     except LookupError as error:
@@ -1008,7 +1008,7 @@ def get_stock(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 @maintenance_router.patch("/stock")
 async def patch_stock(request: Request,
-                      _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                      _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     """Ставит остаток; при падении до минимума сразу создаётся задача на закупку."""
     payload = await _json_object(request)
     if set(payload) - {"point_code", "part_id", "quantity"}:
@@ -1033,7 +1033,7 @@ def get_logs(point_code: str | None = None, part_id: int | None = None, limit: i
 
 
 @maintenance_router.post("/logs", status_code=201)
-async def add_log(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+async def add_log(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     payload = await _json_object(request)
     if set(payload) - {"point_code", "part_id", "replaced_at", "next_due_date", "comment", "photo_url"}:
         raise HTTPException(status_code=422, detail="Неизвестные поля записи")
@@ -1047,7 +1047,7 @@ async def add_log(request: Request, user: dict[str, Any] = Depends(require_manag
 
 @maintenance_router.delete("/logs/{log_id}")
 def remove_log(log_id: int,
-               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+               _: dict[str, Any] = Depends(require_permission_csrf("maintenance"))) -> dict[str, Any]:
     try:
         delete_log(engine, log_id)
     except LookupError as error:

@@ -73,16 +73,23 @@ function pointSwatch(value, extra = '') {
 function pointBadge(value, extra = '') {
   return `<span class="point-badge ${extra}"${pointColorStyle(value)}>${escapeHtml(pointLabel(value))}</span>`;
 }
-/* Должности и уровни доступа приходят из справочника (`role_access_config`):
-   сервер отдаёт на страницу и флаги доступа, и сами числа, поэтому интерфейс
-   сравнивает уровни с порогами, а не названия должностей строками. */
-const managerRole = document.body.dataset.manager === 'true';
-const isMentor = document.body.dataset.mentor === 'true';
-const userRole = document.body.dataset.role || '';
+/* Права сайта: сервер отдаёт уровень доступа и таблицу «право → минимальный
+   уровень» (`access_roles.PERMISSIONS`). Новое право добавляется одной строкой
+   в `bot/web/access_roles.py` и одним `can('ключ')` здесь — пороги в JS не
+   дублируются. */
 const accessLevel = Number(document.body.dataset.accessLevel || 0);
-const managerMinLevel = Number(document.body.dataset.managerMinLevel || 0);
-const mentorMinLevel = Number(document.body.dataset.mentorMinLevel || 0);
-const staffLevel = Number(document.body.dataset.staffLevel || 0);
+const PERMISSIONS = JSON.parse(document.body.dataset.permissions || '{}');
+const userRole = document.body.dataset.role || '';
+
+function can(permission) {
+  const threshold = PERMISSIONS[permission];
+  return typeof threshold === 'number' && accessLevel >= threshold;
+}
+
+/* Кого оценивают в контроле качества: уровень ниже права «полный контроль». */
+function isEvaluatedLevel(level) {
+  return Number(level || 0) < Number(PERMISSIONS.quality_full ?? 0);
+}
 let matrixDayWidth = null;
 let editType = 'swap';
 let templateReorderMode = false;
@@ -464,11 +471,12 @@ function renderDevelopment(data) {
   const bar = document.querySelector('#level-bar');
   const ring = document.querySelector('#level-ring-value');
   const ringLength = 2 * Math.PI * 52;
-  // Состояния панели уровня — по возможностям должности, а не по её ключу:
-  // «стажёр» — должность без базового опыта, «наставник» — с наставничеством.
-  const isNewbieState = !data.xp_base;
-  const isMentorState = Boolean(data.mentor);
-  const roleTitle = data.role_title || '';
+  // Состояния панели уровня считаем по уровню доступа: 0 — «стажёр» (прогресс
+  // заморожен), право «полный контроль качества» — высшая ступень. Геймификация
+  // в ответе про права ничего не рассказывает.
+  const isNewbieState = accessLevel === 0;
+  const isMentorState = can('quality_full');
+  const roleTitle = document.body.dataset.roleLabel || '';
   if (panel) {
     panel.classList.toggle('is-newbie', isNewbieState);
     panel.classList.toggle('is-mentor', isMentorState);
@@ -647,8 +655,9 @@ function resetQualityDialog() {
   const preview = document.querySelector('#evaluation-photo-preview');
   if (preview) { preview.hidden = true; preview.querySelector('img').removeAttribute('src'); }
   document.querySelector('#quality-staff-fallback')?.setAttribute('hidden', '');
-  // Наставник по умолчанию оценивает напиток; старший — только чистоту.
-  const defaultType = isMentor ? 'drink' : 'cleanliness';
+  // Право «полный контроль качества» по умолчанию оценивает напиток; уровень 2 —
+  // только чистоту и порядок.
+  const defaultType = can('quality_full') ? 'drink' : 'cleanliness';
   document.querySelectorAll('#evaluation-dialog [data-quality-type]').forEach((button) => {
     button.classList.toggle('is-selected', button.dataset.qualityType === defaultType);
   });
@@ -677,10 +686,10 @@ async function fillQualityEmployees() {
   try {
     const users = await api('/api/users');
     const me = Number(document.body.dataset.userId || 0);
-    // Оценивать можно должности с возможностью `evaluated` — список строится по
-    // уровню: те, кто сам оценивает (наставнические должности), в него не попадают.
+    // Оценивать можно тех, кто ниже права «полный контроль качества»: те, кто
+    // сам ведёт оценки команды, в список не попадают.
     const staff = users.filter((user) => user.is_active
-      && Number(user.access_level || 0) < mentorMinLevel
+      && isEvaluatedLevel(user.access_level)
       && Number(user.id) !== me);
     select.innerHTML = staff.length
       ? '<option value="">— выберите —</option>'
@@ -700,7 +709,7 @@ async function fillQualityEditEmployees() {
     const users = await api('/api/users');
     const me = Number(document.body.dataset.userId || 0);
     const staff = users.filter((user) => user.is_active
-      && Number(user.access_level || 0) < mentorMinLevel
+      && isEvaluatedLevel(user.access_level)
       && Number(user.id) !== me);
     select.innerHTML = staff.length
       ? '<option value="">— выберите —</option>'
@@ -772,7 +781,7 @@ async function loadQualityActiveStaff() {
    (/api/evaluations/analytics). Интерфейс намеренно не показывает «средние» —
    фокус на прогрессе, а не на демотивирующих цифрах. */
 async function loadEvaluationAnalytics() {
-  if (!managerRole) return;
+  if (!can('analytics')) return;
   const container = document.querySelector('#evaluation-analytics');
   if (!container) return;
   try {
@@ -864,7 +873,7 @@ function analyticsDaysLabel(days) {
 }
 
 async function loadAnalytics() {
-  if (!managerRole) return;
+  if (!can('analytics')) return;
   await Promise.allSettled([loadTeamOverview(), loadDrinksQuality(), loadShiftsReport()]);
 }
 
@@ -1201,8 +1210,8 @@ function setupQuality() {
   const newButton = document.querySelector('#quality-new');
   // Ниже — только интерфейс наставника/старшего: у бариста формы оценки нет.
   if (!dialog || !newButton) return;
-  // Старший ведёт только чистоту и порядок: прячем вариант «Напиток».
-  if (!isMentor) {
+  // Уровень 2 ведёт только чистоту и порядок: прячем вариант «Напиток».
+  if (!can('quality_full')) {
     document.querySelector('#evaluation-dialog [data-quality-type="drink"]')?.setAttribute('hidden', '');
   }
 
@@ -1210,8 +1219,9 @@ function setupQuality() {
     resetQualityDialog();
     dialog.showModal();
     if (!developmentState) loadDevelopment();
-    // Напитки оценивает только наставник — для старшего грузим лишь параметры чистоты.
-    if (isMentor) {
+    // Напитки оценивает право «полный контроль качества» — иначе грузим лишь
+    // параметры чистоты.
+    if (can('quality_full')) {
       await fillQualityDrinks();
       fillQualityEmployees();
       loadQualityActiveStaff();
@@ -1378,10 +1388,10 @@ function renderQualitySessions() {
   const items = qualitySessionsState.items;
   const moreButton = document.querySelector('#quality-sessions-more');
   const countLabel = document.querySelector('#quality-sessions-count');
-  // Правка доступна только наставнику.
-  const canEdit = isMentor;
+  // Правка доступна праву «полный контроль качества».
+  const canEdit = can('quality_full');
   if (!items.length) {
-    container.innerHTML = `<p class="empty-state">${managerRole ? 'Оценочных сессий пока нет' : 'Оценок пока нет'}</p>`;
+    container.innerHTML = `<p class="empty-state">${can('quality_cleanliness') ? 'Оценочных сессий пока нет' : 'Оценок пока нет'}</p>`;
     if (moreButton) moreButton.hidden = true;
     if (countLabel) countLabel.textContent = 'ПО 10';
     return;
@@ -2128,11 +2138,11 @@ function updateEditControls() {
   document.body.classList.toggle('calendar-editing', editMode);
   const swapsEntry = document.querySelector('#edit-swaps-toggle');
   const scheduleEntry = document.querySelector('#edit-schedule-toggle');
-  // Правка графика: должность с возможностью `schedule_edit` (уровень не ниже
-  // порога). Сервер тоже отклонит правки (PermissionError).
-  const canEdit = accessLevel >= staffLevel;
+  // Правка графика: право «проведение замен» (уровень 1 и выше), «расписание» —
+  // право «правка и публикация расписаний». Сервер тоже отклонит правки.
+  const canEdit = can('swaps');
   if (swapsEntry) swapsEntry.hidden = editMode || !canEdit;
-  if (scheduleEntry) scheduleEntry.hidden = editMode || !isMentor;
+  if (scheduleEntry) scheduleEntry.hidden = editMode || !can('schedule_publish');
   const tools = document.querySelector('.matrix-edit-tools');
   if (tools) tools.hidden = !editMode;
   const hasChanges = matrixChanges.size > 0;
@@ -3112,8 +3122,8 @@ function animateNumber(node, value, decimals = 0) {
 function setView(name) {
   const targetModule = Object.values(modulesState).find((module) => module.view === name);
   if (targetModule && !targetModule.enabled) name = 'profile';
-  if (name === 'control' && !managerRole) name = 'profile';
-  if (name === 'analytics' && !managerRole) name = 'profile';
+  if (name === 'control' && !can('admin')) name = 'profile';
+  if (name === 'analytics' && !can('analytics')) name = 'profile';
   const apply = () => {
     const isChat = name === 'chat';
     // В режиме чата документ прибит к видимой области (см. app.css) —
@@ -3153,7 +3163,7 @@ function setView(name) {
     // Контроль качества: список сессий у всех, аналитика — только у менеджеров.
     if (name === 'quality') {
       loadQualitySessions();
-      if (managerRole) loadEvaluationAnalytics();
+      if (can('analytics')) loadEvaluationAnalytics();
     }
     if (!isChat) window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -3181,7 +3191,7 @@ function setView(name) {
   else kbUpdateTreeFab();
   if (name === 'drinks') openDrinks();
   if (name === 'calendar') loadCalendar();
-  if (name === 'control' && managerRole) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); loadMaintenanceAdmin(); loadRoles(); ensureControlSelection(); }
+  if (name === 'control' && can('admin')) { loadStoriesAdmin(); renderAnnouncementCategories(); loadTaskCategories(); loadMaintenanceAdmin(); loadRoles(); ensureControlSelection(); }
   if (name === 'analytics') loadAnalytics();
   closeDrawer();
 }
@@ -5128,8 +5138,8 @@ function setupAnnouncements() {
    остальные — кастомные. Список приходит в `/api/kb/pages` (`sections`) и
    хранится в `kbState.sections`; KB_SECTIONS — запасной набор до первой
    загрузки. Дерево строится из parent_id, чтение доступно всем сотрудникам,
-   а правка — только senior/mentor (managerRole); запись повторно проверяет
-   бэкенд. */
+   а правка — право «записи в базе знаний» (`can('kb_edit')`); запись повторно
+   проверяет бэкенд. */
 
 const CACHE_KEY_KB_LIST = cacheKeyFor('kb-list');
 const CACHE_KEY_KB_PAGE = cacheKeyFor('kb-page');
@@ -5186,7 +5196,7 @@ const kbState = {
   pendingId: null,
   recipesPageId: null,
   ready: false,
-  canEdit: managerRole,
+  canEdit: can('kb_edit'),
   expanded: new Set(),
   openCategories: new Set(),
   expandedLoaded: false,
@@ -9884,7 +9894,7 @@ function controlIsNarrow() {
 
 const maintenanceState = {
   tab: 'overview',
-  canManage: managerRole,
+  canManage: can('maintenance'),
   locations: [],
   parts: [],
   partsLoaded: false,
@@ -10431,50 +10441,67 @@ async function onMaintenanceCategoryAction(event) {
   }
 }
 
-/* --- «Должности и допуски»: справочник уровней доступа ---------------------
-   Уровень — числовой вес прав; пороги (управление, наставничество, правка
-   графика) сервер считает по возможностям должностей, поэтому здесь они только
-   показываются. Правка уходит через общий `api()` — CSRF-токен он ставит сам. */
+/* --- «Должности и допуски»: уровни доступа и справочник должностей ----------
+   Уровень — ступень прав из `access_roles.ACCESS_LEVELS` (хардкод на сервере),
+   должности заводят руками здесь. Правки уходят через общий `api()` — CSRF-токен
+   он ставит сам. */
 
-const rolesState = { roles: [], thresholds: {}, capabilities: [], loading: false };
+const rolesState = { roles: [], levels: [], permissions: [], loading: false };
 
 function rolesSetStatus(message) {
   const node = document.querySelector('#roles-status');
   if (node) node.textContent = message || '';
 }
 
-function renderRolesThresholds() {
-  const box = document.querySelector('#roles-thresholds');
+/* Легенда уровней: что даёт каждая ступень (права приходят с сервера). */
+function renderRoleLevels() {
+  const box = document.querySelector('#role-levels');
   if (!box) return;
-  const thresholds = rolesState.thresholds || {};
-  box.innerHTML = `
-    <div class="roles-threshold"><span>Управление с уровня</span><strong>${Number(thresholds.manager_min_level ?? 0)}</strong><small>команда, аналитика, панель управления</small></div>
-    <div class="roles-threshold"><span>Наставничество с уровня</span><strong>${Number(thresholds.mentor_min_level ?? 0)}</strong><small>оценка напитков, правка и удаление оценок</small></div>
-    <div class="roles-threshold"><span>Правка графика с уровня</span><strong>${Number(thresholds.staff_level ?? 0)}</strong><small>замены, расписание, адресация задач</small></div>`;
+  const permissions = rolesState.permissions || [];
+  box.innerHTML = (rolesState.levels || []).map((level) => {
+    const granted = permissions
+      .filter((permission) => Number(permission.level) <= Number(level.level))
+      .map((permission) => `<span class="role-capability">${escapeHtml(permission.title)}</span>`)
+      .join('');
+    return `
+    <div class="roles-threshold">
+      <span>Уровень ${Number(level.level)}</span>
+      <strong>${escapeHtml(level.title)}</strong>
+      <small>${escapeHtml(level.summary)}</small>
+      ${granted ? `<div class="role-capabilities-row">${granted}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function renderRolesList() {
   const list = document.querySelector('#roles-list');
   if (!list) return;
-  if (!rolesState.roles.length) { list.innerHTML = '<p class="empty-state">Справочник пуст</p>'; return; }
-  const capabilities = rolesState.capabilities || [];
-  list.innerHTML = rolesState.roles.map((role) => {
-    const badges = capabilities
-      .filter((capability) => (role.capability_list || []).includes(capability.code))
-      .map((capability) => `<span class="role-capability">${escapeHtml(capability.title)}</span>`)
-      .join('');
-    return `
+  if (!rolesState.roles.length) {
+    list.innerHTML = '<p class="empty-state">Должностей пока нет — добавьте первую кнопкой «Добавить»</p>';
+    return;
+  }
+  list.innerHTML = rolesState.roles.map((role) => `
     <article class="role-row${role.is_active ? '' : ' is-inactive'}" data-role-key="${escapeHtml(role.role_key)}">
       <div class="role-head">
         <div class="role-heading"><strong>${escapeHtml(role.title)}</strong><code>${escapeHtml(role.role_key)}</code></div>
-        <span class="role-level" title="Уровень доступа">Уровень ${Number(role.access_level)}</span>
+        <span class="role-level" title="Уровень доступа">${Number(role.access_level)} — ${escapeHtml(role.level_title || '')}</span>
       </div>
       <p class="role-description">${escapeHtml(role.description || 'Описание не заполнено')}</p>
-      <div class="role-capabilities-row">${badges || '<span class="role-capability is-muted">Базовый доступ</span>'}</div>
       <div class="role-meta"><span>${Number(role.user_count)} сотрудников</span><span>${role.is_active ? 'Должность активна' : 'Отключена'}</span></div>
       <div class="role-actions"><button class="button button-quiet" type="button" data-role-edit="${escapeHtml(role.role_key)}">Изменить</button><button class="button button-quiet" type="button" data-role-toggle="${escapeHtml(role.role_key)}" data-role-active="${role.is_active ? 'true' : 'false'}">${role.is_active ? 'Отключить' : 'Включить'}</button></div>
-    </article>`;
-  }).join('');
+    </article>`).join('');
+}
+
+/* Селект должностей в карточке сотрудника строится из того же справочника:
+   только что созданная должность доступна без перезагрузки страницы. */
+function syncUserRoleOptions() {
+  const select = document.querySelector('#user-form-role');
+  if (!select) return;
+  const current = select.value;
+  const active = rolesState.roles.filter((role) => role.is_active);
+  if (!active.length) return;
+  select.innerHTML = active.map((role) => `<option value="${escapeHtml(role.role_key)}">${escapeHtml(role.title)} · ${Number(role.access_level)} — ${escapeHtml(role.level_title || '')}</option>`).join('');
+  if (active.some((role) => role.role_key === current)) select.value = current;
 }
 
 async function loadRoles() {
@@ -10485,10 +10512,11 @@ async function loadRoles() {
   try {
     const data = await api('/api/roles');
     rolesState.roles = data.roles || [];
-    rolesState.thresholds = data.thresholds || {};
-    rolesState.capabilities = data.capabilities || [];
-    renderRolesThresholds();
+    rolesState.levels = data.levels || [];
+    rolesState.permissions = data.permissions || [];
+    renderRoleLevels();
     renderRolesList();
+    syncUserRoleOptions();
     rolesSetStatus('');
   } catch (error) {
     rolesSetStatus(error.message);
@@ -10497,53 +10525,76 @@ async function loadRoles() {
   }
 }
 
+/* Пустой ключ — режим создания: ключ сгенерирует сервер из названия. */
 function openRoleDialog(roleKey) {
-  const role = rolesState.roles.find((item) => item.role_key === roleKey);
   const dialog = document.querySelector('#role-dialog');
   const form = document.querySelector('#role-form');
-  if (!role || !dialog || !form) return;
+  if (!dialog || !form) return;
+  const role = rolesState.roles.find((item) => item.role_key === roleKey) || null;
   const error = document.querySelector('#role-form-error');
   if (error) error.hidden = true;
-  form.dataset.roleKey = role.role_key;
-  form.elements.role_key.value = role.role_key;
-  form.elements.role_key_view.value = role.role_key;
-  form.elements.title.value = role.title;
-  form.elements.access_level.value = String(role.access_level);
-  form.elements.description.value = role.description || '';
-  form.elements.is_active.checked = Boolean(role.is_active);
-  setText('#role-dialog-title', role.title);
-  const box = document.querySelector('#role-capabilities');
-  if (box) {
-    box.innerHTML = (rolesState.capabilities || []).map((capability) => {
-      const checked = (role.capability_list || []).includes(capability.code) ? ' checked' : '';
-      return `<label class="checkbox-row role-capability-option"><input type="checkbox" data-role-capability="${capability.code}"${checked}><span>${escapeHtml(capability.title)}</span></label>`;
-    }).join('');
+  const deleteButton = document.querySelector('#role-delete');
+  const keyHint = document.querySelector('#role-key-hint');
+  form.dataset.roleKey = role ? role.role_key : '';
+  form.elements.role_key.value = role ? role.role_key : '';
+  form.elements.role_key_view.value = role ? role.role_key : '';
+  // Ключ существующей должности неизменяем: на него ссылаются сотрудники,
+  // оценки, задачи и график.
+  form.elements.role_key_view.readOnly = Boolean(role);
+  form.elements.title.value = role ? role.title : '';
+  form.elements.access_level.value = String(role ? role.access_level : 0);
+  form.elements.description.value = role ? (role.description || '') : '';
+  form.elements.is_active.checked = role ? Boolean(role.is_active) : true;
+  setText('#role-dialog-kicker', role ? 'ДОЛЖНОСТЬ' : 'НОВАЯ ДОЛЖНОСТЬ');
+  setText('#role-dialog-title', role ? role.title : 'Новая должность');
+  if (deleteButton) deleteButton.hidden = !role;
+  if (keyHint) {
+    keyHint.textContent = role
+      ? 'не меняется: на него ссылаются сотрудники, оценки и график'
+      : 'латиницей; пусто — сгенерируем из названия';
   }
   dialog.showModal();
 }
 
+/* Удалять можно только должность без сотрудников — иначе сервер откажет. */
+async function deleteRole(roleKey) {
+  const role = rolesState.roles.find((item) => item.role_key === roleKey);
+  const title = role ? role.title : roleKey;
+  if (!window.confirm(`Удалить должность «${title}»? Сотрудников сначала нужно переназначить.`)) return;
+  const error = document.querySelector('#role-form-error');
+  if (error) error.hidden = true;
+  try {
+    await api(`/api/roles/${encodeURIComponent(roleKey)}`, { method: 'DELETE' });
+    document.querySelector('#role-dialog')?.close();
+    await loadRoles();
+    showToast(`Должность «${title}» удалена`);
+  } catch (err) {
+    if (error) { error.textContent = err.message; error.hidden = false; }
+    else showToast(err.message);
+  }
+}
+
 async function saveRole(form) {
-  const roleKey = form.dataset.roleKey;
-  if (!roleKey) return;
+  const roleKey = form.dataset.roleKey || '';
   const error = document.querySelector('#role-form-error');
   const submit = document.querySelector('#role-form-submit');
-  const capabilities = Array.from(form.querySelectorAll('[data-role-capability]'))
-    .filter((box) => box.checked)
-    .map((box) => box.dataset.roleCapability);
   const payload = {
     title: form.elements.title.value.trim(),
     access_level: Number(form.elements.access_level.value),
     description: form.elements.description.value.trim(),
-    capabilities,
     is_active: form.elements.is_active.checked,
   };
+  const key = form.elements.role_key_view.value.trim();
+  if (key) payload.role_key = key;
   if (error) error.hidden = true;
   if (submit) submit.disabled = true;
   try {
-    const data = await api(`/api/roles/${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+    const data = roleKey
+      ? await api(`/api/roles/${encodeURIComponent(roleKey)}`, { method: 'PATCH', body: JSON.stringify(payload) })
+      : await api('/api/roles', { method: 'POST', body: JSON.stringify(payload) });
     form.closest('dialog')?.close();
     await loadRoles();
-    showToast(`Должность «${data.role ? data.role.title : roleKey}» сохранена`);
+    showToast(`Должность «${data.role ? data.role.title : payload.title}» сохранена`);
   } catch (err) {
     if (error) { error.textContent = err.message; error.hidden = false; }
     else showToast(err.message);
@@ -10568,6 +10619,10 @@ function setupRolesAdmin() {
   if (!panel || !form || panel.dataset.bound) return;
   panel.dataset.bound = '1';
   document.querySelector('#roles-refresh')?.addEventListener('click', () => loadRoles());
+  document.querySelector('#role-add')?.addEventListener('click', () => openRoleDialog(''));
+  document.querySelector('#role-delete')?.addEventListener('click', () => {
+    if (form.dataset.roleKey) deleteRole(form.dataset.roleKey);
+  });
   form.addEventListener('submit', (event) => { event.preventDefault(); saveRole(form); });
   document.querySelector('#roles-list')?.addEventListener('click', (event) => {
     const edit = event.target.closest('[data-role-edit]');
@@ -11007,7 +11062,7 @@ function setupDashboard() {
   const startEditing = (type) => {
     // Правка графика доступна должностям с возможностью `schedule_edit` —
     // сравниваем числовой уровень с порогом справочника.
-    if (editMode || accessLevel < staffLevel) return;
+    if (editMode || !can('swaps')) return;
     editType = type;
     editMode = true;
     matrixAnchor = null; matrixExtent = null;
@@ -11235,7 +11290,7 @@ function setupDashboard() {
   document.querySelector('#barista-preview-toggle')?.addEventListener('change', async (event) => {
     const box = event.currentTarget;
     try {
-      await api('/api/preview', { method: 'POST', body: JSON.stringify({ role: box.checked ? document.body.dataset.previewRole : '' }) });
+      await api('/api/preview', { method: 'POST', body: JSON.stringify({ level: box.checked ? Number(document.body.dataset.previewLevel || 0) : 0 }) });
       window.location.reload();
     } catch (error) {
       box.checked = !box.checked;
@@ -11254,10 +11309,10 @@ function setupDashboard() {
   loadMainSettings().finally(() => loadPreferences());
   loadModules().then(() => {
     if (!modulesState.calendar || modulesState.calendar.enabled) loadCalendar();
-    if (managerRole && location.hash === '#control') setView('control');
+    if (can('admin') && location.hash === '#control') setView('control');
   });
   loadShiftTemplates();
-  if (managerRole) {
+  if (can('admin')) {
     setupStoriesAdmin();
     setupShiftTemplates();
     setupChannelSettings();
@@ -11316,6 +11371,9 @@ window.Neft = {
   setView,
   closeDrawer,
   openMediaViewer,
+  // Права текущего пользователя: `can('право')` — тот же контракт, что в app.js
+  // (chat.js проверяет им модерацию чата).
+  can,
   // Ссылки на статьи базы знаний: рендер маркеров и подсказка `@` (chat.js).
   kbLinkify,
   kbPageLinkTitle,
@@ -11328,11 +11386,8 @@ window.Neft = {
       role: document.body.dataset.role || '',
       label: document.body.dataset.roleLabel || '',
       accessLevel: Number(document.body.dataset.accessLevel || 0),
-      managerMinLevel: Number(document.body.dataset.managerMinLevel || 0),
-      mentorMinLevel: Number(document.body.dataset.mentorMinLevel || 0),
-      staffLevel: Number(document.body.dataset.staffLevel || 0),
-      manager: document.body.dataset.manager === 'true',
-      mentor: document.body.dataset.mentor === 'true',
+      permissions: { ...PERMISSIONS },
+      can,
     };
   },
 };

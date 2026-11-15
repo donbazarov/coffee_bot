@@ -1,17 +1,20 @@
-"""Общие зависимости доступа: сессия, уровни допуска и CSRF.
+"""Общие зависимости доступа: сессия, права и CSRF.
 
 Вынесены из `bot/web/app.py`, чтобы их могли использовать и другие роутеры
-(например, `bot/web/chat.py`) без циклического импорта. Логика не менялась —
-это тот же код, что раньше жил прямо в `app.py`.
+(например, `bot/web/chat.py`) без циклического импорта.
 
-Должности больше не перечисляются здесь строкой: состав сотрудников и уровень
-доступа приходят из справочника `role_access_config` (`bot/web/access_roles.py`).
+Права больше не перечисляются здесь строкой: уровень доступа сотрудника берётся
+из справочника `role_access_config`, а порог права — из `PERMISSIONS`
+(`bot/web/access_roles.py`). Роут объявляет право, а не должность:
+
+    @app.patch("/api/roles/{role_key}")
+    async def update_role(..., _: dict = Depends(require_permission_csrf("admin"))):
 """
 
 from __future__ import annotations
 
 import hmac
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import text
@@ -24,10 +27,10 @@ from bot.web.auth import COOKIE_NAME, read_session
 def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
     """Возвращает (пользователь, CSRF-токен) по cookie сессии, иначе (None, None).
 
-    Роль сотрудника — активная должность справочника; уровень доступа и название
-    должности читаются тем же запросом, поэтому гейты сравнивают числа без
-    дополнительных обращений к базе. Заявка на доступ (`guest`) в справочник не
-    входит, поэтому неавторизованный пользователь сессии не получает.
+    Должность сотрудника — активная запись справочника; уровень доступа и
+    название должности читаются тем же запросом, поэтому гейты сравнивают числа
+    без дополнительных обращений к базе. Заявка на доступ (`guest`) в справочник
+    не входит, поэтому неавторизованный пользователь сессии не получает.
     """
     session = read_session(request.cookies.get(COOKIE_NAME))
     if not session:
@@ -45,7 +48,7 @@ def session_user(request: Request) -> tuple[dict[str, Any] | None, str | None]:
         """), {"id": session["user_id"]}).mappings().first()
     if not user:
         return None, None
-    # Ротация кода наставником и «выйти на всех устройствах» поднимают
+    # Ротация кода супер-пользователем и «выйти на всех устройствах» поднимают
     # session_epoch — выданные ранее куки после этого недействительны.
     if int(user["session_epoch"] or 0) != int(session["epoch"] or 0):
         return None, None
@@ -65,20 +68,42 @@ def require_user(request: Request) -> dict[str, Any]:
     return user
 
 
-def require_manager(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-    """Управленческий доступ: порог уровня и возможность `manage` — из справочника."""
-    if not access_roles.is_manager(user):
-        raise HTTPException(status_code=403, detail="Недостаточно прав")
-    return user
-
-
 def require_csrf(request: Request, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     _, csrf_token = session_user(request)
     check_csrf(request, csrf_token)
     return user
 
 
-def require_manager_csrf(request: Request, user: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
-    _, csrf_token = session_user(request)
-    check_csrf(request, csrf_token)
-    return user
+def require_permission(permission: str) -> Callable[..., dict[str, Any]]:
+    """Зависимость «право уровня доступа»: порог берётся из `PERMISSIONS`.
+
+    Новое право не требует новых зависимостей: достаточно добавить строку в
+    `access_roles.PERMISSIONS` и объявить её в роуте.
+    """
+    access_roles.min_level(permission)  # опечатка в ключе — ошибка на старте, а не в проде
+
+    def dependency(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        if not access_roles.allows(user, permission):
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        return user
+
+    dependency.__name__ = f"require_{permission}"
+    return dependency
+
+
+def require_permission_csrf(permission: str) -> Callable[..., dict[str, Any]]:
+    """То же право плюс проверка CSRF — для изменяющих запросов."""
+    check = require_permission(permission)
+
+    def dependency(request: Request, user: dict[str, Any] = Depends(check)) -> dict[str, Any]:
+        _, csrf_token = session_user(request)
+        check_csrf(request, csrf_token)
+        return user
+
+    dependency.__name__ = f"require_{permission}_csrf"
+    return dependency
+
+
+
+
+

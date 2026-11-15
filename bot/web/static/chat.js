@@ -18,7 +18,7 @@
 
   const { api, escapeHtml, avatarMarkup, showToast, setView, kbSearchPages, kbPageLinkTitle } = window.Neft;
   const ME = window.Neft.user.id;
-  const MANAGER = Boolean(window.Neft.user.manager);
+  const MANAGER = Boolean(window.Neft.can?.('chat_moderation'));
   const PAGE = 30;
   const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
   // Файлы из системного меню «Поделиться»: app.js разбирает адрес раньше нас и
@@ -458,7 +458,7 @@
 
   /* --- Правка и удаление сообщений ---------------------------------------- */
 
-  const senior = Boolean(window.Neft.user.manager);
+  const senior = Boolean(window.Neft.can?.('chat_moderation'));
 
   function messageById(id) {
     return state.messages.find((item) => Number(item.id) === Number(id)) || null;

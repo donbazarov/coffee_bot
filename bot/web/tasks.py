@@ -528,11 +528,11 @@ def assignees(engine: Engine) -> dict[str, Any]:
 def can_edit(task: dict[str, Any], user: dict[str, Any]) -> bool:
     """Кто может менять задачу.
 
-    Автор и наставник — всегда; тот, кому задача адресована (лично, по
+    Автор и право «Задачи» — всегда; тот, кому задача адресована (лично, по
     должности или как общая), тоже: статус и текст правит вся смена, а не
     только автор — задача на то и командная.
     """
-    if task["author_id"] == user["id"] or access_roles.is_manager(user):
+    if task["author_id"] == user["id"] or access_roles.allows(user, "tasks"):
         return True
     assignee = task.get("assignee") or {}
     if assignee.get("type") == "user":
@@ -739,7 +739,7 @@ def update_task(engine: Engine, task_id: int, user: dict[str, Any],
     if task is None:
         raise LookupError("Задача не найдена")
     if not can_edit(task, user):
-        raise PermissionError("Менять задачу может автор или наставник")
+        raise PermissionError("Менять задачу может автор или право «Задачи»")
 
     values: dict[str, Any] = {}
     assignee_change: dict[str, Any] | None = None
@@ -833,7 +833,7 @@ def delete_task(engine: Engine, task_id: int, user: dict[str, Any],
     if task is None:
         raise LookupError("Задача не найдена")
     if not can_edit(task, user):
-        raise PermissionError("Удалять задачу может автор или наставник")
+        raise PermissionError("Удалять задачу может автор или право «Задачи»")
     if permanent:
         # Окончательно сносим только то, что уже лежит в архиве: либо архивный
         # статус, либо мягкое удаление (удалённая задача тоже видна в архиве).

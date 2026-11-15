@@ -42,7 +42,7 @@ from bot.database.models import engine
 from bot.web import access_roles, notifications, push
 from bot.web.auth import COOKIE_NAME, read_session
 from bot.web.calendar_service import get_user_preferences
-from bot.web.deps import require_csrf, require_manager, require_manager_csrf, require_user
+from bot.web.deps import require_csrf, require_permission, require_permission_csrf, require_user
 
 logger = logging.getLogger("bot.web.chat")
 
@@ -1206,7 +1206,7 @@ def chat_room_list(user: dict[str, Any] = Depends(require_user)) -> dict[str, An
 
 
 @chat_router.get("/rooms/manage")
-def chat_room_manage(user: dict[str, Any] = Depends(require_manager)) -> dict[str, Any]:
+def chat_room_manage(user: dict[str, Any] = Depends(require_permission("chat_moderation"))) -> dict[str, Any]:
     """Все темы с участниками — для панели управления."""
     with engine.connect() as connection:
         rows = connection.execute(text(f"""
@@ -1263,7 +1263,7 @@ def _save_room_members(connection: Any, room_id: int, visibility: str,
 
 
 @chat_router.post("/rooms")
-async def chat_room_create(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+async def chat_room_create(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("chat_moderation"))) -> dict[str, Any]:
     payload = await _json_object(request)
     name, visibility, member_ids = _normalize_room_fields(payload, require_name=True)
     with engine.begin() as connection:
@@ -1284,7 +1284,7 @@ async def chat_room_create(request: Request, user: dict[str, Any] = Depends(requ
 
 @chat_router.patch("/rooms/{room_id}")
 async def chat_room_update(room_id: int, request: Request,
-                           user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                           user: dict[str, Any] = Depends(require_permission_csrf("chat_moderation"))) -> dict[str, Any]:
     """Частичное обновление темы: имя, видимость и/или участники."""
     payload = await _json_object(request)
     with engine.begin() as connection:
@@ -1383,14 +1383,14 @@ async def chat_message_edit(message_id: int, request: Request,
 
 @chat_router.delete("/messages/{message_id}")
 async def chat_message_delete(message_id: int, user: dict[str, Any] = Depends(require_csrf)) -> dict[str, Any]:
-    """Удаление: своё сообщение, а управляющий — любое."""
+    """Удаление: своё сообщение, а право «модерация чата» — любое."""
     with engine.begin() as connection:
         row = connection.execute(text(
             "SELECT id, sender_id, recipient_id, room_id FROM chat_messages WHERE id = :id"
         ), {"id": int(message_id)}).mappings().first()
         if not row:
             raise HTTPException(status_code=404, detail="Сообщение не найдено")
-        if int(row["sender_id"]) != int(user["id"]) and not access_roles.is_manager(user):
+        if int(row["sender_id"]) != int(user["id"]) and not access_roles.allows(user, "chat_moderation"):
             raise HTTPException(status_code=403, detail="Недостаточно прав")
         target = dict(row)
         connection.execute(text("""

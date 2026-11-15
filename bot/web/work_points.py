@@ -23,7 +23,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
 from bot.database.models import engine
-from bot.web.deps import require_manager_csrf, require_user
+from bot.web.deps import require_permission_csrf, require_user
 
 # Ключи общих настроек в web_app_settings. Таблицу создаёт
 # initialize_calendar_schema, поэтому наш initialize_schema вызывается после.
@@ -488,7 +488,7 @@ def main_settings(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 @settings_router.put("/main")
 async def update_main_settings(request: Request,
-                               _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                               _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
     payload = await _json_object(request)
     try:
         settings = save_main_settings(engine, payload)
@@ -505,7 +505,7 @@ def list_points(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
 
 @points_router.post("", status_code=201)
 async def add_point(request: Request,
-                    _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                    _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
     payload = await _json_object(request)
     try:
         point = create_point(engine, payload)
@@ -518,7 +518,7 @@ async def add_point(request: Request,
 
 @points_router.put("/{point_id}")
 async def edit_point(point_id: int, request: Request,
-                     _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                     _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
     payload = await _json_object(request)
     try:
         point = update_point(engine, point_id, payload)
@@ -533,7 +533,7 @@ async def edit_point(point_id: int, request: Request,
 
 @points_router.delete("/{point_id}")
 def remove_point(point_id: int,
-                 _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                 _: dict[str, Any] = Depends(require_permission_csrf("admin"))) -> dict[str, Any]:
     try:
         delete_point(engine, point_id)
     except LookupError as error:

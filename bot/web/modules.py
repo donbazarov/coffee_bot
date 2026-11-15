@@ -6,15 +6,15 @@
 не создаём — только идемпотентно досеиваем отсутствующие флаги.
 
 Ключ состояния: `module.<code>.enabled` = `"1"` / `"0"`. Отключение
-**глобальное** (для всей команды) и доступно только старшим/наставникам —
-панель управления админская. Персональных тогглов модулей больше нет.
+**глобальное** (для всей команды) и доступно только с правом «панель управления». Персональных тогглов модулей больше нет.
 
 Поля модуля:
 * `code`      — короткий код (id в разметке: `data-control-module="<code>"`);
 * `title`     — название в навигации;
 * `icon`      — id символа `<use href="#i-...">`;
 * `view`      — значение `data-view` и префикс `#<view>-view` (пусто — своей вьюхи нет);
-* `admin`     — модуль виден только управляющим (возможность `manage`);
+* `permission`— право из `access_roles.PERMISSIONS`, нужное для видимости модуля
+                (пусто — модуль видят все); порог права живёт в одном месте;
 * `settable`  — можно ли выключать модуль целиком (Обзор и Панель управления — нет).
 """
 
@@ -25,42 +25,44 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from bot.web import access_roles
+
 # Порядок задаёт и порядок в навигации докера/меню, и порядок в левом списке
 # панели управления. Разделы намеренно не смешиваются: «Работа» → «Знания» →
 # «Управление».
 MODULES: tuple[dict[str, Any], ...] = (
     {"code": "overview", "title": "Обзор", "icon": "i-overview", "view": "overview",
-     "admin": False, "settable": False},
+     "permission": "", "settable": False},
     {"code": "calendar", "title": "График смен", "icon": "i-calendar", "view": "calendar",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "announcements", "title": "Анонсы", "icon": "i-bell", "view": "announcements",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "tasks", "title": "Задачи", "icon": "i-kanban", "view": "tasks",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     # Тех. обслуживание: точки, остатки и журнал замен. Категории и точки —
     # справочники в БД (см. `bot/web/maintenance.py`), в коде их нет.
     {"code": "maintenance", "title": "Тех. обслуживание", "icon": "i-tune", "view": "maintenance",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "chat", "title": "Чат", "icon": "i-chat", "view": "chat",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "development", "title": "Развитие", "icon": "i-spark", "view": "development",
-     "admin": False, "settable": True},
-    # Контроль качества вынесен из «Развития» в отдельный экран: наставник ведёт
-    # оценки команды, бариста видит только свои сессии (read-only).
+     "permission": "", "settable": True},
+    # Контроль качества вынесен из «Развития» в отдельный экран: право «полный
+    # контроль» ведёт оценки команды, остальные видят только свои сессии.
     {"code": "quality", "title": "Контроль качества", "icon": "i-poll", "view": "quality",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "kb", "title": "База знаний", "icon": "i-book", "view": "kb",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "drinks", "title": "Описание напитков", "icon": "i-latte", "view": "drinks",
-     "admin": False, "settable": True},
+     "permission": "", "settable": True},
     {"code": "stories", "title": "Истории гостей", "icon": "i-camera", "view": "",
-     "admin": True, "settable": True},
+     "permission": "stories", "settable": True},
     {"code": "team", "title": "Команда", "icon": "i-team", "view": "team",
-     "admin": True, "settable": True},
+     "permission": "admin", "settable": True},
     {"code": "analytics", "title": "Аналитика", "icon": "i-chart", "view": "analytics",
-     "admin": True, "settable": True},
+     "permission": "analytics", "settable": True},
     {"code": "control", "title": "Панель управления", "icon": "i-settings", "view": "control",
-     "admin": True, "settable": False},
+     "permission": "admin", "settable": False},
 )
 
 _BY_CODE: dict[str, dict[str, Any]] = {module["code"]: module for module in MODULES}
@@ -102,15 +104,16 @@ def _read_states(engine: Engine) -> dict[str, str]:
     return {row["key"]: row["value"] for row in rows}
 
 
-def load_modules(engine: Engine, *, is_manager: bool) -> list[dict[str, Any]]:
+def load_modules(engine: Engine, user: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Состояние модулей для рендера навигации и панели управления.
 
-    Админские модули не отдаём обычным сотрудникам — как и Jinja-гейты по роли.
+    Модуль с правом (`permission`) отдаём только тем, у кого это право есть, —
+    порог берётся из `access_roles.PERMISSIONS`, как и в роутах.
     """
     stored = _read_states(engine)
     result: list[dict[str, Any]] = []
     for module in MODULES:
-        if module["admin"] and not is_manager:
+        if module["permission"] and not access_roles.allows(user or {}, module["permission"]):
             continue
         result.append({**module, "enabled": stored.get(_state_key(module["code"]), "1") == "1"})
     return result
@@ -193,6 +196,14 @@ SETTINGS_SCHEMA: dict[str, tuple[dict[str, Any], ...]] = {
     "maintenance": (
         {"key": "SOON_DAYS", "label": "Порог «скоро дедлайн», дней", "type": "int", "min": 0, "max": 120,
          "hint": "сколько дней до замены считать жёлтой зоной на дашборде ТО"},
+    ),
+    # Развитие: базовая выдача опыта при назначении должности. Права доступа и
+    # опыт намеренно не связаны — здесь только сумма и порог уровня доступа.
+    "development": (
+        {"key": "BASE_XP_AMOUNT", "label": "Базовый опыт при назначении должности, XP", "type": "int",
+         "min": 0, "max": 100000, "hint": "0 — не выдавать; 2500 XP = 5 уровень аккаунта"},
+        {"key": "BASE_XP_MIN_LEVEL", "label": "Базовый опыт: с какого уровня доступа", "type": "int",
+         "min": 0, "max": 4, "hint": "0 — всем должностям, включая уровень 0"},
     ),
     "team": (
         {"key": "DEFAULT_MIN_HOURS", "label": "Нормо-часы: минимум по умолчанию", "type": "int", "min": 0, "max": 744},

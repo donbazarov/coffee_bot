@@ -20,9 +20,8 @@
 досинхронизируется автоматически из полей страницы (см. `_upsert_bean` /
 `_upsert_drink`; поля можно прислать вложенно в `bean`/`drink` или плоско).
 
-Доступ: чтение — любой активный сотрудник (`require_user`), запись — управляющие
-должности (`require_manager_csrf`: возможность `manage` + CSRF) — тот же уровень,
-что и у публикации анонсов.
+Доступ: чтение — любой активный сотрудник (`require_user`), запись — право
+«записи в базе знаний» (`require_permission_csrf("kb_edit")`).
 """
 
 from __future__ import annotations
@@ -45,7 +44,7 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.database.models import engine
 from bot.web import maintenance, modules, notifications, page_links
-from bot.web.deps import require_manager_csrf, require_user
+from bot.web.deps import require_permission_csrf, require_user
 
 logger = logging.getLogger("bot.web.knowledge_base")
 
@@ -918,7 +917,7 @@ def _notify_kb_change(page_id: int, actor: dict[str, Any], created: bool) -> Non
 
 
 @kb_router.post("/pages")
-async def kb_create_page(request: Request, user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+async def kb_create_page(request: Request, user: dict[str, Any] = Depends(require_permission_csrf("kb_edit"))) -> dict[str, Any]:
     """Создаёт страницу. Для beans/drinks автоматически заводит запись справочника."""
     payload = await _json_object(request)
     try:
@@ -931,7 +930,7 @@ async def kb_create_page(request: Request, user: dict[str, Any] = Depends(requir
 
 @kb_router.put("/pages/{page_id}")
 async def kb_update_page(page_id: int, request: Request,
-                         user: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                         user: dict[str, Any] = Depends(require_permission_csrf("kb_edit"))) -> dict[str, Any]:
     """Правка страницы и синхронизация полей связанного справочника."""
     payload = await _json_object(request)
     try:
@@ -945,7 +944,7 @@ async def kb_update_page(page_id: int, request: Request,
 
 
 @kb_router.delete("/pages/{page_id}")
-def kb_delete_page(page_id: int, _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+def kb_delete_page(page_id: int, _: dict[str, Any] = Depends(require_permission_csrf("kb_edit"))) -> dict[str, Any]:
     """Удаляет страницу и связанные записи справочника."""
     if not delete_page(engine, page_id):
         raise HTTPException(status_code=404, detail="Страница не найдена")
@@ -969,7 +968,7 @@ def kb_photo(filename: str, _: dict[str, Any] = Depends(require_user)):
 
 @kb_router.post("/photos")
 async def kb_upload_photo(request: Request,
-                          _: dict[str, Any] = Depends(require_manager_csrf)) -> dict[str, Any]:
+                          _: dict[str, Any] = Depends(require_permission_csrf("kb_edit"))) -> dict[str, Any]:
     """Тело запроса — сам файл изображения (без multipart), как у фото оценок."""
     data = await request.body()
     if not data or len(data) > KB_PHOTO_MAX_BYTES:

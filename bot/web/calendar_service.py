@@ -113,7 +113,7 @@ def initialize_calendar_schema(engine: Engine) -> None:
                 "display_name": "TEXT",
                 "avatar_rev": "INTEGER NOT NULL DEFAULT 0",
                 # Личная почасовая нагрузка: заполняет сам бариста в профиле,
-                # наставник может править в «Команда → Доступ и роли».
+                # право «панель управления» правит в «Команда → Доступ и роли».
                 "min_hours": "INTEGER NOT NULL DEFAULT 80",
                 "opt_hours": "INTEGER NOT NULL DEFAULT 130",
                 "max_hours": "INTEGER NOT NULL DEFAULT 170",
@@ -651,13 +651,12 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         actor = connection.execute(text("SELECT name, role FROM users WHERE id=:id AND is_active=1"), {"id": actor_id}).mappings().first()
         if not actor:
             raise LookupError("Пользователь не найден или отключён")
-        if change_type == "schedule" and not access_roles.is_mentor(actor):
-            raise PermissionError("Тип «Расписание» доступен только наставникам")
-        # Стажёр расписание видит, но не правит: право на изменения приходит
-        # вместе с должностью, у которой есть возможность `schedule_edit`
-        # (например, «Бариста») — после аттестации. Тот же отказ и на сервере,
-        # а не только скрытой кнопкой в интерфейсе.
-        if not access_roles.can_edit_schedule(actor):
+        if change_type == "schedule" and not access_roles.allows(actor, "schedule_publish"):
+            raise PermissionError("Тип «Расписание» требует права на публикацию расписаний")
+        # Уровень 0 расписание видит, но не правит: право на замены приходит с
+        # уровнем 1 (например, должность «Бариста») — после аттестации. Тот же
+        # отказ и на сервере, а не только скрытой кнопкой в интерфейсе.
+        if not access_roles.allows(actor, "swaps"):
             raise PermissionError("Недостаточно прав для правки расписания")
 
         cells = []
