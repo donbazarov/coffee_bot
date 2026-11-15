@@ -9634,6 +9634,18 @@ async function loadMaintenance() {
   }
 }
 
+/* Имя запчасти в ТО: карточкой запчасти владеет страница базы знаний
+   (`equipment_parts.page_id`), поэтому название ведёт на неё — тот же декоратор,
+   что у `kbLinkify` (иконка статьи, акцентный цвет). Клик ловит общий
+   делегированный обработчик `[data-kb-page]`, свой не нужен. Без привязанной
+   страницы (запись без БЗ или страница удалена) остаётся обычный текст. */
+function maintenancePartNameMarkup(name, pageId) {
+  const label = escapeHtml(name);
+  const id = Number(pageId || 0);
+  if (!id) return label;
+  return `<a class="neft-page-link" href="${kbPageHref(id)}" data-kb-page="${id}"><svg class="icon" aria-hidden="true"><use href="#i-book"></use></svg>${label}</a>`;
+}
+
 function renderMaintenanceOverview() {
   const list = document.querySelector('#maintenance-overview-list');
   const summary = document.querySelector('#maintenance-summary');
@@ -9656,7 +9668,7 @@ function renderMaintenanceOverview() {
       ? `${maintenanceDate(item.next_due_date)}${item.days_left != null ? `<small>${item.days_left < 0 ? `просрочено на ${Math.abs(item.days_left)} дн.` : item.days_left === 0 ? 'сегодня' : `через ${item.days_left} дн.`}</small>` : ''}`
       : '—';
     return `<article class="maintenance-row is-${item.status}">
-      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(item.category_color || '#7b8794')}"></i><span><strong>${escapeHtml(item.name)}</strong>${item.model ? `<small>${escapeHtml(item.model)}</small>` : ''}</span></span>
+      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(item.category_color || '#7b8794')}"></i><span><strong>${maintenancePartNameMarkup(item.name, item.page_id)}</strong>${item.model ? `<small>${escapeHtml(item.model)}</small>` : ''}</span></span>
       <span>${escapeHtml(item.point_name)}</span>
       <span>${item.replacement_interval_days ? `каждые ${Number(item.replacement_interval_days)} дн.` : 'по износу'}</span>
       <span>${maintenanceDate(item.last_replaced)}</span>
@@ -9700,7 +9712,7 @@ function renderMaintenanceStock() {
       return `<button class="${cls}" type="button" data-maintenance-stock="${part.part_id}:${escapeHtml(location.code)}" title="Изменить остаток">${label}</button>`;
     }).join('');
     return `<article class="maintenance-row">
-      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}"></i><span><strong>${escapeHtml(part.name)}</strong>${part.model ? `<small>${escapeHtml(part.model)}</small>` : ''}</span></span>
+      <span class="maintenance-part"><i class="category-swatch" style="--announcement-color:${escapeHtml(part.category_color || '#7b8794')}"></i><span><strong>${maintenancePartNameMarkup(part.name, part.page_id)}</strong>${part.model ? `<small>${escapeHtml(part.model)}</small>` : ''}</span></span>
       <span>${Number(part.min_stock || 0)}</span>${cells}
     </article>`;
   }).join('');
@@ -9736,7 +9748,7 @@ function renderMaintenanceLogs() {
     <article class="maintenance-log">
       <div class="maintenance-log-main">
         <span class="maintenance-log-date">${maintenanceDate(item.replaced_at)}</span>
-        <span class="maintenance-log-part"><strong>${escapeHtml(item.part_name)}</strong>${item.part_model ? `<small>${escapeHtml(item.part_model)}</small>` : ''}</span>
+        <span class="maintenance-log-part"><strong>${maintenancePartNameMarkup(item.part_name, item.part_page_id)}</strong>${item.part_model ? `<small>${escapeHtml(item.part_model)}</small>` : ''}</span>
         <span class="maintenance-log-point">${escapeHtml(item.point_name)}</span>
         <span class="maintenance-log-next">${item.next_due_date ? `следующая: ${maintenanceDate(item.next_due_date)}` : 'без срока'}</span>
       </div>

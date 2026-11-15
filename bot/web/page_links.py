@@ -15,6 +15,8 @@ Markdown-строке, и в JSON блоков Editor.js, и в `TEXT` из SQLi
 
 * `plain_text` — снять маркеры там, где текст уходит в плейн-текст (push и
   `.ics`-фид): `@[Заголовок](kb:12)` → `Заголовок`;
+* `mention` — собрать маркер там, где ссылка не вводится руками (имя и id
+  приходят из БД), почистив подпись под формат маркера;
 * `repair_links` — ссылки на удалённые страницы деградируют до простого текста
   (без «мёртвого» перехода); живые ссылки остаются как есть;
 * `truncate_safe` — обрезка по лимиту, которая не рвёт маркер пополам.
@@ -43,6 +45,21 @@ def page_ids(value: Any) -> set[int]:
 def plain_text(value: Any) -> str:
     """Маркеры → простой текст: подпись ссылки без служебной разметки."""
     return PAGE_LINK_RE.sub(lambda match: match.group(1), str(value or ""))
+
+
+def mention(page_id: Any, title: Any) -> str:
+    """Маркер ссылки на страницу из данных БД: `@[Заголовок](kb:12)`.
+
+    Нужен там, где подпись не пишет человек, а берётся из записи (например,
+    авто-задача ТО ссылается на запчасть, карточкой которой владеет страница
+    БЗ). Подпись чистим под `PAGE_LINK_RE`: `]` и переводы строк ломают маркер,
+    а слишком длинное имя не переживёт разбор на клиенте.
+    """
+    number = int(page_id or 0)
+    if not number:
+        return str(title or "")
+    label = " ".join(str(title or "").replace("]", " ").split())[:120]
+    return f"@[{label or 'Страница'}](kb:{number})"
 
 
 def truncate_safe(value: Any, limit: int) -> str:
@@ -84,4 +101,4 @@ def repair_links(database_engine: Engine, value: Any) -> str:
     return PAGE_LINK_RE.sub(replace, text_value)
 
 
-__all__ = ["PAGE_LINK_RE", "page_ids", "plain_text", "repair_links", "truncate_safe"]
+__all__ = ["PAGE_LINK_RE", "mention", "page_ids", "plain_text", "repair_links", "truncate_safe"]

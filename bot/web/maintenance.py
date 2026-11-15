@@ -35,7 +35,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from bot.database.models import engine
-from bot.web import modules, tasks
+from bot.web import modules, page_links, tasks
 from bot.web.announcements import TRANSLIT
 from bot.web.deps import require_manager_csrf, require_user
 
@@ -531,7 +531,8 @@ def stock_matrix(engine: Engine) -> dict[str, Any]:
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT p.id AS part_id, p.name, p.model, p.min_stock, p.article,
-                   p.category_code, c.label AS category_label, c.color AS category_color,
+                   p.category_code, p.page_id,
+                   c.label AS category_label, c.color AS category_color,
                    s.point_code, s.quantity
             FROM equipment_parts p
             LEFT JOIN equipment_categories c ON c.code = p.category_code
@@ -545,6 +546,7 @@ def stock_matrix(engine: Engine) -> dict[str, Any]:
             "article": row["article"] or "", "min_stock": int(row["min_stock"] or 0),
             "category_code": row["category_code"], "category_label": row["category_label"],
             "category_color": row["category_color"] or FALLBACK_COLOR, "quantities": {},
+            "page_id": int(row["page_id"]) if row["page_id"] else None,
         })
         if row["point_code"] is not None:
             part["quantities"][row["point_code"]] = int(row["quantity"] or 0)
@@ -579,6 +581,7 @@ def list_logs(engine: Engine, point_code: str | None = None, part_id: int | None
     with engine.connect() as connection:
         rows = connection.execute(text("""
             SELECT m.*, l.name AS point_name, p.name AS part_name, p.model AS part_model,
+                   p.page_id AS part_page_id,
                    c.label AS category_label, u.display_name AS author_name, u.name AS author_login
             FROM maintenance_logs m
             LEFT JOIN locations l ON l.code = m.point_code
@@ -595,6 +598,7 @@ def list_logs(engine: Engine, point_code: str | None = None, part_id: int | None
         "point_name": row["point_name"] or row["point_code"],
         "part_id": int(row["part_id"]), "part_name": row["part_name"] or f"#{row['part_id']}",
         "part_model": row["part_model"] or "", "category_label": row["category_label"],
+        "part_page_id": int(row["part_page_id"]) if row["part_page_id"] else None,
         "user_id": row["user_id"], "author": row["author_name"] or row["author_login"] or "",
         "replaced_at": str(row["replaced_at"] or "")[:10],
         "next_due_date": str(row["next_due_date"])[:10] if row["next_due_date"] else None,
@@ -705,7 +709,7 @@ def overview(engine: Engine) -> dict[str, Any]:
         rows = connection.execute(text("""
             SELECT l.code AS point_code, l.name AS point_name,
                    p.id AS part_id, p.name, p.model, p.replacement_interval_days,
-                   p.min_stock, p.article, p.category_code,
+                   p.min_stock, p.article, p.category_code, p.page_id,
                    c.label AS category_label, c.color AS category_color,
                    (SELECT MAX(m.replaced_at) FROM maintenance_logs m
                      WHERE m.point_code = l.code AND m.part_id = p.id) AS last_replaced,
@@ -734,6 +738,7 @@ def overview(engine: Engine) -> dict[str, Any]:
             "part_id": int(row["part_id"]), "name": row["name"], "model": row["model"] or "",
             "article": row["article"] or "", "category_label": row["category_label"],
             "category_color": row["category_color"] or FALLBACK_COLOR,
+            "page_id": int(row["page_id"]) if row["page_id"] else None,
             "replacement_interval_days": interval,
             "min_stock": int(row["min_stock"] or 0),
             "last_replaced": last.isoformat() if last else None,
@@ -753,7 +758,9 @@ def overview(engine: Engine) -> dict[str, Any]:
 # Задачи создаёт модуль задач (`tasks.create_task`). Чтобы не плодить дубли,
 # каждая авто-задача помечается маркером в `meta_info`: открытая задача с тем же
 # маркером повторно не создаётся (закрыли её — проблема вернулась — создастся
-# заново, это ожидаемо).
+# заново, это ожидаемо). В описании — ссылка на карточку запчасти в БЗ
+# (`page_links.mention`): задачу читают на точке, и переход к реквизитам
+# («где заказать», артикул, модель) экономит поиск по базе знаний.
 
 
 def _system_author(engine: Engine) -> int | None:
@@ -799,7 +806,7 @@ def run_automation(engine: Engine) -> dict[str, int]:
     with engine.connect() as connection:
         low = connection.execute(text("""
             SELECT s.point_code, l.name AS point_name, p.id AS part_id, p.name,
-                   p.min_stock, s.quantity
+                   p.page_id, p.min_stock, s.quantity
             FROM location_stock s
             JOIN locations l ON l.code = s.point_code AND l.is_active = 1
             JOIN equipment_parts p ON p.id = s.part_id
@@ -811,7 +818,8 @@ def run_automation(engine: Engine) -> dict[str, int]:
             continue
         if _create_auto_task(engine, author_id, token,
                              f"Закупка: {row['name']} ({row['point_name']})",
-                             f"Остаток {row['quantity']} при минимуме {row['min_stock']}. "
+                             f"{page_links.mention(row['page_id'], row['name'])} — остаток "
+                             f"{row['quantity']} при минимуме {row['min_stock']}. "
                              f"Пополните запас на точке «{row['point_name']}».",
                              "high"):
             created["purchase"] += 1
@@ -820,6 +828,7 @@ def run_automation(engine: Engine) -> dict[str, int]:
     with engine.connect() as connection:
         due_rows = connection.execute(text("""
             SELECT l.code AS point_code, l.name AS point_name, p.id AS part_id, p.name,
+                   p.page_id,
                    (SELECT m.next_due_date FROM maintenance_logs m
                      WHERE m.point_code = l.code AND m.part_id = p.id
                      ORDER BY m.replaced_at DESC, m.id DESC LIMIT 1) AS next_due
@@ -836,8 +845,9 @@ def run_automation(engine: Engine) -> dict[str, int]:
             continue
         if _create_auto_task(engine, author_id, token,
                              f"Замена: {row['name']} ({row['point_name']})",
-                             f"Срок замены истёк {due}. Проведите замену и внесите "
-                             f"запись в журнал ТО.", "urgent"):
+                             f"{page_links.mention(row['page_id'], row['name'])} — срок замены "
+                             f"истёк {due}. Проведите замену и внесите запись в журнал ТО.",
+                             "urgent"):
             created["replacement"] += 1
     return created
 
