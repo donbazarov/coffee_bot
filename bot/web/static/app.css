@@ -54,6 +54,8 @@
   --mint: #91c6ae;
   --mint-contrast: #122019;
   --warn: #ed876f;
+  /* Жёлтый «офлайн»: отдельный токен, иначе статус сливался с акцентом. */
+  --offline: #e9c46a;
   --danger-text: #ffad99;
   --danger-soft: rgba(237, 135, 111, .08);
   --danger-line: rgba(237, 135, 111, .3);
@@ -85,6 +87,13 @@
   --btn-weight: 500;
   --btn-h: 40px;
   --btn-pad: 15px;
+
+  /* Шкалы: шаг сетки 4px и типографический ряд. Введены по аудиту — отступы
+     подгоняются к шкале (19/21/16 → 16/24/16), а не шкала под отступы. */
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px;
+  --space-4: 16px; --space-5: 24px; --space-6: 32px;
+  --fs-1: 10px; --fs-2: 12px; --fs-3: 14px;
+  --fs-4: 17px; --fs-5: 22px; --fs-6: 28px;
 }
 
 [data-theme="light"] {
@@ -178,9 +187,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .account-copy { display: flex; min-width: 95px; flex-direction: column; line-height: 1.4; }
 .account-copy strong { font-size: 12px; font-weight: 600; }
 .account-copy span { color: var(--muted); font-size: 11px; }
-.app-status { display: flex; align-items: center; gap: 8px; color: var(--dim); font: 9px var(--mono); letter-spacing: .07em; white-space: nowrap; }
-.app-status.is-offline { color: #e9c46a; }
-.app-status.is-offline .status-light { background: #e9c46a; box-shadow: 0 0 12px color-mix(in srgb, #e9c46a 45%, transparent); }
+/* audit: было --dim (#62645d) — 2.79:1 на плашке топбара, ниже порога WCAG 4.5:1. */
+.app-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 9px var(--mono); letter-spacing: .07em; white-space: nowrap; }
+.app-status.is-offline { color: var(--offline); }
+.app-status.is-offline .status-light { background: var(--offline); box-shadow: 0 0 12px color-mix(in srgb, var(--offline) 45%, transparent); }
+/* Правая группа шапки: статус первым, колокольчик — у самого правого края.
+   В разметке notif-wrap идёт перед статусом, поэтому порядок задаёт order. */
+.topbar .app-status { margin-left: auto; }
+.topbar .notif-wrap { order: 1; }
 .icon-button { display: grid; width: 35px; height: 35px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: color .18s, border-color .18s; }
 .icon-button:hover { border-color: var(--line-strong); color: var(--text); }
 .view { display: none; padding: 37px 0 0; animation: rise-in .38s cubic-bezier(.2,.8,.2,1) both; }
@@ -191,11 +205,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
    истории оценок больше не прижимают текст к рамке. Модификаторы
    (.settings-panel, .analytics-panel, .level-panel, .announcements-panel, …)
    задают собственный padding ниже по файлу и переопределяют это значение. */
-.panel { min-width: 0; padding: 19px 21px; border: 1px solid var(--line); background: var(--surface); }
+.panel { min-width: 0; padding: var(--space-4) var(--space-5) var(--space-4); border: 1px solid var(--line); background: var(--surface); }
 .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .panel-heading h3 { margin: 5px 0 0; font: 600 18px/1.3 var(--sans); letter-spacing: -.01em; }
 .panel-index { color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
-.empty-state { padding: 24px 8px; color: var(--muted); font-size: 12px; text-align: center; }
+/* Пустое состояние: компактная плашка. Было 24px по вертикали — три пустых
+   виджета «Обзора» подряд давали первый экран из «пустот» (аудит, п.9). */
+.empty-state { padding: var(--space-3) var(--space-2); color: var(--muted); font-size: 12px; text-align: center; }
 .review-list { margin-top: 11px; }
 .review-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(80px, .7fr) auto; align-items: center; gap: 15px; min-height: 57px; border-top: 1px solid var(--line-faint); }
 .review-person { min-width: 0; }
@@ -298,7 +314,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .analytics-branch strong { font: 600 12px var(--mono); }
 .analytics-drinks { display: flex; flex-wrap: wrap; gap: 6px; }
 .analytics-chip { padding: 5px 10px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 11px; }
-.app-footer { display: flex; justify-content: space-between; gap: 14px; padding: 30px 0 20px; color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
+/* audit: было --dim (#62645d) — 3.17:1 на фоне страницы; кегль на шкалу --fs-1. */
+.app-footer { display: flex; justify-content: space-between; gap: 14px; padding: 30px 0 20px; color: var(--muted); font: var(--fs-1) var(--mono); letter-spacing: .08em; }
 /* Типографика кнопок задаётся здесь и больше нигде. Раньше её наследовали из
    контекста, отсюда разнобой 9/10/11/12/14px и вес 400 против 700 — «Отмена»
    рядом с «Опубликовать» выглядели как разные шрифты. nowrap — иначе кнопка в
@@ -401,7 +418,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .evaluation-score { min-height: 48px; font-size: 13px; }
   .evaluation-refs { grid-template-columns: 1fr; }
   .analytics-summary { grid-template-columns: 1fr; }
-  .app-footer { padding: 23px 0 10px; font-size: 8px; }
+  .app-footer { padding: 23px 0 10px; font-size: 9px; }
   .app-footer span:last-child { text-align: right; }
   /* Нижняя мобильная навигация заменена на сэндвич-drawer — см. .drawer ниже. */
   .user-row { grid-template-columns: minmax(0,1fr) auto; gap: 4px 10px; padding: 10px 3px; }
@@ -413,6 +430,15 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .team-summary { font-size: 11px; }
   .team-summary-note { font-size: 8px; }
   .toast { right: 12px; bottom: calc(18px + env(safe-area-inset-bottom)); left: 12px; max-width: none; }
+}
+/* Узкие экраны (≤480px): шапка не переносится, текст статуса обрезается, а не
+   выдавливает колокольчик за гуттер. Ellipsis задаётся дочернему span: у самого
+   flex-контейнера .app-status text-overflow игнорируется. */
+@media (max-width: 480px) {
+  .topbar { flex-wrap: nowrap; }
+  .topbar-title { min-width: 0; }
+  .app-status { min-width: 0; }
+  .app-status .status-text { overflow: hidden; text-overflow: ellipsis; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
@@ -772,7 +798,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
    По краям контент «уходит в пустоту»: mask-image плавно растворяет чипы. */
 .chip-row { --chip-fade: 20px; display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 0 16px; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); }
 .chip-row::-webkit-scrollbar { display: none; }
-.chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 13px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
+.chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
 .chip:hover { border-color: var(--accent); color: var(--text); }
 .chip.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .chip .icon { width: 13px; height: 13px; }
@@ -847,7 +873,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* Подсветка карточки задачи при переходе из уведомления. */
 .task-card.is-highlighted { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.announcements-panel { margin: 0 0 34px; padding: 19px 21px 16px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+.announcements-panel { margin: 0 0 34px; padding: var(--space-4) var(--space-5) var(--space-4); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .announcement-list { display: grid; gap: 10px; }
 .announcement { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 2px solid var(--announcement-color, var(--line)); background: var(--surface); cursor: pointer; }
 .announcement.is-unread { background: linear-gradient(140deg, var(--accent-soft), transparent 70%), var(--surface); }
@@ -874,6 +900,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 
 /* На телефоне шапка короче — мета уезжает вниз, к кнопкам. */
 @media (max-width: 760px) {
+  /* Мобильные отступы панели объявляем здесь, а не в базовом медиаблоке выше:
+     правило .announcements-panel стоит ниже по файлу и перебивает его. */
+  .announcements-panel { padding: 16px 14px; }
   .announcement { padding: 11px 13px; }
   .announcement-top .announcement-meta { display: none; }
   .announcement-meta-mobile { display: inline; }
@@ -886,6 +915,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
    Высота вьюпорта плавно подстраивается под активную карточку (её пишет JS),
    поэтому панели под слайд-шоу выезжают с замедлением, а не прыгают. */
 .announcement-slideshow { min-height: 92px; }
+/* Когда лента пуста, высота не нужна: 92px — «пол» под карточку, а не под текст
+   «Пока пусто». Так первый экран не забивается пустотой. */
+.announcement-slideshow:has(> .empty-state) { min-height: 0; }
 .slideshow { display: grid; gap: 10px; }
 .slideshow-viewport { position: relative; overflow: hidden; touch-action: pan-y; transition: height .45s cubic-bezier(.22,1,.36,1); }
 .slideshow-track { position: absolute; inset: 0; display: flex; align-items: flex-start; cursor: grab; transition: transform .5s cubic-bezier(.22,1,.36,1); will-change: transform; }
@@ -2522,6 +2554,10 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* Сенсорные и узкие экраны: убираем дорогое преломление (url) — функция
    остаётся (обычный blur), но FPS защищаем. */
 @media (pointer: coarse), (max-width: 760px) {
+  /* Тач-цели: чипы-фильтры и кнопки в заголовках панелей — не меньше 44px.
+     Десктопные значения (padding/--btn-h) не трогаем: только min-height. */
+  .chip { min-height: 44px; }
+  .panel-heading .button, .schedule-heading .button { min-height: 44px; }
   [data-glass="on"] :is(.panel, .dock, .toast, .team-summary,
       .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
       .level-panel, .achievements-panel, .branch-card, .drink-card, .room-row) {
@@ -2556,7 +2592,9 @@ body { transition: background-color .3s ease, color .3s ease; }
     padding: 6px;
     border: 1px solid var(--lg-border);
     border-radius: var(--lg-r-dock);
-    background-color: var(--lg-fill);
+    /* audit: было var(--lg-fill) — rgba(20,21,18,.55), сквозь док читался текст
+       виджетов; 92% заливки + существующий блюр его гасят. */
+    background-color: color-mix(in srgb, var(--bg) 92%, transparent);
     background-image: none;
     box-shadow:
       inset 0 1px 0 var(--lg-edge),

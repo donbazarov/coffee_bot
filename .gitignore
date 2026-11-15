@@ -43,6 +43,8 @@ Thumbs.db
 .cursor/
 
 secrets.txt
+# Локальная сессия веб-сервиса (содержит cookie coffee_session).
+storage.json
 .clinerules
 server_data/
 server_backups/

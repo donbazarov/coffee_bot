@@ -9499,7 +9499,8 @@ function openTaskCategoryDialog(item = null) {
   form.dataset.code = item ? item.code : '';
   document.querySelector('#task-category-title').textContent = item ? 'Изменить категорию' : 'Новая категория';
   document.querySelector('#task-category-submit').textContent = item ? 'Сохранить' : 'Создать';
-  form.elements.color.value = item ? item.color : '#ff6b4a';
+  // audit: was hardcoded #ff6b4a, use token
+  form.elements.color.value = item ? item.color : (getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#ff6b4a');
   if (item) form.elements.label.value = item.label;
   const errorNode = document.querySelector('#task-category-error');
   if (errorNode) errorNode.hidden = true;
