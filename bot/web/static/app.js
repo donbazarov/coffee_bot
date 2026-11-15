@@ -7661,20 +7661,26 @@ function drinkCardMarkup(desc) {
 }
 
 function drinkQuizMarkup(quiz) {
+  // Счётчик голосов и имена проголосовавших раскрываем только тому, кто уже
+  // ответил (автору поста сервер в этом случае тоже отдаёт раскрытые данные).
+  const revealed = Boolean(quiz.voted) || quiz.correct_option_id != null;
   const options = (quiz.options || []).map((option) => {
     const classes = ['drink-quiz-option'];
     if (option.is_correct) classes.push('is-correct');
     if (quiz.my_option_id === option.id) classes.push('is-mine');
-    const voters = option.voters || [];
+    const voters = revealed ? (option.voters || []) : [];
     const votersMarkup = voters.length
       ? `<span class="drink-quiz-voters">${escapeHtml(voters.join(', '))}</span>` : '';
+    const votesMarkup = revealed
+      ? `<span class="drink-quiz-meta"><span class="drink-quiz-votes">${option.votes}</span>${votersMarkup}</span>`
+      : '';
     return `<button class="${classes.join(' ')}" type="button" data-drink-vote="${quiz.id}" data-option="${option.id}"${quiz.voted ? ' disabled' : ''}>
       <span class="drink-quiz-option-text">${escapeHtml(option.text)}</span>
-      <span class="drink-quiz-meta"><span class="drink-quiz-votes">${option.votes}</span>${votersMarkup}</span>
+      ${votesMarkup}
     </button>`;
   }).join('');
   const done = quiz.voted ? '<span class="drink-quiz-done">вы ответили</span>' : '';
-  const total = quiz.votes ? `<span class="drink-quiz-total">голосов: ${quiz.votes}</span>` : '';
+  const total = revealed && quiz.votes ? `<span class="drink-quiz-total">голосов: ${quiz.votes}</span>` : '';
   return `<div class="drink-quiz" data-quiz-id="${quiz.id}">
     <p class="drink-quiz-question">${escapeHtml(quiz.question || 'Где чей латте-арт?')}${done}${total}</p>
     <div class="drink-quiz-options">${options}</div>

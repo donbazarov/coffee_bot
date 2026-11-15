@@ -757,7 +757,7 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
             options.append({
                 "id": option_id,
                 "text": row["text"],
-                "votes": counts.get(quiz_id, {}).get(option_id, 0),
+                "votes": counts.get(quiz_id, {}).get(option_id, 0) if reveal else 0,
                 "voters": (voters.get(quiz_id, {}).get(option_id, []) if reveal else []),
                 "is_correct": bool(row["is_correct"]) if reveal else None,
             })
@@ -769,7 +769,7 @@ def _quizzes_for(connection: Connection, description_ids: list[int], viewer_id: 
             "voted": my_option is not None,
             "my_option_id": my_option,
             "correct_option_id": int(quiz["correct_option_id"]) if reveal and quiz["correct_option_id"] else None,
-            "votes": sum(counts.get(quiz_id, {}).values()),
+            "votes": (sum(counts.get(quiz_id, {}).values()) if reveal else 0),
             "options": options,
         })
     return grouped
