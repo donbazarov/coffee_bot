@@ -2594,9 +2594,7 @@ body { transition: background-color .3s ease, color .3s ease; }
     padding: 6px;
     border: 1px solid var(--lg-border);
     border-radius: var(--lg-r-dock);
-    /* audit: было var(--lg-fill) — rgba(20,21,18,.55), сквозь док читался текст
-       виджетов; 92% заливки + существующий блюр его гасят. */
-    background-color: color-mix(in srgb, var(--bg) 92%, transparent);
+    background-color: color-mix(in srgb, var(--lg-fill));
     background-image: none;
     box-shadow:
       inset 0 1px 0 var(--lg-edge),
