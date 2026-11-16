@@ -798,7 +798,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
    По краям контент «уходит в пустоту»: mask-image плавно растворяет чипы. */
 .chip-row { --chip-fade: 20px; display: flex; flex-wrap: nowrap; gap: 8px; margin: 0 0 16px; overflow-x: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none; -webkit-mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); mask-image: linear-gradient(to right, transparent 0, #000 var(--chip-fade), #000 calc(100% - var(--chip-fade)), transparent 100%); }
 .chip-row::-webkit-scrollbar { display: none; }
-.chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: var(--space-2) var(--space-3); border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
+/* padding вне 4px-шкалы намеренно: «таблетка» 6/13 — исходный вид чипов.
+   К шкале (8/12) не возвращаем: было решение владельца по внешнему виду. */
+.chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 6px 13px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font-size: 12px; white-space: nowrap; cursor: pointer; border-radius: 999px; transition: border-color .2s, color .2s, background .2s; }
 .chip:hover { border-color: var(--accent); color: var(--text); }
 .chip.is-selected { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
 .chip .icon { width: 13px; height: 13px; }
@@ -2554,9 +2556,9 @@ body { transition: background-color .3s ease, color .3s ease; }
 /* Сенсорные и узкие экраны: убираем дорогое преломление (url) — функция
    остаётся (обычный blur), но FPS защищаем. */
 @media (pointer: coarse), (max-width: 760px) {
-  /* Тач-цели: чипы-фильтры и кнопки в заголовках панелей — не меньше 44px.
-     Десктопные значения (padding/--btn-h) не трогаем: только min-height. */
-  .chip { min-height: 44px; }
+  /* Тач-цель — только кнопки в заголовках панелей. Чипы-фильтры намеренно
+     оставлены прежней высоты: min-height: 44px превращал их в «жирные
+     таблетки», исходный компактный вид важнее (решение владельца). */
   .panel-heading .button, .schedule-heading .button { min-height: 44px; }
   [data-glass="on"] :is(.panel, .dock, .toast, .team-summary,
       .pwa-install-card, .push-prompt-card, dialog, .schedule-summary,
