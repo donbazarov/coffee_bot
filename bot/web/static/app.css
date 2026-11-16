@@ -26,6 +26,10 @@
   --accent-faint: color-mix(in srgb, var(--accent) 11%, transparent);
   --accent-line: color-mix(in srgb, var(--accent) 38%, transparent);
   --accent-hover: color-mix(in srgb, var(--accent) 84%, white);
+  /* Текст акцентом (eyebrow, кикеры). В тёмной теме исходный --accent на тёмной
+     подложке читается (6.2:1 к --surface), поэтому ink = accent. Светлая тема
+     переопределяет: там салютный акцент как текст даёт 2.2:1. */
+  --accent-ink: var(--accent);
 
   /* Фон и поверхности */
   --bg: #10110f;
@@ -47,8 +51,12 @@
   /* Текст */
   --text: #f3f0e8;
   --text-soft: #cbc8bf;
-  --muted: #92928a;
-  --dim: #62645d;
+  --muted: #9f9f96;
+  /* --dim не темнее 4.5:1 к панели с подложкой --accent-faint (#312420) и 5.2:1
+     к обычной --surface: именно на нём стоит мелкий текст (panel-index,
+     maintenance-head, подписи 9-11px), который раньше давал 2.9:1.
+     Иерархия сохранена: dim < muted < text-soft < text по светлоте. */
+  --dim: #8c8e85;
 
   /* Семантика */
   --mint: #91c6ae;
@@ -116,8 +124,14 @@
 
   --text: #1c1b17;
   --text-soft: #4a4840;
-  --muted: #a2a39d;
-  --dim: #777571;
+  --muted: #5b5c58;
+  /* То же правило для светлой темы (палитра инвертируется: чем темнее, тем
+     контрастнее). --dim держит 4.5:1 к самой тёмной подложке (градиент входа),
+     5.2:1 к --surface-sunken и 6.3:1 к белой панели, --muted — 5.6:1 и выше.
+     Акцентный текст затемняем примесью текстового цвета: пользовательский
+     --accent при этом сохраняется (58% акцента → 4.7:1 к подложке входа). */
+  --dim: #61605c;
+  --accent-ink: color-mix(in srgb, var(--accent) 58%, #1c1b17);
 
   --mint: #1f7a5c;
   --mint-contrast: #ffffff;
@@ -162,7 +176,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .brand-name { display: flex; flex-direction: column; font-size: 14px; font-weight: 900; letter-spacing: .12em; line-height: 1.2; }
 .brand-name small { margin-top: 5px; color: var(--muted); font: 400 8px/1.2 var(--sans); letter-spacing: .3em; text-transform: uppercase; }
 .login-content { width: min(660px, 100%); margin: auto; padding: 70px 0 86px; animation: rise-in .7s cubic-bezier(.2,.8,.2,1) both; }
-.eyebrow { margin: 0; color: var(--accent); font: 10px/1.4 var(--mono); letter-spacing: .14em; }
+.eyebrow { margin: 0; color: var(--accent-ink); font: 10px/1.4 var(--mono); letter-spacing: .14em; }
 .login-content h1 { margin: 22px 0 17px; font: 600 clamp(40px, 7.4vw, 68px)/1.06 var(--sans); letter-spacing: -.02em; }
 .login-copy { max-width: 410px; margin: 0; color: var(--text-soft); font-size: 15px; font-weight: 300; line-height: 1.8; }
 .telegram-login { margin-top: 38px; min-height: 44px; }
@@ -197,9 +211,19 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .topbar .notif-wrap { order: 1; }
 .icon-button { display: grid; width: 35px; height: 35px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: color .18s, border-color .18s; }
 .icon-button:hover { border-color: var(--line-strong); color: var(--text); }
-.view { display: none; padding: 37px 0 0; animation: rise-in .38s cubic-bezier(.2,.8,.2,1) both; }
-.view.is-visible { display: block; }
-.section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 23px; }
+/* Ритм страницы задаёт контейнер: расстояние между блоками — gap, а не разнобой
+   margin-bottom (было 12/14/15/16/23/32/34 у разных). --view-gap — тот же приём,
+   что --panel-gap: раздел меняет шаг одной строкой, не трогая детей. */
+.view { display: none; --view-gap: var(--space-5); padding: var(--space-6) 0 0; animation: rise-in .38s cubic-bezier(.2,.8,.2,1) both; }
+.view.is-visible { display: flex; flex-direction: column; gap: var(--view-gap); }
+/* Прямые блоки страницы не несут вертикальных margin — иначе они складываются с gap.
+   Двух классов достаточно, чтобы перебить одиночные правила ниже по файлу, поэтому
+   margin-bottom у панелей продолжает работать там, где панель вложена в чужую сетку
+   (.matrix-templates, .kb-layout, .control-layout). */
+.view.is-visible > * { margin-top: 0; margin-bottom: 0; }
+/* Обзор — витрина: панели стоят свободнее, чем формы в остальных разделах. */
+#overview-view { --view-gap: var(--space-6); }
+.section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
 .section-heading h2 { margin: 6px 0 0; font: 600 30px/1.2 var(--sans); letter-spacing: -.015em; }
 /* Панель — вертикальная стопка: промежуток между блоками задаёт gap родителя, а не
    margin-top/bottom дочерних. До этого у разных пар внутри панелей было
@@ -247,7 +271,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .review-time { text-align: right; }
 
 /* --- Развитие: уровень, ветки, судейский лист ------------------------- */
-.level-panel { display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: center; gap: 26px; margin-bottom: 12px; padding: 24px; background: linear-gradient(140deg, var(--accent-soft), transparent 62%), var(--surface); }
+.level-panel { display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: center; gap: 26px; padding: 24px; background: linear-gradient(140deg, var(--accent-soft), transparent 62%), var(--surface); }
 .level-ring { position: relative; display: grid; width: 168px; height: 168px; place-items: center; }
 .level-ring-svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
 .level-ring-track { fill: none; stroke: var(--line); stroke-width: 8; }
@@ -266,7 +290,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .level-panel.is-mentor .level-number { display: none; }
 .level-panel.is-mentor .level-skull { top: 50%; width: 52px; height: 52px; transform: translateY(-50%); }
 
-.branch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.branch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .branch-card { display: grid; gap: 10px; padding: 17px 18px; border: 1px solid var(--line); background: var(--surface); }
 .branch-card.is-social { border-style: dashed; }
 .branch-head { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 11px; }
@@ -285,7 +309,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
    Витрина — два столбца (медаль + текст), на мобильном — в стопку.
    Сетка наград тянется по auto-fill, при 360px это ровно 3 колонки
    без горизонтальной прокрутки. */
-.achievements-panel { margin: 0 0 12px; padding: 19px 21px 17px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+.achievements-panel { padding: 19px 21px 17px; background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .achievements-hero { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: center; gap: 18px; margin: 14px 0 16px; padding: 12px 16px; border: 1px solid var(--line-faint); background: radial-gradient(circle at 26% 22%, var(--accent-soft), transparent 66%), var(--surface-sunken); }
 .achievements-hero model-viewer { display: block; grid-area: 1 / 1; width: 100%; height: 240px; --poster-color: transparent; }
 .achievements-copy { grid-area: 1 / 2; min-width: 0; }
@@ -416,8 +440,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .account-copy strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
   .account-copy span { font-size: 9px; }
   .icon-button { width: 31px; height: 31px; }
-  .view { padding-top: 27px; }
-  .section-heading { align-items: start; flex-direction: column; gap: 16px; margin-bottom: 16px; }
+  .view { padding-top: var(--space-5); }
+  .section-heading { align-items: start; flex-direction: column; gap: 16px; }
   .section-heading h2 { font-size: 27px; }
   #team-view .section-heading { flex-direction: row; align-items: end; }
   #team-view .section-heading h2 { font-size: 25px; }
@@ -467,7 +491,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 /* Shift calendar */
-.schedule-summary { margin-bottom: 34px; padding: 19px 20px 0; border: 1px solid var(--line); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+.schedule-summary { padding: 19px 20px 0; border: 1px solid var(--line); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .schedule-heading { align-items: center; margin-bottom: 15px; }
 .schedule-heading h2 { font-size: 25px; }
 .hours-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -523,7 +547,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .swap-mini-button { position: absolute; right: 3px; top: 3px; width: 18px; height: 18px; padding: 0; border: 1px solid var(--line); background: var(--surface); color: var(--mint); font-size: 12px; line-height: 1; cursor: pointer; opacity: 0; }
 .calendar-event:hover .swap-mini-button, .swap-mini-button:focus-visible { opacity: 1; }
 .calendar-empty { padding: 4px 2px; color: var(--dim); font-size: 9px; }
-.swaps-panel { margin-top: 16px; padding: 17px 19px 8px; }
+.swaps-panel { padding: 17px 19px 8px; }
 .swap-list { display: grid; margin-top: 12px; }
 .swap-row { display: grid; grid-template-columns: minmax(180px,1fr) minmax(170px,1fr) auto; align-items: center; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line); }
 .swap-copy strong, .swap-copy span { display: block; }
@@ -546,7 +570,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .feed-status { min-height: 18px; color: var(--muted); font-size: 11px; }
 
 @media (max-width: 760px) {
-  .schedule-summary { margin: -8px 0 27px; padding: 14px 12px 0; }
+  .schedule-summary { padding: 14px 12px 0; }
   .schedule-heading { flex-direction: row; align-items: end; gap: 8px; margin-bottom: 12px; }
   .schedule-heading h2 { font-size: 22px; }
   .hours-grid { margin-inline: -12px; }
@@ -573,7 +597,7 @@ button.calendar-event:hover { filter: brightness(1.25); }
   .calendar-event-time { font-size: 7px; }
   .swap-mini-button { opacity: 1; }
   .calendar-empty { display: none; }
-  .swaps-panel { margin-top: 12px; padding: 14px 12px 5px; }
+  .swaps-panel { padding: 14px 12px 5px; }
   .swap-row { grid-template-columns: 1fr auto; gap: 7px; padding: 10px 0; }
   .swap-copy strong { font-size: 10px; }
   .swap-copy span { font-size: 9px; }
@@ -906,8 +930,9 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* «Панели-витрины» Обзора: лента, задачи, напитки. Раньше подложку и страничный
    ритм несла .announcements-panel, поэтому панель задач молча наследовала стили
    анонсов, а панель напитков не получала ни градиента, ни отступа вовсе.
-   padding убран — он дублировал базовый .panel; 34px → --space-6 по 4px-шкале. */
-.overview-panel { margin-bottom: var(--space-6); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+   Ни padding, ни margin у панели нет: внутренний отступ и шаг между панелями
+   Обзора задают .panel и контейнер страницы (--view-gap у #overview-view). */
+.overview-panel { background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .announcement-list { display: grid; gap: 10px; }
 .announcement { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 2px solid var(--announcement-color, var(--line)); background: var(--surface); cursor: pointer; }
 .announcement.is-unread { background: linear-gradient(140deg, var(--accent-soft), transparent 70%), var(--surface); }
@@ -1173,7 +1198,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .pwa-install-card { position: relative; width: min(440px, 100%); padding: 26px 22px 22px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow-2); animation: pwa-rise .32s cubic-bezier(.2,.8,.2,1); }
 .pwa-install-close { position: absolute; top: 12px; right: 12px; }
 .pwa-install-logo { display: block; width: 52px; height: 52px; margin: 0 auto 14px; background-color: var(--accent); -webkit-mask: url("/static/icons/logo.svg") no-repeat center / contain; mask: url("/static/icons/logo.svg") no-repeat center / contain; }
-.pwa-install-kicker { margin: 0 0 6px; color: var(--accent); font: 10px/1.4 var(--mono); letter-spacing: .16em; text-align: center; }
+.pwa-install-kicker { margin: 0 0 6px; color: var(--accent-ink); font: 10px/1.4 var(--mono); letter-spacing: .16em; text-align: center; }
 .pwa-install-title { margin: 0 0 8px; font-size: 20px; line-height: 1.25; text-align: center; }
 .pwa-install-copy { margin: 0 0 18px; color: var(--text-soft); font-size: 13.5px; line-height: 1.5; text-align: center; }
 .pwa-install-steps { margin: 0 0 18px; }
@@ -1632,7 +1657,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .analytics-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
 .analytics-period { display: flex; flex-wrap: wrap; gap: 6px; }
 .analytics-period-select { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
-.analytics-panel { margin-bottom: 16px; padding: 19px 21px 20px; }
+.analytics-panel { padding: 19px 21px 20px; }
 .analytics-body { display: grid; gap: 14px; }
 
 .analytics-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
@@ -2916,7 +2941,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 }
 
 .tasks-modes { display: flex; flex-wrap: wrap; gap: 10px; }
-.tasks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.tasks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .tasks-chips { margin: 0; flex: 1 1 auto; min-width: 0; -webkit-mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, transparent, #000 16px, #000 calc(100% - 16px), transparent); }
 /* Чип категории тонируется своим цветом — как бейдж на карточке. */
 .tasks-chips .chip { border-color: color-mix(in srgb, var(--task-color, var(--line)) 34%, var(--line)); color: color-mix(in srgb, var(--task-color, var(--muted)) 55%, var(--text)); }
