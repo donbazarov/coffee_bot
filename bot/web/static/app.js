@@ -8112,7 +8112,7 @@ async function loadDrinksWidget() {
 /* --- Виджет «Мои задачи» на «Обзоре» -------------------------------------
    Компактный список до пяти свежих незакрытых задач, которые касаются меня или
    моей должности (та же видимость, что у режима «Все» на доске). Визуал — те же
-   карточки, что в ленте анонсов (`.announcement`), панель — `.announcements-panel`. */
+   карточки, что в ленте анонсов (`.announcement`), панель — `.overview-panel`. */
 function taskWidgetMarkup(task) {
   const stage = TASK_STAGE[task.status] || TASK_STAGE.todo;
   const chip = task.category_label

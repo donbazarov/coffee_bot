@@ -209,7 +209,7 @@
       </header>
 
       <section class="view is-visible" id="overview-view">
-        <section class="panel announcements-panel" id="announcements-preview">
+        <section class="panel overview-panel" id="announcements-preview">
           <div class="panel-heading"><div><p class="eyebrow">ЛЕНТА</p><h3>Последние события</h3></div><button class="button button-quiet" type="button" data-view="announcements">Все анонсы <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="chip-row" id="announcements-preview-filter" role="group" aria-label="Категория анонсов"></div>
           <div class="announcement-slideshow" id="announcements-preview-list"></div>
@@ -223,11 +223,11 @@
           </div>
           <div class="upcoming-panel"><div class="panel-heading"><div><p class="eyebrow">БЛИЖАЙШИЕ СМЕНЫ</p><h3>Следующие выходы</h3></div><button type="button" class="text-button" id="calendar-subscribe"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg> Сохранить календарь</button></div><div class="upcoming-list" id="upcoming-shifts"></div></div>
         </section>{% endif %}
-        {% if modules['tasks'].enabled %}<section class="panel announcements-panel tasks-widget" id="tasks-widget">
+        {% if modules['tasks'].enabled %}<section class="panel overview-panel tasks-widget" id="tasks-widget">
           <div class="panel-heading"><div><p class="eyebrow">СМЕНА / ЗАДАЧИ</p><h3>Мои задачи</h3></div><button class="button button-quiet" type="button" data-view="tasks">Все задачи <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="tasks-widget-list" id="tasks-widget-list"></div>
         </section>{% endif %}
-        {% if modules['drinks'].enabled %}<section class="panel drinks-widget" id="drinks-widget">
+        {% if modules['drinks'].enabled %}<section class="panel overview-panel drinks-widget" id="drinks-widget">
           <div class="panel-heading"><div><p class="eyebrow">СМЕНА</p><h3>Описание напитков</h3></div><button class="button button-quiet" type="button" data-view="drinks">Все описания <svg class="icon" aria-hidden="true"><use href="#i-external"></use></svg></button></div>
           <div class="drinks-widget-list" id="drinks-widget-list"></div>
         </section>{% endif %}
@@ -692,7 +692,7 @@
               <p class="control-nav-status" id="control-nav-status" role="status"></p>
             </div></div>
           </aside>
-          <div class="control-body-panel">
+          <div class="control-body">
             {% for module in control_modules %}<section class="control-module" data-control-module="{{ module.code }}" hidden>
               <div class="control-module-head">
                 <div><p class="eyebrow">{% if module.code == 'main' %}ОСНОВНОЕ{% elif module.code == 'roles' %}ДОСТУП{% else %}МОДУЛЬ{% endif %}</p><h3>{{ module.title }}</h3></div>

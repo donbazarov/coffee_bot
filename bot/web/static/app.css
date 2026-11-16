@@ -201,18 +201,41 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .view.is-visible { display: block; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; margin-bottom: 23px; }
 .section-heading h2 { margin: 6px 0 0; font: 600 30px/1.2 var(--sans); letter-spacing: -.015em; }
-/* Панель сразу с внутренними отступами по умолчанию: «голые» секции вроде
-   истории оценок больше не прижимают текст к рамке. Модификаторы
-   (.settings-panel, .analytics-panel, .level-panel, .announcements-panel, …)
+/* Панель — вертикальная стопка: промежуток между блоками задаёт gap родителя, а не
+   margin-top/bottom дочерних. До этого у разных пар внутри панелей было
+   0/10/11/12/14/16/18/22 — отсюда «слипания» и сложение отступов.
+   Ритм настраивается локально, как --btn-h/--chip-fade: плотная панель (например
+   .settings-panel) переопределяет --panel-gap одной строкой, не трогая детей.
+   Модификаторы (.settings-panel, .analytics-panel, .level-panel, .overview-panel, …)
    задают собственный padding ниже по файлу и переопределяют это значение. */
-.panel { min-width: 0; padding: var(--space-4) var(--space-5) var(--space-4); border: 1px solid var(--line); background: var(--surface); }
+.panel { --panel-gap: var(--space-4); display: flex; min-width: 0; flex-direction: column; gap: var(--panel-gap); padding: var(--space-4) var(--space-5) var(--space-4); border: 1px solid var(--line); background: var(--surface); }
+/* Прямые дети стопки не несут собственных вертикальных margin — иначе они
+   складываются с gap. Селектор из двух классов надёжно перебивает одиночные
+   правила ниже по файлу, поэтому сброс работает независимо от порядка.
+   Сброс адресный: те же классы вне стопки (.chip-row в ленте анонсов,
+   .settings-hint в диалоге оценки) свои отступы сохраняют, а чипы внутри
+   flex-тулбара больше не раздувают его высоту на 16px.
+   :not(:last-child) у подсказки сохраняет нижний врез панели настроек
+   (padding 8px + margin 14px) — низ блока не поджимается. */
+.panel > .chip-row,
+.drinks-toolbar > .chip-row,
+.panel > .settings-hint:not(:last-child),
+.panel > .push-row,
+.panel > .template-list,
+.panel > .announcement-categories,
+.panel > .maintenance-responsibles,
+.panel > .workload-metrics,
+.panel > .kb-page-nav,
+.panel > .roles-status,
+.panel > .control-nav-status,
+.role-levels-panel > .settings-hint:not(:last-child),
+.maintenance-panel > .settings-hint:not(:last-child) { margin-top: 0; margin-bottom: 0; }
 .panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .panel-heading h3 { margin: 5px 0 0; font: 600 18px/1.3 var(--sans); letter-spacing: -.01em; }
 .panel-index { color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
 /* Пустое состояние: компактная плашка. Было 24px по вертикали — три пустых
    виджета «Обзора» подряд давали первый экран из «пустот» (аудит, п.9). */
 .empty-state { padding: var(--space-3) var(--space-2); color: var(--muted); font-size: 12px; text-align: center; }
-.review-list { margin-top: 11px; }
 .review-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(100px, 1fr) minmax(80px, .7fr) auto; align-items: center; gap: 15px; min-height: 57px; border-top: 1px solid var(--line-faint); }
 .review-person { min-width: 0; }
 .review-person strong, .review-person span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -376,8 +399,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .user-telegram { display: none; }
 }
 @media (max-width: 760px) {
-  /* Базовые панели на телефоне — теснее, но всё равно с отступами. */
-  .panel { padding: 16px 14px; }
+  /* Базовые панели на телефоне — теснее, но всё равно с отступами:
+     и padding, и шаг между блоками уходят на ступень ниже. */
+  .panel { --panel-gap: var(--space-3); padding: 16px 14px; }
   .login-screen { padding: 22px 23px 19px; }
   .login-content { padding: 60px 0 75px; }
   .login-content h1 { font-size: clamp(43px, 13vw, 64px); }
@@ -452,11 +476,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .hour-stat > span { grid-column: 1 / -1; color: var(--muted); font: 9px var(--mono); letter-spacing: .08em; }
 .hour-stat strong { font: 600 28px/1 var(--sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .hour-stat small { padding-bottom: 2px; color: var(--muted); font-size: 10px; }
-.upcoming-panel { padding: 17px 0 13px; }
+/* «Ближайшие смены» — мини-панель внутри .schedule-summary: та же стопка, что
+   .panel, но без рамки и padding — их уже несёт родитель. */
+.upcoming-panel { display: flex; flex-direction: column; gap: var(--space-3); padding: 17px 0 13px; }
 .upcoming-panel .panel-heading h3 { font-size: 17px; }
 .text-button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 0 7px 9px; border: 0; background: transparent; color: var(--mint); font-size: 11px; cursor: pointer; }
 .text-button .icon { width: 15px; height: 15px; }
-.upcoming-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 7px; margin-top: 12px; }
+.upcoming-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px,1fr)); gap: 7px; }
 .upcoming-item { display: grid; grid-template-columns: 43px 1fr auto; align-items: center; gap: 9px; min-height: 48px; padding: 7px 10px; border: 1px solid var(--line); background: rgba(var(--hl), .02); }
 .upcoming-date { color: var(--accent); font: 10px var(--mono); }
 .upcoming-time { color: var(--text); font: 11px var(--mono); }
@@ -613,8 +639,10 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .matrix-edit-tools { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
 .matrix-edit-tools[hidden] { display: none; }
 .matrix-edit-tools #matrix-save:disabled { opacity: .4; cursor: not-allowed; transform: none; }
-.settings-panel { margin: 0 0 14px; padding: 19px 21px 8px; }
-.settings-panel .panel-heading { margin-bottom: 10px; }
+/* Панель настроек плотнее: ряды .setting-row/.module-setting сами несут 56–69px
+   высоты, поэтому 16px между всеми блоками избыточны. Здесь же жил margin-хак
+   .panel-heading { margin-bottom: 10px } — его роль теперь у gap. */
+.settings-panel { --panel-gap: var(--space-3); margin: 0 0 14px; padding: 19px 21px 8px; }
 .settings-panel .panel-heading h3 { font-size: 18px; }
 .module-setting { display: flex; min-height: 69px; align-items: center; justify-content: space-between; gap: 20px; border-top: 1px solid var(--line); cursor: pointer; }
 .module-setting > span { display: flex; flex-direction: column; gap: 3px; }
@@ -875,7 +903,11 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 /* Подсветка карточки задачи при переходе из уведомления. */
 .task-card.is-highlighted { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.announcements-panel { margin: 0 0 34px; padding: var(--space-4) var(--space-5) var(--space-4); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
+/* «Панели-витрины» Обзора: лента, задачи, напитки. Раньше подложку и страничный
+   ритм несла .announcements-panel, поэтому панель задач молча наследовала стили
+   анонсов, а панель напитков не получала ни градиента, ни отступа вовсе.
+   padding убран — он дублировал базовый .panel; 34px → --space-6 по 4px-шкале. */
+.overview-panel { margin-bottom: var(--space-6); background: linear-gradient(140deg, var(--accent-faint), transparent 45%), var(--surface); }
 .announcement-list { display: grid; gap: 10px; }
 .announcement { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-left: 2px solid var(--announcement-color, var(--line)); background: var(--surface); cursor: pointer; }
 .announcement.is-unread { background: linear-gradient(140deg, var(--accent-soft), transparent 70%), var(--surface); }
@@ -902,9 +934,8 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 
 /* На телефоне шапка короче — мета уезжает вниз, к кнопкам. */
 @media (max-width: 760px) {
-  /* Мобильные отступы панели объявляем здесь, а не в базовом медиаблоке выше:
-     правило .announcements-panel стоит ниже по файлу и перебивает его. */
-  .announcements-panel { padding: 16px 14px; }
+  /* Мобильные отступы панели берутся из базового медиаблока выше (.panel):
+     перебивающего правила для витрины Обзора больше нет. */
   .announcement { padding: 11px 13px; }
   .announcement-top .announcement-meta { display: none; }
   .announcement-meta-mobile { display: inline; }
@@ -945,25 +976,11 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
   .slideshow-viewport, .slideshow-track, .announcement-slide, .drink-slide { transition: none !important; }
 }
 
-/* Лента на главной — один блок; текст обрезаем, чтобы не распухало. */
-.announcement-list.is-compact { gap: 8px; }
-.announcement-list.is-compact .announcement { padding: 11px 13px; }
-.announcement-list.is-compact .announcement-title,
-.announcement-list.is-compact .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
-.announcement-list.is-compact .announcement-title { -webkit-line-clamp: 1; margin-top: 6px; font-size: 14px; }
-.announcement-list.is-compact .announcement-body { -webkit-line-clamp: 2; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
-.announcement-list.is-compact .announcement-gallery,
-.announcement-list.is-compact .announcement-remove { display: none; }
-.announcement-list.is-compact .announcement:nth-child(n+4) { display: none; }
-@media (min-width: 1100px) {
-  .announcement-list.is-compact .announcement:nth-child(n+4) { display: block; }
-  .announcement-list.is-compact .announcement:nth-child(n+6) { display: none; }
-}
-
 /* Виджет «Мои задачи» на «Обзоре»: до пяти карточек в стиле ленты анонсов.
-   Клэмпы свои, а не `.announcement-list.is-compact`: там 4-я и 5-я карточки
-   скрываются на узких экранах, а здесь нужны все пять. */
-.tasks-widget-list { display: grid; gap: 8px; }
+   Раньше здесь лежала копия правил `.announcement-list.is-compact`, при том что
+   сам `is-compact` мёртвый (его не ставит ни HTML, ни app.js) — блок удалён,
+   клэмпы остались только здесь: нужны все пять карточек. */
+.tasks-widget-list { display: grid; gap: var(--space-2); }
 .tasks-widget-list .announcement { padding: 11px 13px; }
 .tasks-widget-list .announcement-title,
 .tasks-widget-list .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1616,7 +1633,6 @@ body { transition: background-color .3s ease, color .3s ease; }
 .analytics-period { display: flex; flex-wrap: wrap; gap: 6px; }
 .analytics-period-select { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
 .analytics-panel { margin-bottom: 16px; padding: 19px 21px 20px; }
-.analytics-panel .panel-heading { margin-bottom: 16px; }
 .analytics-body { display: grid; gap: 14px; }
 
 .analytics-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
@@ -1713,7 +1729,6 @@ body { transition: background-color .3s ease, color .3s ease; }
 }
 @media (max-width: 760px) {
   .analytics-panel { padding: 16px 14px 16px; }
-  .analytics-panel .panel-heading { margin-bottom: 14px; }
   .analytics-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-param { grid-template-columns: minmax(0, 1fr) 70px 36px; }
   .analytics-point-quality { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2212,6 +2227,10 @@ body { transition: background-color .3s ease, color .3s ease; }
    Лэйаут и приёмы (fold, fab) повторяют базу знаний — привычная навигация.
    ========================================================================= */
 .control-layout { display: grid; gap: 14px; }
+/* Вторая колонка «Панели управления»: в шаблоне контейнер модулей раньше звался
+   .control-body-panel, хотя панелью не был (имя тянуло за собой ожидание стилей
+   .panel). Он остаётся обязательным элементом сетки — это просто колонка. */
+.control-body { min-width: 0; }
 .control-nav-panel { padding: 19px 21px; }
 .control-nav-heading { align-items: center; }
 .control-nav-actions { display: flex; align-items: center; gap: 8px; }
@@ -2242,7 +2261,10 @@ body { transition: background-color .3s ease, color .3s ease; }
 .control-tree-fab:hover { border-color: var(--accent); }
 
 /* --- Должности и допуски: уровни и справочник должностей ------------------- */
-.role-levels-panel { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* Разделитель уровней живёт внутри #roles-panel: воздух над линией даёт gap
+   панели, поэтому margin-top уходит — иначе он складывался с gap (было 18 + 14).
+   Сама секция тоже стопка: у неё свой заголовок, подсказка и сетка уровней. */
+.role-levels-panel { display: flex; flex-direction: column; gap: var(--space-3); margin-top: 0; padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .role-levels { display: grid; gap: 8px; }
 .role-level-row { display: grid; gap: 5px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-sunken); }
 .role-level-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
@@ -2250,7 +2272,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .role-level-badge { flex: 0 0 auto; padding: 2px 9px; border: 1px solid var(--accent-line); border-radius: 999px; background: var(--accent-soft); color: var(--text); font: 10px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
 .role-level-summary { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
 .role-level-lead { margin: 0; color: var(--text-soft); font-size: 11px; }
-.roles-list { display: grid; gap: 10px; margin-top: 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+.roles-list { display: grid; gap: 10px; padding-top: var(--space-3); border-top: 1px solid var(--line); }
 .role-row { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised); }
 .role-row.is-inactive { opacity: .6; }
 .role-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -2289,7 +2311,6 @@ body { transition: background-color .3s ease, color .3s ease; }
   .control-nav-toggle { min-width: 44px; min-height: 44px; }
   .control-module-head { flex-direction: column; align-items: stretch; }
   .module-setting-compact { max-width: none; }
-  .role-levels-panel { margin-top: 14px; padding-top: 12px; }
   .role-level-row { padding: 9px 10px; }
   .role-level-summary { font-size: 11px; }
   /* Отметка должности — палец, а не курсор: цель не меньше 44px. */
@@ -2384,7 +2405,7 @@ body { transition: background-color .3s ease, color .3s ease; }
     border-color: var(--lg-border);
     background-color: var(--lg-fill);
     /* background-image здесь НЕ трогаем: у акцентных панелей (.level-panel,
-       .achievements-panel, .schedule-summary, .announcements-panel) в нём
+       .achievements-panel, .schedule-summary, .overview-panel) в нём
        фирменный градиент — он остаётся поверх стекла. Белый градиент ушёл
        сам собой: мы его больше не добавляем. */
     box-shadow:
