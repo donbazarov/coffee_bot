@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 from sqlalchemy import text
@@ -405,8 +406,13 @@ def level_of(user_or_role: Any) -> int:
 
     Неизвестная или отключённая должность — уровень 0 (права fail-closed):
     отключение снимает права, но не выбрасывает человека из системы.
+
+    Принимается любая отображение-подобная запись (Mapping), а не только dict:
+    SQLAlchemy отдаёт строку как `RowMapping`, и `isinstance(..., dict)` на ней
+    ложно, из-за чего уровень падал до 0 — то есть любой сервис, читающий
+    сотрудника своим запросом, терял его права.
     """
-    if isinstance(user_or_role, dict):
+    if isinstance(user_or_role, Mapping):
         raw = user_or_role.get("access_level")
         if raw is not None:
             try:

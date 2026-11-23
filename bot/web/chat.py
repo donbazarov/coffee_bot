@@ -1121,7 +1121,7 @@ def chat_users(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
     """Собеседники для личных чатов: сначала те, с кем писали недавно."""
     me = int(user["id"])
     with engine.connect() as connection:
-        rows = connection.execute(text("""
+        rows = connection.execute(text(f"""
             SELECT u.id, u.name, u.display_name, u.role, u.avatar_rev,
                    (SELECT MAX(m.created_at) FROM chat_messages m
                      WHERE m.recipient_id IS NOT NULL

@@ -651,6 +651,10 @@ def apply_schedule_changes(engine: Engine, actor_id: int, operations: list[dict[
         actor = connection.execute(text("SELECT name, role FROM users WHERE id=:id AND is_active=1"), {"id": actor_id}).mappings().first()
         if not actor:
             raise LookupError("Пользователь не найден или отключён")
+        # Должностей у сотрудника может быть несколько: уровень берём как максимум
+        # по активным (`user_roles`), иначе «основная» должность решала бы за все.
+        actor = {**actor, "access_level": access_roles.user_level(
+            access_roles.roles_of(connection, actor_id) or [str(actor["role"])])}
         if change_type == "schedule" and not access_roles.allows(actor, "schedule_publish"):
             raise PermissionError("Тип «Расписание» требует права на публикацию расписаний")
         # Уровень 0 расписание видит, но не правит: право на замены приходит с
