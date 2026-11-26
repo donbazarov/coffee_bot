@@ -230,13 +230,15 @@
       </section>
 
       {% if modules['drinks'].enabled %}<section class="view" id="drinks-view" hidden>
-        <div class="section-heading drinks-heading">
+        <div class="section-heading">
           <div><p class="eyebrow">КАЧЕСТВО / СМЕНА</p><h2>Описание напитков</h2></div>
-          <button class="button button-primary" type="button" id="drinks-create"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новое описание</button>
         </div>
-        <div class="theme-switch drinks-tabs" role="group" aria-label="Разделы модуля">
-          <button type="button" data-drinks-tab="feed" class="is-selected">Описания</button>
-          <button type="button" data-drinks-tab="memes">Мемы смен</button>
+        <div class="drinks-tabs-row">
+          <div class="theme-switch drinks-tabs" role="group" aria-label="Разделы модуля">
+            <button type="button" data-drinks-tab="feed" class="is-selected">Описания</button>
+            <button type="button" data-drinks-tab="memes">Мемы смен</button>
+          </div>
+          <button class="button button-primary" type="button" id="drinks-create" aria-label="Новое описание"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg><span class="drinks-create-label">Новое описание</span></button>
         </div>
         <div class="drinks-panel" id="drinks-feed-panel">
           <div class="drinks-toolbar">

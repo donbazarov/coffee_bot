@@ -1762,7 +1762,12 @@ body { transition: background-color .3s ease, color .3s ease; }
 
 /* --- Описание напитков -------------------------------------------------- */
 
-.drinks-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* Кнопка «Новое описание» стоит на одной строке с табами, а не в заголовке:
+   в .section-heading на телефоне она уводила колонку заголовка к правому
+   краю (align-items: flex-end перебивал мобильное align-items: start). */
+.drinks-tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* На телефоне у кнопки остаётся только «+»: подпись скрыта, доступное имя — в aria-label. */
+@media (max-width: 760px) { .drinks-create-label { display: none; } #drinks-create { --btn-pad: 12px; } }
 .drinks-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 14px 0 16px; }
 .drinks-author { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-soft); }
 .drinks-author select { min-height: 40px; }
@@ -1917,7 +1922,7 @@ body { transition: background-color .3s ease, color .3s ease; }
   .drink-scales { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-.drinks-tabs { margin-bottom: 14px; }
+.drinks-tabs { margin-bottom: 0; }
 .drinks-panel { display: block; }
 .drink-manual-toggle { display: inline-flex; margin: -4px 0 12px; }
 .drink-manual-toggle[hidden] { display: none; }
