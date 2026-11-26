@@ -1672,8 +1672,6 @@ function setTeamTab(tab) {
   const workload = document.querySelector('#team-workload-panel');
   if (access) access.hidden = tab !== 'access';
   if (workload) workload.hidden = tab !== 'workload';
-  setText('#team-eyebrow', tab === 'workload' ? 'РАСЧЕТ ЧАСОВ' : 'ДОСТУП И РОЛИ');
-  setText('#team-title', tab === 'workload' ? 'Кадровая насыщенность' : 'Команда');
   const addButton = document.querySelector('#add-user-button');
   if (addButton) addButton.hidden = tab === 'workload';
   if (tab === 'workload') loadWorkload();

@@ -222,6 +222,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 #overview-view { --view-gap: var(--space-6); }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 24px; }
 .section-heading h2 { margin: 6px 0 0; font: 600 30px/1.2 var(--sans); letter-spacing: -.015em; }
+/* У разделов, где заголовок дублировал page-title, в section-heading остался только
+   ряд действий (кнопки, переключатели). :only-child держит его на прежнем месте —
+   справа, как в panel-heading, — вместо одинокого сдвига к левому краю. */
+.section-heading > :only-child { margin-left: auto; }
 /* Панель — вертикальная стопка: промежуток между блоками задаёт gap родителя, а не
    margin-top/bottom дочерних. До этого у разных пар внутри панелей было
    0/10/11/12/14/16/18/22 — отсюда «слипания» и сложение отступов.
@@ -442,6 +446,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .view { padding-top: var(--space-5); }
   .section-heading { align-items: start; flex-direction: column; gap: 16px; }
   .section-heading h2 { font-size: 27px; }
+  /* Телефон: у оставшегося ряда действий нет причины липнуть к правому краю. */
+  .section-heading > :only-child { margin-left: 0; }
   #team-view .section-heading { flex-direction: row; align-items: end; }
   #team-view .section-heading h2 { font-size: 25px; }
   #add-user-button { min-height: 36px; padding-inline: 10px; font-size: 11px; }

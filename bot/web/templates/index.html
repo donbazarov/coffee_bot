@@ -230,9 +230,6 @@
       </section>
 
       {% if modules['drinks'].enabled %}<section class="view" id="drinks-view" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">КАЧЕСТВО / СМЕНА</p><h2>Описание напитков</h2></div>
-        </div>
         <div class="drinks-tabs-row">
           <div class="theme-switch drinks-tabs" role="group" aria-label="Разделы модуля">
             <button type="button" data-drinks-tab="feed" class="is-selected">Описания</button>
@@ -260,9 +257,6 @@
       </section>{% endif %}
 
       {% if modules['development'].enabled %}<section class="view" id="development-view" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow" id="development-eyebrow">ПРОКАЧКА</p><h2 id="development-title">Развитие</h2></div>
-        </div>
         <section class="panel level-panel" id="level-panel">
           <div class="level-ring" id="level-ring" aria-hidden="true">
             <svg viewBox="0 0 120 120" class="level-ring-svg">
@@ -307,10 +301,7 @@
       </section>{% endif %}
 
       {% if modules['quality'].enabled %}<section class="view" id="quality-view" hidden>
-        <div class="section-heading">
-          <div><p class="eyebrow">КОНТРОЛЬ КАЧЕСТВА</p><h2>Оценочные сессии</h2></div>
-          {% if 'quality_cleanliness' in allowed %}<button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button>{% endif %}
-        </div>
+        {% if 'quality_cleanliness' in allowed %}<div class="section-heading"><button class="button button-primary" type="button" id="quality-new"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Новая оценка</button></div>{% endif %}
         <section class="panel">
           <div class="panel-heading"><div><p class="eyebrow">ИСТОРИЯ</p><h3>{% if 'quality_cleanliness' in allowed %}Проведённые сессии{% else %}Мои оценки{% endif %}</h3></div><span class="panel-index" id="quality-sessions-count">ПО 10</span></div>
           <div class="session-list" id="quality-sessions"></div>
@@ -324,7 +315,6 @@
 
       {% if modules['announcements'].enabled %}<section class="view" id="announcements-view" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">КОМАНДА / СОБЫТИЯ</p><h2>Анонсы</h2></div>
           <div class="calendar-actions">
             <button class="button button-quiet" type="button" id="announcements-subscribe"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg> В календарь</button>
             <button class="button button-quiet" type="button" id="announcements-read-all">Прочитать всё</button>
@@ -349,11 +339,10 @@
 
       {% if modules['tasks'].enabled %}<section class="view" id="tasks-view" hidden>
         <div class="section-heading tasks-heading">
-          <div><p class="eyebrow">СМЕНА / ЗАДАЧИ</p><h2>Доска задач</h2></div>
           <div class="tasks-modes">
-            <div class="theme-switch" id="tasks-mode" role="group" aria-label="Актуальные или архив">
-              <button type="button" data-task-mode="board" class="is-selected">Актуальные</button>
-              <button type="button" data-task-mode="archive">Архивные</button>
+            <div class="theme-switch" id="tasks-mode" role="group" aria-label="Текущие или архив">
+              <button type="button" data-task-mode="board" class="is-selected">Текущие</button>
+              <button type="button" data-task-mode="archive">Архив</button>
             </div>
             <div class="theme-switch" id="tasks-assignee" role="group" aria-label="Кому адресованы">
               <button type="button" data-task-assignee="all" class="is-selected">Все</button>
@@ -402,7 +391,6 @@
 
       {% if modules['maintenance'].enabled %}<section class="view" id="maintenance-view" hidden>
         <div class="section-heading tasks-heading">
-          <div><p class="eyebrow">СМЕНА / ОБОРУДОВАНИЕ</p><h2>Техническое обслуживание</h2></div>
           <div class="tasks-modes">
             <div class="theme-switch" id="maintenance-tabs" role="group" aria-label="Разделы обслуживания">
               <button type="button" data-maintenance-tab="overview" class="is-selected">Обслуживание по точкам</button>
@@ -443,7 +431,6 @@
 
       {% if modules['kb'].enabled %}<section class="view" id="kb-view" hidden>
         <div class="section-heading">
-          <div><p class="eyebrow">КОМАНДА / СПРАВОЧНИК</p><h2>База знаний</h2></div>
           <div class="calendar-actions">
             {% if 'kb_edit' in allowed %}<button class="button button-primary" type="button" id="kb-add-page"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Создать страницу</button>{% endif %}
           </div>
@@ -471,7 +458,6 @@
 
       {% if modules['chat'].enabled %}<section class="view" id="chat-view" hidden>
         <div class="section-heading chat-heading">
-          <div><p class="eyebrow">КОМАНДА / СВЯЗЬ</p><h2>Чат</h2></div>
           <div class="chat-tabs" role="tablist" aria-label="Тип чатов">
             <button class="chat-tab is-selected" type="button" role="tab" aria-selected="true" data-chat-tab="dm">Личные</button>
             <button class="chat-tab" type="button" role="tab" aria-selected="false" data-chat-tab="room">Общие</button>
@@ -542,7 +528,6 @@
       </section>{% endif %}
 
       <section class="view" id="profile-view" hidden>
-        <div class="section-heading"><div><p class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</p><h2>Профиль и оформление</h2></div></div>
         <section class="panel settings-panel calendar-feed-panel" id="calendar-feed-panel">
           <div class="panel-heading"><div><p class="eyebrow">КАЛЕНДАРЬ</p><h3 class="heading-with-icon"><svg class="icon" aria-hidden="true"><use href="#i-calendar-plus"></use></svg>График, анонсы и задачи</h3></div></div>
           <p class="settings-hint">Один личный календарь на всё: ваши смены, анонсы с датой и задачи с дедлайном. Подпишитесь один раз на смартфоне — события и напоминания будут обновляться сами.</p>
@@ -681,7 +666,6 @@
 
       {% if 'admin' in allowed %}
       <section class="view" id="control-view" hidden>
-        <div class="section-heading"><div><p class="eyebrow">АДМИНИСТРИРОВАНИЕ</p><h2>Панель управления</h2></div></div>
         <div class="control-layout">
           <aside class="panel settings-panel control-nav-panel">
             <div class="panel-heading control-nav-heading">
@@ -855,7 +839,7 @@
       {% if 'admin' in allowed %}
       {% if modules['team'].enabled %}
       <section class="view" id="team-view" hidden>
-        <div class="section-heading"><div><p class="eyebrow" id="team-eyebrow">ДОСТУП И РОЛИ</p><h2 id="team-title">Команда</h2></div><button type="button" class="button button-primary" id="add-user-button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Добавить сотрудника</button></div>
+        <div class="section-heading"><button type="button" class="button button-primary" id="add-user-button"><svg class="icon" aria-hidden="true"><use href="#i-plus"></use></svg> Добавить сотрудника</button></div>
         <div class="theme-switch team-tabs" role="group" aria-label="Разделы команды">
           <button type="button" data-team-tab="access" class="is-selected">Доступ и роли</button>
           <button type="button" data-team-tab="workload">Расчет часов</button>
@@ -909,7 +893,6 @@
       {% if modules['analytics'].enabled %}
       <section class="view" id="analytics-view" hidden>
         <div class="section-heading analytics-heading">
-          <div><p class="eyebrow">КОМАНДА / КАЧЕСТВО</p><h2>Аналитика команды</h2></div>
           <div class="analytics-toolbar">
             <div class="analytics-period" role="group" aria-label="Период аналитики">
               <button class="chip is-selected" type="button" data-analytics-days="30">30 дней</button>
