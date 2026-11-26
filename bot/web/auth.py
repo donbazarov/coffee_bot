@@ -223,3 +223,61 @@ def create_announcements_token(user_id: int) -> str:
 
 def read_announcements_token(token: str) -> int | None:
     return _read_scoped_token(token, "announcements")
+
+
+# --- Единый фид (смены + анонсы + задачи) --------------------------------- #
+# Токен содержит «эпоху сброса» (reset_ts): ссылку можно отозвать из личного
+# кабинета, подняв `users.calendar_reset_at` — старые ссылки перестают работать.
+
+def create_user_feed_token(user_id: int, reset_ts: int = 0) -> str:
+    """Подписанная ссылка на единый календарь пользователя."""
+    key = _session_key()
+    if key is None:
+        raise RuntimeError("Не задан WEB_SESSION_SECRET — нечем подписывать ссылки")
+    payload = (
+        f"{user_id}.{int(time.time()) + CALENDAR_TOKEN_MAX_AGE}.{reset_ts}.{os.urandom(16).hex()}"
+    )
+    encoded = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii").rstrip("=")
+    signature = hmac.new(key, f"feed:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def read_user_feed_token(token: str) -> int | None:
+    """Разбирает ссылку единого фида с учётом эпохи сброса.
+
+    `reset_ts` зашит в токен при выдаче; после нажатия «Сбросить ссылку» база
+    получает новый timestamp, и все ссылки, выданные раньше, перестают читаться.
+    """
+    key = _session_key()
+    if key is None:
+        return None
+    try:
+        encoded, supplied_signature = token.rsplit(".", 1)
+        expected_signature = hmac.new(key, f"feed:{encoded}".encode("ascii"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected_signature, supplied_signature):
+            return None
+        padded = encoded + "=" * (-len(encoded) % 4)
+        user_id, expires_at, reset_ts, _ = base64.urlsafe_b64decode(padded).decode("utf-8").split(".", 3)
+        if int(expires_at) < int(time.time()):
+            return None
+        return int(user_id) if _feed_reset_ok(int(user_id), int(reset_ts)) else None
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return None
+
+
+def _feed_reset_ok(user_id: int, reset_ts: int) -> bool:
+    """Токен жив, пока его эпоха не устарела относительно `calendar_reset_at`."""
+    with engine.connect() as connection:
+        row = connection.execute(
+            text("SELECT calendar_reset_at FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        ).mappings().first()
+    if row is None:
+        return True  # удалённый пользователь — просто пустой календарь
+    if not row["calendar_reset_at"]:
+        return True
+    try:
+        db_reset = int(float(row["calendar_reset_at"]))
+    except (TypeError, ValueError):
+        return True
+    return reset_ts >= db_reset

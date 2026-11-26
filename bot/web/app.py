@@ -23,14 +23,13 @@ from starlette.concurrency import run_in_threadpool
 
 from bot.config import BotConfig
 from bot.database.models import engine, init_db
-from bot.web import access_code, access_roles, analytics, announcements, avatars, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
-from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_announcements_token, create_calendar_token, create_session, read_announcements_token, read_calendar_token, read_session, register_or_find_telegram_user, verify_telegram_login
+from bot.web import access_code, access_roles, analytics, announcements, avatars, calendar_feed, chat, drink_descriptions, gamification, knowledge_base, maintenance, modules, notification_registry, notifications, push, schedule_snapshot, stories_service, tasks, telegram_login, telegram_publish, workload_service, work_points
+from bot.web.auth import COOKIE_NAME, SESSION_MAX_AGE, SESSION_RENEW_AFTER, create_session, read_session, register_or_find_telegram_user, verify_telegram_login
 from bot.web.deps import check_csrf as _check_csrf, require_csrf, require_permission, require_permission_csrf, require_user, session_user as _session_user
 from bot.web.calendar_service import (
     active_staff,
     app_timezone,
     apply_schedule_changes,
-    build_calendar_feed,
     CHAT_NOTIFY_VALUES,
     create_shift_template,
     delete_shift_template,
@@ -121,6 +120,8 @@ app.include_router(maintenance.maintenance_router)
 # Точки присутствия и общие настройки бренда (bot/web/work_points.py).
 app.include_router(work_points.points_router)
 app.include_router(work_points.settings_router)
+# Единый личный календарь (bot/web/calendar_feed.py): ссылки на фид и .ics.
+app.include_router(calendar_feed.feed_router)
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 ICONS_DIR = BASE_DIR / "static" / "icons"
 
@@ -212,6 +213,8 @@ def migrate_database():
     init_db()
     migrate_legacy_telegram_ids()
     initialize_calendar_schema(engine)
+    # Единый календарь: поля пользователя (эпоха сброса ссылок, напоминания).
+    calendar_feed.initialize_feed_schema(engine)
     # Флаги модулей (вкл/выкл в панели управления) живут в web_app_settings —
     # таблица уже создана initialize_calendar_schema строкой выше.
     modules.initialize_schema(engine)
@@ -839,22 +842,6 @@ def calendar_month(year: int | None = None, month: int | None = None, user: dict
     return get_month_calendar(engine, user, year, month)
 
 
-@app.get("/api/calendar/feed-link")
-def calendar_feed_link(request: Request, user: dict[str, Any] = Depends(require_user)):
-    token = create_calendar_token(user["id"])
-    https_url = str(request.url_for("calendar_feed", token=token))
-    return {"https_url": https_url, "webcal_url": https_url.replace("https://", "webcal://", 1).replace("http://", "webcal://", 1)}
-
-
-@app.get("/calendar/feed/{token}.ics", name="calendar_feed")
-def calendar_feed(token: str):
-    user_id = read_calendar_token(token)
-    if user_id is None:
-        raise HTTPException(status_code=404, detail="Календарь не найден")
-    content = build_calendar_feed(engine, user_id, app_timezone())
-    return Response(content, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "private, no-cache"})
-
-
 # --------------------------------------------------------------------------- #
 # Снимки графика («Расписание») и личные шаблоны смен
 # --------------------------------------------------------------------------- #
@@ -1260,26 +1247,6 @@ def list_announcements(category: str | None = None, limit: int = 30, user: dict[
         "categories": announcements.all_categories(engine),
         "can_publish": access_roles.allows(user, "announcements"),
     }
-
-
-@app.get("/api/announcements/feed-link")
-def announcements_feed_link(request: Request, user: dict[str, Any] = Depends(require_user)):
-    """Личная ссылка на календарь анонсов — отдельная от календаря смен."""
-    token = create_announcements_token(user["id"])
-    https_url = str(request.url_for("announcements_feed", token=token))
-    return {
-        "https_url": https_url,
-        "webcal_url": https_url.replace("https://", "webcal://", 1).replace("http://", "webcal://", 1),
-    }
-
-
-@app.get("/announcements/feed/{token}.ics", name="announcements_feed")
-def announcements_feed(token: str):
-    user_id = read_announcements_token(token)
-    if user_id is None:
-        raise HTTPException(status_code=404, detail="Календарь не найден")
-    content = announcements.build_feed(engine, user_id, app_timezone())
-    return Response(content, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "private, no-cache"})
 
 
 @app.post("/api/announcements")

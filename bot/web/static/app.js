@@ -5091,28 +5091,8 @@ function setupAnnouncements() {
     if (document.hidden) stopSlideshow(); else startSlideshow();
   });
 
-  // Календарь анонсов: отдельная ссылка от личного календаря смен.
-  const feedDialog = document.querySelector('#announcements-feed-dialog');
-  document.querySelector('#announcements-subscribe')?.addEventListener('click', async () => {
-    try {
-      const links = await api('/api/announcements/feed-link');
-      const open = document.querySelector('#announcements-webcal-open');
-      if (open) open.href = links.webcal_url;
-      const copy = document.querySelector('#announcements-feed-copy');
-      if (copy) copy.dataset.url = links.https_url;
-      const status = document.querySelector('#announcements-feed-status');
-      if (status) status.textContent = '';
-      feedDialog?.showModal();
-    } catch (error) { showToast(error.message); }
-  });
-  document.querySelector('#announcements-feed-copy')?.addEventListener('click', async (event) => {
-    const status = document.querySelector('#announcements-feed-status');
-    try {
-      await navigator.clipboard.writeText(event.currentTarget.dataset.url);
-      if (status) status.textContent = 'Ссылка скопирована';
-    } catch { if (status) status.textContent = event.currentTarget.dataset.url || ''; }
-  });
-  document.querySelectorAll('#announcements-feed-dialog .dialog-close').forEach((button) => button.addEventListener('click', () => feedDialog?.close()));
+  // Календарь анонсов и личный календарь слились в один фид — обработчики
+  // подписки (включая диалог и напоминания) живут в setupCalendarFeed().
 
   const testPush = async () => {
     setPushStatus('Отправляем…');
@@ -5139,6 +5119,141 @@ function setupAnnouncements() {
     if (event.key === 'Escape' && prompt && !prompt.hidden) dismissPushPrompt();
   });
   refreshPushState();
+}
+
+/* --- Единый личный календарь ----------------------------------------------
+   Одна подписка на всё: смены, анонсы с датой, задачи с дедлайном. Диалог
+   открывают три кнопки (обзор, анонсы, личный кабинет), внутри — ссылка на
+   webcal/https и мультивыбор напоминаний. Отдельно — одноразовый попап в
+   standalone-PWA: показан один раз на устройство, потом всегда доступен
+   через личный кабинет. */
+
+const CALENDAR_REMINDER_OPTIONS = [
+  { minutes: 60, label: 'за час' },
+  { minutes: 180, label: 'за 3 часа' },
+  { minutes: 1440, label: 'за день' },
+  { minutes: 10080, label: 'за неделю' },
+];
+const CALENDAR_PROMPT_KEY = 'neft-calendar-prompt:v1:';
+
+function calendarPromptDismissed() {
+  const userId = document.body.dataset.userId || '0';
+  try { return localStorage.getItem(CALENDAR_PROMPT_KEY + userId) === '1'; }
+  catch (error) { return true; }
+}
+function dismissCalendarPrompt() {
+  const userId = document.body.dataset.userId || '0';
+  try { localStorage.setItem(CALENDAR_PROMPT_KEY + userId, '1'); } catch (error) { /* приватный режим */ }
+}
+
+function renderFeedReminders(selected) {
+  const box = document.querySelector('#feed-reminders');
+  if (!box) return;
+  const values = new Set((Array.isArray(selected) ? selected : [60]).map(Number));
+  box.textContent = '';
+  CALENDAR_REMINDER_OPTIONS.forEach((option) => {
+    const label = document.createElement('label');
+    label.className = 'checkbox-row feed-reminder-item';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = String(option.minutes);
+    input.checked = values.has(option.minutes);
+    input.addEventListener('change', saveFeedReminders);
+    const span = document.createElement('span');
+    span.textContent = option.label;
+    label.append(input, span);
+    box.append(label);
+  });
+}
+
+async function saveFeedReminders() {
+  const checked = Array.from(document.querySelectorAll('#feed-reminders input:checked'))
+    .map((input) => Number(input.value));
+  const status = document.querySelector('#feed-status');
+  try {
+    await api('/api/calendar/reminders', { method: 'PATCH', body: JSON.stringify({ reminders: checked }) });
+    if (status) {
+      status.textContent = 'Напоминания сохранены';
+      setTimeout(() => { if (status && status.textContent === 'Напоминания сохранены') status.textContent = ''; }, 2000);
+    }
+  } catch (error) { showToast(error.message); }
+}
+
+async function openFeedDialog() {
+  const feedDialog = document.querySelector('#feed-dialog');
+  if (!feedDialog || feedDialog.open) return;
+  try {
+    const data = await api('/api/calendar/feed-link');
+    const open = document.querySelector('#webcal-open');
+    if (open) open.href = data.webcal_url;
+    const copy = document.querySelector('#feed-copy');
+    if (copy) copy.dataset.url = data.https_url;
+    const status = document.querySelector('#feed-status');
+    if (status) status.textContent = '';
+    renderFeedReminders(data.reminders || [60]);
+    feedDialog.showModal();
+  } catch (error) { showToast(error.message); }
+}
+
+function setupCalendarFeed() {
+  document.querySelectorAll('#calendar-subscribe, #announcements-subscribe, #profile-calendar-subscribe')
+    .forEach((button) => button.addEventListener('click', openFeedDialog));
+
+  const feedDialog = document.querySelector('#feed-dialog');
+  document.querySelector('#feed-copy')?.addEventListener('click', async (event) => {
+    const status = document.querySelector('#feed-status');
+    try {
+      await navigator.clipboard.writeText(event.currentTarget.dataset.url || '');
+      if (status) status.textContent = 'Ссылка скопирована';
+    } catch (error) { if (status) status.textContent = event.currentTarget.dataset.url || ''; }
+  });
+  document.querySelectorAll('#feed-dialog .dialog-close').forEach((button) =>
+    button.addEventListener('click', () => feedDialog?.close()));
+
+  // Сброс ссылки: прежние подписки на календарь перестают работать.
+  document.querySelector('#profile-calendar-reset')?.addEventListener('click', async () => {
+    const note = document.querySelector('#profile-calendar-note');
+    if (note) note.textContent = '';
+    try {
+      await api('/api/calendar/feed/reset', { method: 'POST' });
+      if (note) note.textContent = 'Ссылка сброшена: прошлые подписки отключены. Подпишитесь заново, если нужно.';
+      dismissCalendarPrompt();
+    } catch (error) { if (note) note.textContent = error.message; else showToast(error.message); }
+  });
+
+  /* — Одноразовый попап PWA (по образцу push-prompt) — */
+  const promptEl = document.querySelector('#calendar-subscribe-prompt');
+  if (!promptEl || calendarPromptDismissed()) return;
+  const standalone = window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches ||
+    navigator.standalone === true;
+  if (!standalone) return;
+  const pushPrompt = document.querySelector('#push-prompt');
+  if (pushPrompt && !pushPrompt.hidden) return;
+
+  setTimeout(() => {
+    const installBanner = document.querySelector('#pwa-install');
+    if (installBanner && !installBanner.hidden) return;
+    const open = document.querySelector('#calendar-subscribe-prompt-open');
+    if (open) {
+      open.addEventListener('click', (event) => {
+        event.preventDefault();
+        promptEl.hidden = true;
+        openFeedDialog();
+      });
+    }
+    const hide = () => { promptEl.hidden = true; };
+    document.querySelector('#calendar-subscribe-prompt-later')?.addEventListener('click', () => { dismissCalendarPrompt(); hide(); });
+    document.querySelector('#calendar-subscribe-prompt-close')?.addEventListener('click', () => { dismissCalendarPrompt(); hide(); });
+    promptEl.addEventListener('click', (event) => {
+      if (event.target === promptEl) { dismissCalendarPrompt(); hide(); }
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !promptEl.hidden) { dismissCalendarPrompt(); hide(); }
+    });
+    promptEl.hidden = false;
+  }, 1500);
 }
 
 /* --- База знаний (Notion-lite) --------------------------------------------
@@ -11140,6 +11255,7 @@ function setupDashboard() {
   setupWorkloadForm();
   setupAnalytics();
   setupAnnouncements();
+  setupCalendarFeed();
   setupNotifications();
   setupTasks();
   setupMaintenance();
@@ -11476,23 +11592,6 @@ function setupDashboard() {
     shiftDialog.close();
     const status = document.querySelector('#matrix-status');
     if (status) status.textContent = 'Ячейка отмечена как выходной';
-  });
-
-  const feedDialog = document.querySelector('#feed-dialog');
-  document.querySelector('#calendar-subscribe')?.addEventListener('click', async () => {
-    try {
-      const links = await api('/api/calendar/feed-link');
-      document.querySelector('#webcal-open').href = links.webcal_url;
-      document.querySelector('#feed-copy').dataset.url = links.https_url;
-      document.querySelector('#feed-status').textContent = '';
-      feedDialog.showModal();
-    } catch (error) { showToast(error.message); }
-  });
-  document.querySelector('#feed-copy')?.addEventListener('click', async (event) => {
-    try {
-      await navigator.clipboard.writeText(event.currentTarget.dataset.url);
-      document.querySelector('#feed-status').textContent = 'Ссылка скопирована';
-    } catch { document.querySelector('#feed-status').textContent = event.currentTarget.dataset.url; }
   });
 
   document.querySelector('#barista-preview-toggle')?.addEventListener('change', async (event) => {

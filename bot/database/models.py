@@ -33,6 +33,10 @@ class User(Base):
     is_active = Column(Integer, default=1)  # 1 - активен, 0 - неактивен
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Календарь: эпоха сброса токенов фида (не-пустое значение = старые ссылки
+    # умерли) и напоминания VALARM «за N минут», списком через запятую.
+    calendar_reset_at = Column(String(40), nullable=True, default=None)
+    calendar_reminders = Column(String(40), nullable=True, default="60")
 
 
 class ShiftType(Base):
@@ -119,5 +123,25 @@ def init_db():
     if engine.dialect.name == "sqlite" and engine.url.database:
         Path(engine.url.database).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
+    refresh_user_calendar_columns()
     with engine.begin() as connection:
         connection.execute(text(DRINK_REVIEWS_DDL))
+
+
+def refresh_user_calendar_columns() -> None:
+    """Докатывает поля календаря в `users` (база живёт между релизами).
+
+    `calendar_reset_at` — эпоха сброса токенов: значение появляется после нажатия
+    «Сбросить ссылку» и гасит старые ссылки фида при их разборе. `calendar_reminders`
+    — минуты напоминаний VALARM перед событием.
+    """
+    with engine.begin() as connection:
+        existing = {row[1] for row in connection.exec_driver_sql("PRAGMA table_info(users)")}
+        if "calendar_reset_at" not in existing:
+            connection.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN calendar_reset_at TEXT"
+            )
+        if "calendar_reminders" not in existing:
+            connection.exec_driver_sql(
+                "ALTER TABLE users ADD COLUMN calendar_reminders TEXT"
+            )

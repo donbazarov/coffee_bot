@@ -20,14 +20,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Iterable
-from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-from bot.web import modules, page_links, work_points
+from bot.web import modules
 from bot.web.calendar_service import _ensure_columns
 
 logger = logging.getLogger("bot.web.announcements")
@@ -276,13 +275,6 @@ def delete_category(engine: Engine, code: str) -> None:
         )
 
 
-def _ics_escape(value: Any) -> str:
-    """Экранирование по RFC 5545: запятые, точки с запятой и переводы строк."""
-    text_value = str(value or "")
-    text_value = text_value.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,")
-    return text_value.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\n")
-
-
 def create(
     engine: Engine,
     category: str,
@@ -449,54 +441,6 @@ def list_for_user(
         }
         for row in rows
     ]
-
-
-def build_feed(engine: Engine, user_id: int, user_timezone: ZoneInfo) -> str:
-    """ICS-фид анонсов с датой.
-
-    В фид попадают только категории, включённые в уведомлениях: уведомления —
-    единая настройка для счётчика, push и календаря.
-    """
-    enabled = set(get_prefs(engine, user_id))
-    with engine.connect() as connection:
-        rows = connection.execute(text("""
-            SELECT id, category, title, body, start_at
-            FROM web_announcements
-            WHERE start_at IS NOT NULL AND start_at != ''
-            ORDER BY start_at
-        """)).mappings().all()
-
-    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    labels = {code: item["label"] for code, item in category_map(engine).items()}
-    lines = [
-        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Coffee Quality//Announcements//RU",
-        "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-        "REFRESH-INTERVAL;VALUE=DURATION:PT1H",
-        "X-PUBLISHED-TTL:PT1H",
-        f"X-WR-CALNAME:Анонсы — {work_points.project_name(engine)}",
-    ]
-    for row in rows:
-        if row["category"] not in enabled:
-            continue
-        try:
-            start_local = datetime.strptime(str(row["start_at"]).strip(), STAMP).replace(tzinfo=user_timezone)
-        except ValueError:
-            continue
-        start_utc = start_local.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        end_utc = (start_local + timedelta(hours=1)).astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        lines.extend([
-            "BEGIN:VEVENT",
-            f"UID:coffee-announcement-{row['id']}@coffee-quality.local",
-            f"DTSTAMP:{now}",
-            f"DTSTART:{start_utc}",
-            f"DTEND:{end_utc}",
-            f"SUMMARY:{_ics_escape(row['title'])}",
-            f"CATEGORIES:{_ics_escape(labels.get(row['category'], row['category']))}",
-            f"DESCRIPTION:{_ics_escape(page_links.plain_text(row['body']))}",
-            "END:VEVENT",
-        ])
-    lines.append("END:VCALENDAR")
-    return "\r\n".join(lines) + "\r\n"
 
 
 def unread_counts(engine: Engine, user_id: int) -> dict[str, Any]:

@@ -568,6 +568,8 @@ button.calendar-event:hover { filter: brightness(1.25); }
 .point-option input:checked + span { border-color: color-mix(in srgb, var(--point-color, var(--accent)) 60%, transparent); background: color-mix(in srgb, var(--point-color, var(--accent)) 9%, transparent); color: var(--text); }
 .feed-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .feed-status { min-height: 18px; color: var(--muted); font-size: 11px; }
+.feed-reminders { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 2px 0 10px; }
+.feed-reminder-item { cursor: pointer; user-select: none; }
 
 @media (max-width: 760px) {
   .schedule-summary { padding: 14px 12px 0; }
@@ -1230,6 +1232,7 @@ body { transition: background-color .3s ease, color .3s ease; }
 .push-prompt-copy { margin: 0 0 18px; color: var(--text-soft); font-size: 13.5px; line-height: 1.5; text-align: center; }
 .push-prompt-actions { display: flex; flex-direction: column; gap: 10px; }
 .push-prompt-actions .button { justify-content: center; }
+.push-prompt-hint { margin: 12px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
 @media (min-width: 761px) { .push-prompt { align-items: center; } }
 @media (max-width: 760px) { .push-prompt-card { padding: 24px 18px 18px; border-radius: 18px 18px 0 0; } }
 @media (prefers-reduced-motion: reduce) { .push-prompt, .push-prompt-card { animation: none; } }
