@@ -186,7 +186,7 @@
     <main class="main-area">
       <header class="topbar">
         <button class="icon-button topbar-menu" type="button" id="drawer-open" aria-label="Открыть меню" aria-expanded="false" title="Меню"><svg class="icon" aria-hidden="true"><use href="#i-menu"></use></svg></button>
-        <div class="topbar-title"><span class="eyebrow">CREW DESK/</span><h1 id="page-title" data-name="{{ user.display_name or user.name }}">Добрый день, {{ user.display_name or user.name }}</h1></div>
+        <div class="topbar-title"><span class="eyebrow">CREW DESK/</span><h1 id="page-title">Обзор</h1></div>
         {# Центр уведомлений: колокольчик в шапке и выпадающая шторка с лентой.
            Бейджи разделов (`.nav-badge[data-badge-module]`) обновляет app.js из
            ответа /api/notifications/unread-summary. #}
@@ -202,10 +202,6 @@
           </div>
         </div>
         <div class="notif-backdrop" id="notif-backdrop"></div>
-        <div class="app-status" id="app-network-status">
-          <span class="status-light" id="app-network-light"></span>
-          <span class="status-text" id="app-network-text">СЕРВИС АКТИВЕН</span>
-        </div>
       </header>
 
       <section class="view is-visible" id="overview-view">
@@ -942,7 +938,16 @@
       {% endif %}
       {% endif %}
 
-      <footer class="app-footer"><span data-brand-footer>{{ project_name }} / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></footer>
+      {# Статус сети уехал из шапки в футер отдельной строкой: на телефоне текст
+       не влезал рядом с заголовком. Классы и id те же — их обновляет
+       app.js::setNetworkStatus(). #}
+    <footer class="app-footer">
+      <div class="app-footer-row"><span data-brand-footer>{{ project_name }} / CREW DESK</span><span>ОТ РАБОТЯГ • ДЛЯ РАБОТЯГ</span></div>
+      <div class="app-status" id="app-network-status">
+        <span class="status-light" id="app-network-light"></span>
+        <span class="status-text" id="app-network-text">СЕРВИС АКТИВЕН</span>
+      </div>
+    </footer>
     </main>
   </div>
 

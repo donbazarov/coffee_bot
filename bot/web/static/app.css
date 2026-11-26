@@ -201,14 +201,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .account-copy { display: flex; min-width: 95px; flex-direction: column; line-height: 1.4; }
 .account-copy strong { font-size: 12px; font-weight: 600; }
 .account-copy span { color: var(--muted); font-size: 11px; }
-/* audit: было --dim (#62645d) — 2.79:1 на плашке топбара, ниже порога WCAG 4.5:1. */
-.app-status { display: flex; align-items: center; gap: 8px; color: var(--muted); font: 9px var(--mono); letter-spacing: .07em; white-space: nowrap; }
+/* audit: было --dim (#62645d) — 2.79:1 на плашке топбара, ниже порога WCAG 4.5:1.
+   Статус живёт в футере отдельной строкой (в шапке текст не влезал на телефоне). */
+.app-status { display: flex; align-items: center; gap: 8px; justify-self: start; color: var(--muted); font: 9px var(--mono); letter-spacing: .07em; white-space: nowrap; }
 .app-status.is-offline { color: var(--offline); }
 .app-status.is-offline .status-light { background: var(--offline); box-shadow: 0 0 12px color-mix(in srgb, var(--offline) 45%, transparent); }
-/* Правая группа шапки: статус первым, колокольчик — у самого правого края.
-   В разметке notif-wrap идёт перед статусом, поэтому порядок задаёт order. */
-.topbar .app-status { margin-left: auto; }
-.topbar .notif-wrap { order: 1; }
 .icon-button { display: grid; width: 35px; height: 35px; flex: 0 0 auto; place-items: center; border: 1px solid var(--line); background: transparent; color: var(--muted); font-size: 18px; cursor: pointer; transition: color .18s, border-color .18s; }
 .icon-button:hover { border-color: var(--line-strong); color: var(--text); }
 /* Ритм страницы задаёт контейнер: расстояние между блоками — gap, а не разнобой
@@ -361,8 +358,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 .analytics-branch strong { font: 600 12px var(--mono); }
 .analytics-drinks { display: flex; flex-wrap: wrap; gap: 6px; }
 .analytics-chip { padding: 5px 10px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 11px; }
-/* audit: было --dim (#62645d) — 3.17:1 на фоне страницы; кегль на шкалу --fs-1. */
-.app-footer { display: flex; justify-content: space-between; gap: 14px; padding: 30px 0 20px; color: var(--muted); font: var(--fs-1) var(--mono); letter-spacing: .08em; }
+/* audit: было --dim (#62645d) — 3.17:1 на фоне страницы; кегль на шкалу --fs-1.
+   Футер — колонка: строка бренда и отдельная строка статуса сети. */
+.app-footer { display: grid; gap: 8px; padding: 30px 0 20px; color: var(--muted); font: var(--fs-1) var(--mono); letter-spacing: .08em; }
+.app-footer-row { display: flex; justify-content: space-between; gap: 14px; }
 /* Типографика кнопок задаётся здесь и больше нигде. Раньше её наследовали из
    контекста, отсюда разнобой 9/10/11/12/14px и вес 400 против 700 — «Отмена»
    рядом с «Опубликовать» выглядели как разные шрифты. nowrap — иначе кнопка в
@@ -467,7 +466,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .evaluation-refs { grid-template-columns: 1fr; }
   .analytics-summary { grid-template-columns: 1fr; }
   .app-footer { padding: 23px 0 10px; font-size: 9px; }
-  .app-footer span:last-child { text-align: right; }
+  .app-footer-row span:last-child { text-align: right; }
   /* Нижняя мобильная навигация заменена на сэндвич-drawer — см. .drawer ниже. */
   .user-row { grid-template-columns: minmax(0,1fr) auto; gap: 4px 10px; padding: 10px 3px; }
   .user-person { grid-column: 1; grid-row: 1; }
@@ -479,14 +478,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   .team-summary-note { font-size: 8px; }
   .toast { right: 12px; bottom: calc(18px + env(safe-area-inset-bottom)); left: 12px; max-width: none; }
 }
-/* Узкие экраны (≤480px): шапка не переносится, текст статуса обрезается, а не
-   выдавливает колокольчик за гуттер. Ellipsis задаётся дочернему span: у самого
-   flex-контейнера .app-status text-overflow игнорируется. */
+/* Узкие экраны (≤480px): шапка не переносится — заголовок сжимается, а не
+   выдавливает колокольчик за гуттер. */
 @media (max-width: 480px) {
   .topbar { flex-wrap: nowrap; }
   .topbar-title { min-width: 0; }
-  .app-status { min-width: 0; }
-  .app-status .status-text { overflow: hidden; text-overflow: ellipsis; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
@@ -940,35 +936,35 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .announcement.is-unread { background: linear-gradient(140deg, var(--accent-soft), transparent 70%), var(--surface); }
 .announcement.is-pinned { border-left-width: 4px; }
 .announcement.is-highlighted { outline: 2px solid var(--accent); outline-offset: 2px; }
-.announcement-top { display: flex; align-items: center; flex-wrap: nowrap; gap: 9px; overflow: hidden; }
+/* Заголовок — всегда отдельной строкой: пин, категория и дата-чип уехали в футер,
+   иначе на телефоне от заголовка оставалось 10–12 символов. */
+.announcement-top { display: block; min-width: 0; }
 .announcement-pin { display: inline-flex; flex: 0 0 auto; color: var(--accent); }
 .announcement-pin .icon { width: 13px; height: 13px; }
 .announcement-chip { flex: 0 0 auto; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--announcement-color, var(--muted)) 22%, transparent); color: var(--text); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
 .announcement-when { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--text); font-size: 10px; }
 .announcement-when .icon { width: 12px; height: 12px; }
-.announcement-meta { flex: 0 0 auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
-.announcement-title { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.announcement-meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.announcement-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin: 0; font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .announcement-body { margin: 7px 0 0; color: var(--text-soft); font-size: 13px; line-height: 1.65; white-space: pre-line; overflow-wrap: anywhere; }
 .announcement-gallery { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
 .announcement-gallery img { width: 108px; height: 76px; object-fit: cover; border: 1px solid var(--line); }
-/* Подвал карточки: на десктопе в нём только кнопки (дата и автор — в шапке),
-   на телефоне — дата с автором и кнопки под ними. */
-.announcement-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.announcement-meta-mobile { display: none; }
-.announcement-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+/* Подвал карточки: теги (пин, категория, дата-чип), мета (дата · автор) и кнопки.
+   Заголовок в подвале не участвует — он живёт отдельной строкой в шапке. */
+.announcement-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; }
+.announcement-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.announcement-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-left: auto; }
 .announcement-actions .text-button { padding: 0; color: var(--muted); }
 .announcement-actions .text-button:hover { color: var(--accent); }
 
-/* На телефоне шапка короче — мета уезжает вниз, к кнопкам. */
+/* На телефоне подвал встаёт колонкой: теги, мета и кнопки друг под другом. */
 @media (max-width: 760px) {
   /* Мобильные отступы панели берутся из базового медиаблока выше (.panel):
      перебивающего правила для витрины Обзора больше нет. */
   .announcement { padding: 11px 13px; }
-  .announcement-top .announcement-meta { display: none; }
-  .announcement-meta-mobile { display: inline; }
   .announcement-title { font-size: 14px; }
   .announcement-foot { flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 8px; }
-  .announcement-foot .announcement-actions { margin-top: 0; }
+  .announcement-foot .announcement-actions { margin-left: 0; }
 }
 
 /* Слайд-шоу последних анонсов на главной: одна карточка за раз.
@@ -992,7 +988,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .announcement-slide.is-prev { transform: translateX(6%) scale(.94); }
 .announcement-slide.is-next { transform: translateX(-6%) scale(.94); }
 .slideshow .announcement { cursor: grab; }
-.slideshow .announcement-title { display: block; -webkit-line-clamp: unset; }
+.slideshow .announcement-title { -webkit-line-clamp: 3; }
 .slideshow .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
 .slideshow-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .slideshow-count { color: var(--muted); font-size: 11px; font-family: var(--mono); }
@@ -1011,7 +1007,7 @@ body.shift-dragging .matrix-cell { cursor: grabbing; }
 .tasks-widget-list .announcement { padding: 11px 13px; }
 .tasks-widget-list .announcement-title,
 .tasks-widget-list .announcement-body { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; }
-.tasks-widget-list .announcement-title { -webkit-line-clamp: 1; margin-top: 6px; font-size: 14px; }
+.tasks-widget-list .announcement-title { -webkit-line-clamp: 2; margin-top: 0; font-size: 14px; }
 .tasks-widget-list .announcement-body { -webkit-line-clamp: 2; margin-top: 4px; font-size: 12.5px; line-height: 1.55; }
 
 /* Категории в панели управления */
@@ -1877,9 +1873,9 @@ body { transition: background-color .3s ease, color .3s ease; }
 .drinks-widget-list { display: flex; flex-direction: column; gap: 8px; }
 .drinks-widget-card { display: grid; grid-template-columns: auto 1fr; grid-template-areas: "point name" "note note" "vote vote"; gap: 4px 10px; align-items: center; width: 100%; text-align: left; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-sunken); cursor: pointer; transition: border-color .2s; }
 .drinks-widget-card:hover { border-color: var(--accent); }
-.drinks-widget-point { grid-area: point; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--mint); }
+.drinks-widget-point { grid-area: point; max-width: 100%; overflow: hidden; font-size: 10px; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; color: var(--mint); }
 .drinks-widget-card strong { grid-area: name; font-size: 14px; color: var(--text); }
-.drinks-widget-note { grid-area: note; font-size: 12px; color: var(--muted); }
+.drinks-widget-note { grid-area: note; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
 .drinks-widget-vote { grid-area: vote; margin-top: 4px; font-size: 12px; font-weight: 600; color: var(--accent); }
 
 @media (min-width: 761px) {

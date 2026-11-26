@@ -51,11 +51,6 @@ function pointLabel(value) {
   return point ? point.title_alias : (value == null ? '' : String(value));
 }
 
-function pointTitle(value) {
-  const point = pointOf(value);
-  return point ? point.title : pointLabel(value);
-}
-
 function pointColor(value) {
   return pointOf(value)?.color || '';
 }
@@ -3151,6 +3146,7 @@ function setView(name) {
     const title = document.querySelector('#page-title');
     if (title) {
       title.textContent =
+        name === 'overview' ? 'Обзор' :
         name === 'team' ? 'Управление командой' :
         name === 'calendar' ? 'График смен' :
         name === 'development' ? 'Развитие' :
@@ -3164,7 +3160,7 @@ function setView(name) {
         name === 'drinks' ? 'Описание напитков' :
         name === 'chat' ? 'Чат' :
         name === 'profile' ? 'Личный кабинет' :
-        `Добрый день, ${title.dataset.name}`;
+        'Обзор';
     }
     document.body.classList.toggle('settings-active', name === 'profile' || name === 'control');
     // Прогресс мог измениться, пока сотрудник был в другом разделе.
@@ -3800,6 +3796,9 @@ function refreshPointUi() {
   renderTemplateBar();
   renderTemplateSettings();
   if (drinkState.loaded) renderDrinkFilters();
+  // Виджет «Описание напитков» подписывает точки alias-ом: перерисовываем, когда
+  // справочник доехал (или точку переименовали в панели управления).
+  if (drinksWidgetState.items.length) renderDrinksWidget();
   if (analyticsState.drinks) renderDrinksQuality();
   if (analyticsState.shifts) renderShiftsReport();
   if (qualitySessionsState.items.length) renderQualitySessions();
@@ -3817,10 +3816,10 @@ function setupProfile() {
   if (!nameInput || !nameSave) return;
 
   const setNote = (message) => { if (note) note.textContent = message; };
+  // В шапке больше нет приветствия по имени — заголовок задаёт раздел (setView),
+  // а здесь обновляются только карточки аккаунта.
   const refreshNames = (shown) => {
     document.querySelectorAll('.account-copy strong').forEach((node) => { node.textContent = shown; });
-    const title = document.querySelector('#page-title');
-    if (title) { title.dataset.name = shown; title.textContent = `Добрый день, ${shown}`; }
   };
 
   nameSave.addEventListener('click', async () => {
@@ -4038,10 +4037,14 @@ function announcementMarkup(item, options = {}) {
     <article class="announcement ${item.is_read ? '' : 'is-unread'} ${item.pinned ? 'is-pinned' : ''}"
              style="--announcement-color: ${escapeHtml(color)}"
              data-announcement-id="${item.id}" data-category="${escapeHtml(item.category)}">
-      <header class="announcement-top">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span><h4 class="announcement-title">${escapeHtml(item.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
+      <header class="announcement-top"><h4 class="announcement-title">${escapeHtml(item.title)}</h4></header>
       ${item.body ? `<p class="announcement-body">${announcementBodyMarkup(item.body)}</p>` : ''}
       ${gallery}
-      <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span>${actions}</footer>
+      <footer class="announcement-foot">
+        <div class="announcement-tags">${pin}<span class="announcement-chip">${escapeHtml(announcementCategoryLabel(item.category))}</span>${when}</div>
+        <span class="announcement-meta">${meta}</span>
+        ${actions}
+      </footer>
     </article>`;
 }
 
@@ -7827,9 +7830,12 @@ const drinkState = {
    листаем только вручную (стрелки, точки, свайп). */
 const drinkCarousel = { index: 0 };
 
+/* Подпись точки в модуле описаний — короткий alias из панели управления
+   (`work_points.title_alias`), а не код и не полное название: им подписаны
+   бейджи ленты, мемов, истории рецептов и виджета на «Обзоре». */
 function drinkPointLabel(point) {
   if (point === OTHER_POINT) return 'Другое';
-  return pointTitle(point) || 'Другое';
+  return pointLabel(point) || 'Другое';
 }
 
 function formatDrinkDate(value) {
@@ -8186,10 +8192,19 @@ async function voteDrinkQuiz(descriptionId, quizId, optionId) {
   }
 }
 
+/* Зёрна в подписи виджета: только уникальные названия в порядке упоминания —
+   иначе описание на одном зерне выглядит как «Ethiopia · Ethiopia». */
 function drinkWidgetSummary(desc) {
-  const parts = (desc.items || []).map((item) =>
-    (item.bean && item.bean.name) || (item.category === 'кофе с молоком' ? 'молочный' : 'чёрный'));
-  return parts.join(' · ') || 'Описание смены';
+  const names = [];
+  const seen = new Set();
+  for (const item of desc.items || []) {
+    const name = (item.bean && item.bean.name) || (item.category === 'кофе с молоком' ? 'молочный' : 'чёрный');
+    const key = String(name || '').trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+  }
+  return names.join(' · ') || 'Описание смены';
 }
 
 function drinkWidgetVote(desc) {
@@ -8200,25 +8215,37 @@ function drinkWidgetVote(desc) {
   return `<span class="drinks-widget-vote">Голосовать: ${pending}</span>`;
 }
 
+/* Последние описания виджета держим в состоянии: подписи точек — alias из
+   справочника, а он приезжает асинхронно (loadMainSettings), поэтому виджет
+   перерисовывается из refreshPointUi(), а не только после ответа сети. */
+const drinksWidgetState = { items: [] };
+
+function renderDrinksWidget() {
+  const list = document.querySelector('#drinks-widget-list');
+  if (!list) return;
+  const items = drinksWidgetState.items;
+  if (!items.length) {
+    list.innerHTML = '<p class="empty-state">Пока нет описаний смен.</p>';
+    return;
+  }
+  list.innerHTML = items.map((desc) => `
+    <button class="drinks-widget-card" type="button" data-view="drinks">
+      <span class="drinks-widget-point">${escapeHtml(drinkPointLabel(desc.point))}</span>
+      <strong>${escapeHtml(desc.author.name)}</strong>
+      <span class="drinks-widget-note">${escapeHtml(drinkWidgetSummary(desc))}</span>
+      ${drinkWidgetVote(desc)}
+    </button>`).join('');
+  list.querySelectorAll('[data-view]').forEach((button) =>
+    button.addEventListener('click', () => setView(button.dataset.view)));
+}
+
 async function loadDrinksWidget() {
   const list = document.querySelector('#drinks-widget-list');
   if (!list) return;
   try {
     const data = await api('/api/drink-descriptions?limit=3');
-    const items = data.items || [];
-    if (!items.length) {
-      list.innerHTML = '<p class="empty-state">Пока нет описаний смен.</p>';
-      return;
-    }
-    list.innerHTML = items.map((desc) => `
-      <button class="drinks-widget-card" type="button" data-view="drinks">
-        <span class="drinks-widget-point">${escapeHtml(drinkPointLabel(desc.point))}</span>
-        <strong>${escapeHtml(desc.author.name)}</strong>
-        <span class="drinks-widget-note">${escapeHtml(drinkWidgetSummary(desc))}</span>
-        ${drinkWidgetVote(desc)}
-      </button>`).join('');
-    list.querySelectorAll('[data-view]').forEach((button) =>
-      button.addEventListener('click', () => setView(button.dataset.view)));
+    drinksWidgetState.items = data.items || [];
+    renderDrinksWidget();
   } catch (error) {
     list.innerHTML = `<p class="empty-state">${escapeHtml(error.message)}</p>`;
   }
@@ -8242,9 +8269,12 @@ function taskWidgetMarkup(task) {
     : (task.assignee.name || task.author_name || 'Общая');
   const meta = `${escapeHtml(stage.label)} · ${escapeHtml(who)}`;
   return `<article class="announcement${due && due.overdue ? ' is-unread' : ''}" data-task-id="${task.id}" role="button" tabindex="0" style="--announcement-color: ${escapeHtml(task.category_color || '#7b8794')}">
-    <header class="announcement-top">${chip}<h4 class="announcement-title">${escapeHtml(task.title)}</h4>${when}<span class="announcement-meta">${meta}</span></header>
+    <header class="announcement-top"><h4 class="announcement-title">${escapeHtml(task.title)}</h4></header>
     ${task.description ? `<p class="announcement-body">${taskNoteMarkup(task.description)}</p>` : ''}
-    <footer class="announcement-foot"><span class="announcement-meta announcement-meta-mobile">${meta}</span></footer>
+    <footer class="announcement-foot">
+      <div class="announcement-tags">${chip}${when}</div>
+      <span class="announcement-meta">${meta}</span>
+    </footer>
   </article>`;
 }
 
