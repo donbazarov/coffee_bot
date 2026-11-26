@@ -1109,7 +1109,7 @@ async def create_description(request: Request,
     # уже после коммита — фоновая запись ленты не должна ловить блокировку SQLite.
     try:
         notifications.notify_audience_async(
-            engine, "drink_published", f"{author_name} выложил описание смены",
+            engine, "drink_published", f"Описание напитков · {author_name}",
             f"Точка: {work_points.point_label(engine, point)} · напитков: {len(items)}",
             "/?view=drinks", entity_type="drink_description", entity_id=description_id,
             actor_id=int(user["id"]),

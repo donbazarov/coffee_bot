@@ -87,7 +87,7 @@ NOTIFICATION_EVENTS: tuple[dict[str, Any], ...] = (
     },
     {
         "code": "drink_published", "module": "drinks", "label": "Новое описание напитка",
-        "hint": "Коллега выложил описание смены: рецепты, фото латте-арта и мемы",
+        "hint": "Коллега выложил описание напитков: рецепты, фото латте-арта и мемы",
         "roles": ALL_ROLES, "in_app": True, "push": False,
     },
     {
